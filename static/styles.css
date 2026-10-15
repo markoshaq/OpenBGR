@@ -2128,3 +2128,21 @@ input[type="file"] {
   color: var(--fg-dim);
   padding: 5px 10px 3px;
 }
+
+/* ------------------------------------------------------------------ */
+/* Batch mode: export sidebar drives the batch                         */
+/* ------------------------------------------------------------------ */
+.app-shell.batch-active.no-result .sidebar-right {
+  opacity: 1;
+  pointer-events: auto;
+  user-select: auto;
+}
+
+.app-shell.batch-active.no-image .status-center {
+  opacity: 1;
+}
+
+.app-shell:not(.batch-active) .batch-only,
+.app-shell.batch-active .batch-hide {
+  display: none;
+}

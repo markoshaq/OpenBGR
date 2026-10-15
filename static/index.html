@@ -421,13 +421,11 @@
               </div>
               <div class="batch-panel-actions">
                 <button type="button" class="action-btn" id="btnBatchAdd">ADD IMAGES</button>
-                <button type="button" class="action-btn primary" id="btnBatchRun">RUN BATCH</button>
               </div>
             </div>
             <div class="batch-list" id="batchList"></div>
             <div class="batch-panel-foot" id="batchFoot">
               <span id="batchFootText">Drop more images onto this window to add them.</span>
-              <button type="button" class="batch-foot-btn" id="btnBatchOutDir" style="display:none">CHANGE FOLDER</button>
             </div>
           </div>
 
@@ -446,6 +444,12 @@
 
       <!-- Right Sidebar: Export Format, Resolution Slider, Custom PX & Download Actions -->
       <aside class="sidebar sidebar-right">
+        <div class="sidebar-section batch-only">
+          <div class="section-header">FILE DESTINATION</div>
+          <button type="button" class="action-btn full-width" id="btnBatchDest">CHOOSE FOLDER…</button>
+          <div class="field-hint" id="batchDestPath">Folder picked on first run.</div>
+        </div>
+
         <div class="sidebar-section">
           <div class="section-header">OUTPUT FORMAT</div>
           <select class="studio-select full-width" id="exportFormatSelect" aria-label="Output File Format">
@@ -511,7 +515,7 @@
 
         <div class="sidebar-section export-actions-section">
           <button type="button" class="action-btn primary full-width disabled" id="btnDownload">EXPORT PNG</button>
-          <button type="button" class="action-btn full-width disabled" id="btnCopy">COPY TO CLIPBOARD</button>
+          <button type="button" class="action-btn full-width disabled batch-hide" id="btnCopy">COPY TO CLIPBOARD</button>
         </div>
       </aside>
     </div>

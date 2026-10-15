@@ -204,8 +204,8 @@ const dom = {
   batchSub: document.getElementById("batchSub"),
   batchFootText: document.getElementById("batchFootText"),
   btnBatchAdd: document.getElementById("btnBatchAdd"),
-  btnBatchRun: document.getElementById("btnBatchRun"),
-  btnBatchOutDir: document.getElementById("btnBatchOutDir"),
+  btnBatchDest: document.getElementById("btnBatchDest"),
+  batchDestPath: document.getElementById("batchDestPath"),
   tabContextMenu: document.getElementById("tabContextMenu"),
   btnCopy: document.getElementById("btnCopy"),
   btnDownload: document.getElementById("btnDownload"),
@@ -544,6 +544,7 @@ function resetToEmptyWorkspace() {
   dom.stage.classList.remove("visible");
   dom.emptyState.style.display = "";
   dom.batchPanel?.classList.remove("active");
+  dom.appShell?.classList.remove("batch-active");
 
   dom.exportWidthInput.value = "";
   dom.exportHeightInput.value = "";
@@ -611,12 +612,13 @@ async function switchToTab(tabId) {
 
   applyBackdrop(state.activeBackdrop);
 
-  // Batch tabs show the queue panel instead of the single-image stage.
+  // Batch tabs show the queue panel instead of the single-image stage; the
+  // export sidebar stays unlocked and drives the batch run.
   if (tab.kind === "batch") {
     renderBatchPanel(tab);
     dom.appShell?.classList.add("no-image");
     dom.appShell?.classList.add("no-result");
-    dom.btnDownload.classList.add("disabled");
+    dom.appShell?.classList.add("batch-active");
     dom.btnCopy.classList.add("disabled");
     dom.statFile.textContent = `BATCH · ${tab.batchFiles.length} FILE${tab.batchFiles.length === 1 ? "" : "S"}`;
     dom.statDim.textContent = "—";
@@ -625,6 +627,7 @@ async function switchToTab(tabId) {
     return;
   }
   dom.batchPanel?.classList.remove("active");
+  dom.appShell?.classList.remove("batch-active");
 
   if (!tab.sourceFile) {
     resetToEmptyWorkspace();
@@ -891,15 +894,25 @@ function renderBatchPanel(tab) {
   dom.emptyState.style.display = "none";
 
   const n = tab.batchFiles.length;
+  const runningThis = state.batch.running && state.batch.tabId === tab.id;
   dom.batchSub.textContent = `${n} IMAGE${n === 1 ? "" : "S"} · ONE SETTING FOR ALL`;
 
-  if (tab.batchOutputDir) {
-    dom.batchFootText.textContent = `OUTPUT → ${tab.batchOutputDir}`;
-    dom.btnBatchOutDir.style.display = "";
-  } else {
-    dom.batchFootText.textContent = "Drop more images onto this window to add them.";
-    dom.btnBatchOutDir.style.display = "none";
+  // FILE DESTINATION sidebar section (native folder pick or ZIP fallback)
+  const hasNativePicker = Boolean(window.pywebview?.api?.choose_output_dir);
+  if (dom.btnBatchDest) {
+    dom.btnBatchDest.style.display = hasNativePicker ? "" : "none";
+    dom.btnBatchDest.textContent = tab.batchOutputDir
+      ? "CHANGE FOLDER…"
+      : "CHOOSE FOLDER…";
   }
+  if (dom.batchDestPath) {
+    dom.batchDestPath.textContent = hasNativePicker
+      ? tab.batchOutputDir || "Picked on first run if unset."
+      : "Exports download as a single ZIP.";
+  }
+  dom.batchFootText.textContent = tab.batchOutputDir
+    ? `OUTPUT → ${tab.batchOutputDir}`
+    : "Drop more images onto this window to add them.";
 
   dom.batchList.innerHTML = "";
   if (n === 0) {
@@ -945,10 +958,13 @@ function renderBatchPanel(tab) {
     dom.batchList.appendChild(row);
   });
 
-  if (dom.btnBatchRun) {
-    const runningThis = state.batch.running && state.batch.tabId === tab.id;
-    dom.btnBatchRun.classList.toggle("disabled", n === 0 || (state.isProcessing && !runningThis));
-    dom.btnBatchRun.textContent = runningThis ? "RUNNING…" : "RUN BATCH";
+  // EXPORT button becomes the batch trigger while a batch tab is active.
+  if (dom.btnDownload) {
+    dom.btnDownload.classList.toggle(
+      "disabled",
+      n === 0 || (state.isProcessing && !runningThis)
+    );
+    dom.btnDownload.textContent = runningThis ? "BATCH RUNNING…" : "RUN BATCH";
   }
 }
 
@@ -1167,6 +1183,8 @@ async function runBatch(tab) {
     matting: tab.matting ?? state.matting,
     format: tab.exportFormat ?? state.exportFormat,
     scale: tab.exportScale ?? state.exportScale,
+    exportWidth: tab.exportWidth ?? 0,
+    exportHeight: tab.exportHeight ?? 0,
     backdrop: tab.activeBackdrop ?? state.activeBackdrop,
     shadowCutoff: tab.shadowCutoff ?? state.shadowCutoff,
   };
@@ -1316,12 +1334,7 @@ async function runBatch(tab) {
   );
 }
 
-/** RUN BATCH entry point for the active batch tab. */
-function runBatchRequest() {
-  const tab = getActiveTab();
-  if (!tab || tab.kind !== "batch") return;
-  runBatch(tab);
-}
+
 
 /**
  * Uploads one exported blob to POST /api/save so the server writes it into the
@@ -1353,8 +1366,19 @@ async function buildBatchExportBlob(blob, snap) {
   try {
     const srcW = bmp.width;
     const srcH = bmp.height;
-    const targetW = Math.max(1, Math.round(srcW * (snap.scale || 1)));
-    const targetH = Math.max(1, Math.round(srcH * (snap.scale || 1)));
+    let targetW = Math.max(1, Math.round(srcW * (snap.scale || 1)));
+    let targetH = Math.max(1, Math.round(srcH * (snap.scale || 1)));
+
+    // Custom dimensions act as a bounding box per image (aspect preserved,
+    // since batch images can have wildly different shapes).
+    if (snap.exportWidth > 0 || snap.exportHeight > 0) {
+      const fit = Math.min(
+        (snap.exportWidth || Infinity) / srcW,
+        (snap.exportHeight || Infinity) / srcH
+      );
+      targetW = Math.max(1, Math.round(srcW * fit));
+      targetH = Math.max(1, Math.round(srcH * fit));
+    }
 
     // Fast path — untouched full-res PNG with no cutoff or matte.
     if (
@@ -1740,8 +1764,14 @@ async function updateLiveStagePreview() {
  * corner label, and live stage image preview.
  */
 function updateExportTelemetry() {
+  const activeTab = getActiveTab();
   const fmtUpper = state.exportFormat.toUpperCase();
-  dom.btnDownload.textContent = `EXPORT ${fmtUpper}`;
+  dom.btnDownload.textContent =
+    activeTab?.kind === "batch"
+      ? state.batch.running && state.batch.tabId === activeTab.id
+        ? "BATCH RUNNING…"
+        : "RUN BATCH"
+      : `EXPORT ${fmtUpper}`;
   if (dom.formatHint && FORMAT_HINTS[state.exportFormat]) {
     dom.formatHint.textContent = FORMAT_HINTS[state.exportFormat];
   }
@@ -1895,6 +1925,10 @@ function syncMenuBarState() {
         ? "REPROCESS IMAGE"
         : "PROCESS IMAGE";
   }
+
+  // Keep the batch panel's RUN BATCH / statuses live on every state change.
+  const activeTabNow = getActiveTab();
+  if (activeTabNow?.kind === "batch") renderBatchPanel(activeTabNow);
 }
 
 /**
@@ -2896,15 +2930,13 @@ function requestBatchDispatch(files) {
   }
 }
 
-dom.btnBatchRun?.addEventListener("click", () => runBatchRequest());
-
 dom.btnBatchAdd?.addEventListener("click", () => {
   const tab = getActiveTab();
   if (!tab || tab.kind !== "batch" || state.batch.running) return;
   pickImageFiles((files) => addFilesToBatchTab(tab, files));
 });
 
-dom.btnBatchOutDir?.addEventListener("click", async () => {
+dom.btnBatchDest?.addEventListener("click", async () => {
   const tab = getActiveTab();
   if (!tab || tab.kind !== "batch" || !window.pywebview?.api?.choose_output_dir) return;
   try {
@@ -3038,6 +3070,12 @@ function blobToBase64(blob) {
 }
 
 dom.btnDownload.addEventListener("click", async () => {
+  // On a batch tab, the export button triggers the batch run instead.
+  const activeTab = getActiveTab();
+  if (activeTab?.kind === "batch") {
+    runBatch(activeTab);
+    return;
+  }
   if (!state.resultBlob) return;
   try {
     const exportBlob = state.previewBlob || (await buildExportBlob(state.exportFormat));
