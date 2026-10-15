@@ -427,7 +427,10 @@ function closeTabImmediate(tabId) {
 
   state.tabs.splice(idx, 1);
 
-  if (state.tabs.length === 0) {
+  // Collapse to the pristine empty workspace whenever no image-bearing tab
+  // remains — leftover blank "NEW TAB" stubs shouldn't keep the tab bar alive.
+  if (!state.tabs.some((t) => t.sourceFile)) {
+    state.tabs = [];
     state.activeTabId = null;
     resetToEmptyWorkspace();
     renderTabBar();
