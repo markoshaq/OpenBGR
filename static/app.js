@@ -2,8 +2,9 @@
  * REMOVEBG — Frontend Studio Controller
  * =====================================
  * Handles hardware preset switching, drag-and-drop / clipboard image ingestion,
- * split-plane comparison rendering, active request cancellation, and
- * communication with the local FastAPI segmentation backend.
+ * split-plane comparison rendering, active request cancellation, client-side
+ * multi-format / multi-resolution export, and communication with the local
+ * FastAPI segmentation backend.
  */
 
 "use strict";
@@ -19,9 +20,14 @@ const state = {
   abortController: null,   // AbortController for the active fetch request
   pendingConfirmFn: null,  // Callback to execute if user confirms interrupting active processing
   sourceFile: null,        // Active File/Blob object
-  resultBlob: null,        // Latest segmented PNG Blob
+  resultBlob: null,        // Latest segmented master 32-bit RGBA PNG Blob
   originalObjectUrl: null, // Object URL for source preview
   resultObjectUrl: null,   // Object URL for cutout preview
+  naturalWidth: 0,         // Native pixel width of active cutout
+  naturalHeight: 0,        // Native pixel height of active cutout
+  exportFormat: "png",     // "png" | "webp" | "jpg" | "mask"
+  exportScale: 1,          // 1 (100%) | 0.5 (50%) | 0.25 (25%)
+  activeBackdrop: "checker", // "checker" or hex color string (e.g. "#ffffff")
   serverStatus: null,      // Cached response from GET /api/status
 };
 
@@ -113,7 +119,6 @@ function cancelProcessing() {
   closeConfirmModal();
   dom.statTime.textContent = "CANCELLED";
 
-  // If this image has no completed cutout yet, show the original image cleanly.
   if (!state.resultBlob && state.sourceFile) {
     setViewMode("original");
   }
@@ -129,6 +134,104 @@ function updateCacheIndicator() {
   dom.hwCache.textContent = tierInfo.cached
     ? "READY OFFLINE"
     : "DOWNLOADS ON 1ST RUN";
+}
+
+/**
+ * Updates the DIMENSIONS status readout and EXPORT button label based on
+ * the currently selected `exportFormat` and `exportScale`.
+ */
+function updateExportTelemetry() {
+  dom.btnDownload.textContent = `EXPORT ${state.exportFormat.toUpperCase()}`;
+
+  if (state.naturalWidth > 0 && state.naturalHeight > 0) {
+    const outW = Math.max(1, Math.round(state.naturalWidth * state.exportScale));
+    const outH = Math.max(1, Math.round(state.naturalHeight * state.exportScale));
+    const scalePct = Math.round(state.exportScale * 100);
+    dom.statDim.textContent =
+      state.exportScale === 1
+        ? `${outW}×${outH} PX`
+        : `${outW}×${outH} PX (${scalePct}%)`;
+  }
+}
+
+/**
+ * Renders the master segmented image onto an offscreen canvas at the target
+ * `exportScale` and `exportFormat` ("png", "webp", "jpg", or "mask") and
+ * returns a Promise resolving to the encoded Blob.
+ *
+ * @param {"png"|"webp"|"jpg"|"mask"} format
+ * @param {number} scale
+ * @returns {Promise<Blob>}
+ */
+async function buildExportBlob(format, scale) {
+  // Fast path: 100% scale, transparent PNG with no solid matte backdrop.
+  if (
+    format === "png" &&
+    scale === 1 &&
+    state.activeBackdrop === "checker" &&
+    state.resultBlob
+  ) {
+    return state.resultBlob;
+  }
+
+  const img = dom.afterImg;
+  const srcW = state.naturalWidth || img.naturalWidth;
+  const srcH = state.naturalHeight || img.naturalHeight;
+  const targetW = Math.max(1, Math.round(srcW * scale));
+  const targetH = Math.max(1, Math.round(srcH * scale));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = targetW;
+  canvas.height = targetH;
+  const ctx = canvas.getContext("2d");
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+
+  if (format === "mask") {
+    // Draw cutout and convert its alpha channel into an 8-bit grayscale mask.
+    ctx.drawImage(img, 0, 0, targetW, targetH);
+    const imgData = ctx.getImageData(0, 0, targetW, targetH);
+    const data = imgData.data;
+    for (let i = 0; i < data.length; i += 4) {
+      const alpha = data[i + 3];
+      data[i] = alpha;
+      data[i + 1] = alpha;
+      data[i + 2] = alpha;
+      data[i + 3] = 255;
+    }
+    ctx.putImageData(imgData, 0, 0);
+    return new Promise((resolve, reject) => {
+      canvas.toBlob(
+        (b) => (b ? resolve(b) : reject(new Error("Mask export failed"))),
+        "image/png"
+      );
+    });
+  }
+
+  // Fill background color if exporting JPEG or if user selected a solid Matte swatch.
+  if (format === "jpg" || state.activeBackdrop !== "checker") {
+    ctx.fillStyle =
+      state.activeBackdrop === "checker" ? "#ffffff" : state.activeBackdrop;
+    ctx.fillRect(0, 0, targetW, targetH);
+  }
+
+  ctx.drawImage(img, 0, 0, targetW, targetH);
+
+  const mimeMap = {
+    png: "image/png",
+    webp: "image/webp",
+    jpg: "image/jpeg",
+  };
+  const mimeType = mimeMap[format] || "image/png";
+  const quality = format === "png" ? undefined : 0.95;
+
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (b) => (b ? resolve(b) : reject(new Error("Image encoding failed"))),
+      mimeType,
+      quality
+    );
+  });
 }
 
 /**
@@ -234,6 +337,8 @@ function handleSplitDrag(clientX) {
 function ingestImageFile(file) {
   state.sourceFile = file;
   state.resultBlob = null;
+  state.naturalWidth = 0;
+  state.naturalHeight = 0;
   dom.btnDownload.classList.add("disabled");
   dom.btnCopy.classList.add("disabled");
 
@@ -257,7 +362,6 @@ function ingestImageFile(file) {
 async function runSegmentation() {
   if (!state.sourceFile) return;
 
-  // If a previous segmentation request is still running, abort it first.
   if (state.abortController) {
     state.abortController.abort();
   }
@@ -300,28 +404,26 @@ async function runSegmentation() {
       throw new Error(detail);
     }
 
-    // Parse performance telemetry headers returned by the FastAPI engine.
     const inferenceMs = parseFloat(response.headers.get("X-Inference-Time-Ms") || "0");
-    const width = response.headers.get("X-Image-Width") || "";
-    const height = response.headers.get("X-Image-Height") || "";
+    const width = parseInt(response.headers.get("X-Image-Width") || "0", 10);
+    const height = parseInt(response.headers.get("X-Image-Height") || "0", 10);
     const tierLabel = response.headers.get("X-Tier-Used") || state.tier.toUpperCase();
 
     const blob = await response.blob();
     if (controller.signal.aborted) return;
 
     state.resultBlob = blob;
+    state.naturalWidth = width;
+    state.naturalHeight = height;
+
     if (state.resultObjectUrl) URL.revokeObjectURL(state.resultObjectUrl);
     state.resultObjectUrl = URL.createObjectURL(state.resultBlob);
 
     dom.afterImg.src = state.resultObjectUrl;
-
-    const baseName = (state.sourceFile.name || "image").replace(/\.[^/.]+$/, "");
-    dom.btnDownload.href = state.resultObjectUrl;
-    dom.btnDownload.download = `${baseName}-cutout.png`;
     dom.btnDownload.classList.remove("disabled");
     dom.btnCopy.classList.remove("disabled");
 
-    dom.statDim.textContent = width && height ? `${width}×${height} PX` : "ORIGINAL";
+    updateExportTelemetry();
     dom.statTier.textContent = tierLabel.toUpperCase();
     dom.statTime.textContent = inferenceMs ? `${(inferenceMs / 1000).toFixed(2)}S` : "DONE";
 
@@ -347,7 +449,7 @@ async function runSegmentation() {
  * Event Listeners Registration
  * ------------------------------------------------------------------------- */
 
-// 1. Cancel Button & Confirmation Modal Controls
+// 1. Cancel Button, Confirmation Modal & Info Modal Controls
 dom.btnCancel.addEventListener("click", () => {
   cancelProcessing();
 });
@@ -410,7 +512,31 @@ document.getElementById("viewSplit").addEventListener("click", () => setViewMode
 document.getElementById("viewCutout").addEventListener("click", () => setViewMode("cutout"));
 document.getElementById("viewOriginal").addEventListener("click", () => setViewMode("original"));
 
-// 5. Split-Plane Pointer Dragging (Mouse + Touch)
+// 5. Output Format & Scale Selectors
+document.querySelectorAll("#formatSelector .mini-seg-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const fmt = btn.getAttribute("data-format");
+    if (!fmt) return;
+    state.exportFormat = fmt;
+    document.querySelectorAll("#formatSelector .mini-seg-btn").forEach((b) => {
+      b.classList.toggle("active", b === btn);
+    });
+    updateExportTelemetry();
+  });
+});
+
+document.querySelectorAll("#scaleSelector .mini-seg-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const sc = parseFloat(btn.getAttribute("data-scale") || "1");
+    state.exportScale = sc;
+    document.querySelectorAll("#scaleSelector .mini-seg-btn").forEach((b) => {
+      b.classList.toggle("active", b === btn);
+    });
+    updateExportTelemetry();
+  });
+});
+
+// 6. Split-Plane Pointer Dragging (Mouse + Touch)
 dom.stage.addEventListener("mousedown", (e) => {
   if (state.viewMode !== "split") return;
   state.isDraggingSplit = true;
@@ -441,13 +567,14 @@ window.addEventListener("touchend", () => {
   state.isDraggingSplit = false;
 });
 
-// 6. Matte Backdrop Swatches & Custom Color Picker
+// 7. Matte Backdrop Swatches & Custom Color Picker
 document.querySelectorAll(".swatch[data-bg]").forEach((swatch) => {
   swatch.addEventListener("click", () => {
     document.querySelectorAll(".swatch").forEach((s) => s.classList.remove("active"));
     swatch.classList.add("active");
 
-    const bgValue = swatch.getAttribute("data-bg");
+    const bgValue = swatch.getAttribute("data-bg") || "checker";
+    state.activeBackdrop = bgValue;
     if (bgValue === "checker") {
       dom.viewport.style.background = "";
       dom.viewport.classList.add("checkerboard-canvas");
@@ -461,11 +588,12 @@ document.querySelectorAll(".swatch[data-bg]").forEach((swatch) => {
 document.getElementById("colorPicker").addEventListener("input", (e) => {
   document.querySelectorAll(".swatch").forEach((s) => s.classList.remove("active"));
   e.target.classList.add("active");
+  state.activeBackdrop = e.target.value;
   dom.viewport.classList.remove("checkerboard-canvas");
   dom.viewport.style.background = e.target.value;
 });
 
-// 7. File Selection, Drag-and-Drop, and Clipboard Paste (with active-job guard)
+// 8. File Selection, Drag-and-Drop, and Clipboard Paste (with active-job guard)
 function triggerOpenFileDialog() {
   dom.fileInput.value = "";
   dom.fileInput.click();
@@ -546,12 +674,39 @@ window.addEventListener("paste", (e) => {
   }
 });
 
-// 8. Direct Clipboard PNG Copy
+// 9. Export Download & Clipboard Copy (Multi-Format & Multi-Resolution)
+dom.btnDownload.addEventListener("click", async () => {
+  if (!state.resultBlob) return;
+  try {
+    const exportBlob = await buildExportBlob(state.exportFormat, state.exportScale);
+    const extMap = { png: "png", webp: "webp", jpg: "jpg", mask: "png" };
+    const suffix = state.exportFormat === "mask" ? "mask" : "cutout";
+    const scaleTag =
+      state.exportScale === 1 ? "" : `-${Math.round(state.exportScale * 100)}pct`;
+    const baseName = (state.sourceFile?.name || "image").replace(/\.[^/.]+$/, "");
+    const fileName = `${baseName}-${suffix}${scaleTag}.${extMap[state.exportFormat] || "png"}`;
+
+    const downloadUrl = URL.createObjectURL(exportBlob);
+    const a = document.createElement("a");
+    a.href = downloadUrl;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(downloadUrl), 2000);
+  } catch (err) {
+    setError(err.message || "Failed to export image.");
+  }
+});
+
 dom.btnCopy.addEventListener("click", async () => {
   if (!state.resultBlob) return;
   try {
+    // ClipboardItem requires image/png; render at selected scale & matte/mask mode.
+    const copyFormat = state.exportFormat === "mask" ? "mask" : "png";
+    const pngBlob = await buildExportBlob(copyFormat, state.exportScale);
     await navigator.clipboard.write([
-      new ClipboardItem({ "image/png": state.resultBlob }),
+      new ClipboardItem({ "image/png": pngBlob }),
     ]);
     const originalLabel = dom.btnCopy.textContent;
     dom.btnCopy.textContent = "COPIED";

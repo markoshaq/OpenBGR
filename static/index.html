@@ -91,8 +91,8 @@
         <div class="divider-v"></div>
 
         <button type="button" class="action-btn" id="btnOpen">OPEN IMAGE</button>
-        <button type="button" class="action-btn disabled" id="btnCopy">COPY PNG</button>
-        <a class="action-btn primary disabled" id="btnDownload" download="cutout.png">EXPORT PNG</a>
+        <button type="button" class="action-btn disabled" id="btnCopy">COPY</button>
+        <button type="button" class="action-btn primary disabled" id="btnDownload">EXPORT PNG</button>
         <input type="file" id="fileInput" accept="image/*" />
       </div>
     </div>
@@ -184,7 +184,7 @@
       </div>
     </main>
 
-    <!-- 4. Bottom Telemetry Bar -->
+    <!-- 4. Bottom Telemetry & Output Configuration Bar -->
     <footer class="statusbar">
       <div class="status-group">
         <div class="status-kv">FILE: <span id="statFile">NONE</span></div>
@@ -193,7 +193,23 @@
         <div class="status-kv">LATENCY: <span id="statTime">—</span></div>
       </div>
       <div class="status-group">
-        <div class="status-kv">OUTPUT: <span>32-BIT LOSSLESS PNG</span></div>
+        <div class="status-control">
+          <span>FORMAT:</span>
+          <div class="mini-segmented" id="formatSelector">
+            <button type="button" class="mini-seg-btn active" data-format="png" title="Lossless 32-bit RGBA PNG">PNG</button>
+            <button type="button" class="mini-seg-btn" data-format="webp" title="Transparent WebP">WEBP</button>
+            <button type="button" class="mini-seg-btn" data-format="jpg" title="JPEG composited on active Matte color">JPG</button>
+            <button type="button" class="mini-seg-btn" data-format="mask" title="Black &amp; White Alpha Mask PNG">MASK</button>
+          </div>
+        </div>
+        <div class="status-control">
+          <span>SCALE:</span>
+          <div class="mini-segmented" id="scaleSelector">
+            <button type="button" class="mini-seg-btn active" data-scale="1" title="100% Original Resolution">100%</button>
+            <button type="button" class="mini-seg-btn" data-scale="0.5" title="50% Half Resolution">50%</button>
+            <button type="button" class="mini-seg-btn" data-scale="0.25" title="25% Quarter Resolution">25%</button>
+          </div>
+        </div>
         <a href="https://github.com/markoshaq" target="_blank" rel="noopener noreferrer" class="credit-link">
           MADE BY MARKOSHAQ ↗
         </a>

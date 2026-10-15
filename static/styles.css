@@ -686,6 +686,45 @@ body {
   color: var(--text);
 }
 
+.status-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mini-segmented {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.mini-seg-btn {
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--border);
+  color: var(--muted);
+  padding: 2px 7px;
+  font-family: var(--mono);
+  font-size: 10px;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.mini-seg-btn:last-child {
+  border-right: none;
+}
+
+.mini-seg-btn:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.mini-seg-btn.active {
+  background: var(--text);
+  color: var(--bg);
+  font-weight: 600;
+}
+
 input[type="file"] {
   display: none;
 }
