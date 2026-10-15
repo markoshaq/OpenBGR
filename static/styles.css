@@ -573,6 +573,7 @@ body {
   padding: 7px 8px;
   outline: none;
   -moz-appearance: textfield;
+  appearance: textfield;
 }
 
 .px-input::-webkit-outer-spin-button,
