@@ -62,6 +62,7 @@ import io
 import os
 import platform
 import shutil
+import signal
 import socket
 import subprocess
 import threading
@@ -861,6 +862,17 @@ def open_fallback_app_window(url: str) -> None:
 
 
 if __name__ == "__main__":
+    def _graceful_exit(_signum: int, _frame: Any) -> None:
+        """Immediately aborts active jobs, unloads GPU memory, and exits with zero zombie threads."""
+        MANAGER.request_cancel()
+        MANAGER.unload()
+        os._exit(0)
+
+    signal.signal(signal.SIGINT, _graceful_exit)
+    signal.signal(signal.SIGTERM, _graceful_exit)
+    if hasattr(signal, "SIGHUP"):
+        signal.signal(signal.SIGHUP, _graceful_exit)
+
     port = int(os.environ.get("PORT", "7860"))
     host = "127.0.0.1"
     url = f"http://{host}:{port}"
