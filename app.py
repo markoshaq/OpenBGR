@@ -308,8 +308,20 @@ class ModelManager:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        self.inference_lock = threading.Lock()
+        self.cancel_epoch: int = 0
         self.active_model_key: Optional[str] = None
         self.model: Optional[torch.nn.Module] = None
+
+    def request_cancel(self) -> int:
+        """Increments the cancellation epoch so any queued or active job aborts early."""
+        self.cancel_epoch += 1
+        return self.cancel_epoch
+
+    def check_cancelled(self, job_epoch: int) -> None:
+        """Raises `InterruptedError` if a cancellation occurred since `job_epoch` started."""
+        if job_epoch < self.cancel_epoch:
+            raise InterruptedError("Segmentation job was cancelled by the user.")
 
     def flush_device_memory(self) -> None:
         """Forces Python garbage collection and releases unused GPU/MPS cache blocks."""
@@ -321,6 +333,15 @@ class ModelManager:
                 pass
         elif DEVICE.type == "cuda":
             torch.cuda.empty_cache()
+
+    def unload(self) -> None:
+        """Explicitly unloads the active model and flushes device memory."""
+        with self._lock:
+            if self.model is not None:
+                del self.model
+                self.model = None
+                self.active_model_key = None
+            self.flush_device_memory()
 
     def get_or_load(self, model_key: str) -> torch.nn.Module:
         """
@@ -513,20 +534,15 @@ def segment_foreground(
     defringe: bool = True,
     despill: bool = True,
     matting: bool = False,
+    job_epoch: Optional[int] = None,
 ) -> tuple[Image.Image, float, dict[str, Any]]:
     """
-    Executes the full background removal pipeline on a PIL image:
-    1. Resolves the requested hardware tier (or `BiRefNet-matting` when `matting=True`)
-       and ensures the backbone is loaded.
-    2. Applies EXIF orientation transposition (fixing rotated smartphone photos)
-       and projects the input to a clean 3-channel RGB image.
-    3. Resizes to the tier's internal tensor resolution and runs a forward pass
-       in FP16 (CUDA/MPS) or FP32 (CPU).
-    4. Upsamples the predicted sigmoid alpha matte back to the exact original
-       image dimensions `(orig_w, orig_h)` using Lanczos interpolation.
-    5. Optionally applies morphological edge color decontamination (`defringe`)
-       and rim color spill / reflection suppression (`despill`).
+    Executes the full background removal pipeline on a PIL image under a thread-safe
+    inference lock with cooperative cancellation checkpoints and explicit tensor cleanup.
     """
+    if job_epoch is None:
+        job_epoch = MANAGER.cancel_epoch
+
     if tier not in TIERS:
         tier = RECOMMENDED_TIER
 
@@ -539,49 +555,71 @@ def segment_foreground(
         model_key = tier_cfg["model_key"]
         internal_res = tier_cfg["resolution"]
 
-    # Ensure model weights are resident in memory before starting inference timer.
-    model = MANAGER.get_or_load(model_key)
+    # Serialize GPU/MPS execution so cancelling and starting a new job never
+    # causes two concurrent forward passes or mid-pass model eviction.
+    with MANAGER.inference_lock:
+        MANAGER.check_cancelled(job_epoch)
+        model = MANAGER.get_or_load(model_key)
+        MANAGER.check_cancelled(job_epoch)
 
-    start_time = time.perf_counter()
+        start_time = time.perf_counter()
 
-    # Normalize EXIF orientation tags and convert any input mode (RGBA, P, L, CMYK) to RGB.
-    oriented_image = ImageOps.exif_transpose(raw_image)
-    orig_w, orig_h = oriented_image.size
-    rgb_image = oriented_image.convert("RGB")
+        oriented_image = ImageOps.exif_transpose(raw_image)
+        orig_w, orig_h = oriented_image.size
+        rgb_image = oriented_image.convert("RGB")
+        if oriented_image is not raw_image:
+            oriented_image.close()
 
-    # Prepare normalized input batch tensor [1, 3, H, W].
-    preprocess = get_preprocess_transform(internal_res)
-    input_tensor = preprocess(rgb_image).unsqueeze(0).to(device=DEVICE, dtype=DTYPE)
+        preprocess = get_preprocess_transform(internal_res)
+        input_tensor: Optional[torch.Tensor] = None
+        outputs: Any = None
+        pred_logits: Optional[torch.Tensor] = None
+        alpha_tensor: Optional[torch.Tensor] = None
 
-    # Execute forward pass without autograd tracking.
-    with torch.no_grad():
-        outputs = model(input_tensor)
-        pred_logits = outputs[-1] if isinstance(outputs, (list, tuple)) else outputs
-        # Cast back to FP32 before sigmoid to preserve smooth 8-bit alpha gradients.
-        alpha_tensor = pred_logits.float().sigmoid().cpu()
+        try:
+            input_tensor = (
+                preprocess(rgb_image).unsqueeze(0).to(device=DEVICE, dtype=DTYPE)
+            )
+            MANAGER.check_cancelled(job_epoch)
 
-    # Upsample predicted alpha mask to exact native source dimensions.
-    mask_pil = transforms.ToPILImage()(alpha_tensor[0].squeeze(0)).resize(
-        (orig_w, orig_h), resample=Image.Resampling.LANCZOS
-    )
+            with torch.no_grad():
+                outputs = model(input_tensor)
+                pred_logits = (
+                    outputs[-1] if isinstance(outputs, (list, tuple)) else outputs
+                )
+                alpha_tensor = pred_logits.float().sigmoid().cpu()
 
-    alpha_np = np.array(mask_pil, dtype=np.uint8)
-    alpha_norm = alpha_np.astype(np.float32) / 255.0
+            MANAGER.check_cancelled(job_epoch)
 
-    if defringe:
-        rgb_np = decontaminate_edge_colors(rgb_image, alpha_np)
-    else:
-        rgb_np = np.array(rgb_image, dtype=np.uint8)
+            mask_pil = transforms.ToPILImage()(alpha_tensor[0].squeeze(0)).resize(
+                (orig_w, orig_h), resample=Image.Resampling.LANCZOS
+            )
+        finally:
+            # Explicitly release GPU/MPS tensors immediately after forward pass
+            del input_tensor, outputs, pred_logits, alpha_tensor
 
-    if despill:
-        rgb_np = suppress_color_spill(rgb_np, mask_pil, alpha_norm)
+        try:
+            MANAGER.check_cancelled(job_epoch)
+            alpha_np = np.array(mask_pil, dtype=np.uint8)
+            alpha_norm = alpha_np.astype(np.float32) / 255.0
 
-    # Combine RGB channels with the 8-bit alpha matte into a 32-bit RGBA image.
-    rgba_np = np.dstack((rgb_np, alpha_np))
-    result_image = Image.fromarray(rgba_np, mode="RGBA")
+            if defringe:
+                rgb_np = decontaminate_edge_colors(rgb_image, alpha_np)
+            else:
+                rgb_np = np.array(rgb_image, dtype=np.uint8)
 
-    elapsed_ms = (time.perf_counter() - start_time) * 1000.0
-    return result_image, elapsed_ms, tier_cfg
+            MANAGER.check_cancelled(job_epoch)
+            if despill:
+                rgb_np = suppress_color_spill(rgb_np, mask_pil, alpha_norm)
+
+            rgba_np = np.dstack((rgb_np, alpha_np))
+            result_image = Image.fromarray(rgba_np, mode="RGBA")
+        finally:
+            mask_pil.close()
+            rgb_image.close()
+
+        elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+        return result_image, elapsed_ms, tier_cfg
 
 
 # ---------------------------------------------------------------------------
@@ -592,9 +630,8 @@ def segment_foreground(
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """
-    Application lifespan hook. If the recommended default model is already
-    present in the local Hugging Face cache, preloads it into device memory
-    on a background daemon thread so the first request has zero cold-start latency.
+    Application lifespan hook. Preloads the recommended default model if cached
+    on disk, and ensures all device memory is flushed on server shutdown.
     """
     default_model_key = TIERS[RECOMMENDED_TIER]["model_key"]
     if is_model_cached_locally(MODELS[default_model_key]):
@@ -602,7 +639,10 @@ async def lifespan(_app: FastAPI):
             target=lambda: MANAGER.get_or_load(default_model_key),
             daemon=True,
         ).start()
-    yield
+    try:
+        yield
+    finally:
+        MANAGER.unload()
 
 
 app = FastAPI(
@@ -610,6 +650,13 @@ app = FastAPI(
     description="Self-hosted, zero-telemetry dichotomous image segmentation powered by BiRefNet",
     lifespan=lifespan,
 )
+
+
+@app.post("/api/cancel")
+def api_cancel() -> dict[str, Any]:
+    """Signals any queued or active segmentation job to abort at its next checkpoint."""
+    epoch = MANAGER.request_cancel()
+    return {"cancelled": True, "epoch": epoch}
 
 
 @app.get("/api/status")
@@ -655,7 +702,9 @@ async def api_remove_bg(
     if tier not in TIERS:
         raise HTTPException(status_code=400, detail=f"Invalid hardware preset '{tier}'.")
 
+    job_epoch = MANAGER.cancel_epoch
     raw_bytes = await file.read()
+    await file.close()
     if not raw_bytes:
         raise HTTPException(status_code=400, detail="Uploaded image file is empty.")
 
@@ -666,40 +715,55 @@ async def api_remove_bg(
         raise HTTPException(
             status_code=400, detail=f"Unable to decode image file: {exc}"
         ) from exc
+    finally:
+        del raw_bytes
 
+    result_img: Optional[Image.Image] = None
     try:
-        # Offload blocking PyTorch inference to a worker thread so the ASGI
-        # event loop stays responsive to status polls and client cancellation.
         result_img, elapsed_ms, tier_cfg = await asyncio.to_thread(
-            segment_foreground, pil_img, tier, defringe, despill, matting
+            segment_foreground,
+            pil_img,
+            tier,
+            defringe,
+            despill,
+            matting,
+            job_epoch,
         )
+    except InterruptedError as exc:
+        raise HTTPException(status_code=499, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=500, detail=f"Segmentation pipeline failed: {exc}"
         ) from exc
+    finally:
+        pil_img.close()
 
-    # Encode as 32-bit RGBA PNG. DEFLATE compress_level=1 is 100% lossless
-    # while serializing ~4x faster than default level 6 on high-megapixel images.
     output_buffer = io.BytesIO()
-    result_img.save(output_buffer, format="PNG", compress_level=1)
+    try:
+        result_img.save(output_buffer, format="PNG", compress_level=1)
+        png_bytes = output_buffer.getvalue()
+        img_w, img_h = result_img.width, result_img.height
+    finally:
+        output_buffer.close()
+        if result_img is not None:
+            result_img.close()
 
     telemetry_headers = {
         "X-Inference-Time-Ms": f"{elapsed_ms:.1f}",
         "X-Tier-Used": f"{tier_cfg['label']} ({tier_cfg['sublabel']})",
         "X-Device": f"{DEVICE_LABEL} / {PRECISION_LABEL}",
-        "X-Image-Width": str(result_img.width),
-        "X-Image-Height": str(result_img.height),
+        "X-Image-Width": str(img_w),
+        "X-Image-Height": str(img_h),
         "Access-Control-Expose-Headers": (
             "X-Inference-Time-Ms, X-Tier-Used, X-Device, X-Image-Width, X-Image-Height"
         ),
     }
-    # Ensure all HTTP header values are strictly latin-1 safe per RFC 7230.
     safe_headers = {
         k: v.encode("latin-1", errors="ignore").decode("latin-1")
         for k, v in telemetry_headers.items()
     }
     return Response(
-        content=output_buffer.getvalue(),
+        content=png_bytes,
         media_type="image/png",
         headers=safe_headers,
     )
@@ -838,6 +902,12 @@ if __name__ == "__main__":
             )
             api_bridge.window = window
             webview.start()
+            # When the native desktop window is closed by the user, release
+            # device memory and terminate the process tree immediately so no
+            # background server or worker threads remain running.
+            MANAGER.request_cancel()
+            MANAGER.unload()
+            os._exit(0)
         except Exception as exc:
             print(f"[Desktop] Native window unavailable ({exc}); opening app window...")
             open_fallback_app_window(url)

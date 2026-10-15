@@ -376,6 +376,7 @@ function resetToEmptyWorkspace() {
   dom.stageSizerImg.removeAttribute("src");
   dom.beforeImg.removeAttribute("src");
   dom.afterImg.removeAttribute("src");
+  masterCutoutImg.removeAttribute("src");
 
   dom.stage.classList.remove("visible");
   dom.emptyState.style.display = "";
@@ -537,6 +538,7 @@ function cancelProcessing() {
     state.abortController.abort();
     state.abortController = null;
   }
+  fetch("/api/cancel", { method: "POST" }).catch(() => {});
   state.isProcessing = false;
   dom.busyOverlay.classList.remove("active");
   closeConfirmModal();
@@ -651,7 +653,12 @@ async function buildExportBlob(format) {
     ctx.putImageData(imgData, 0, 0);
     return new Promise((resolve, reject) => {
       canvas.toBlob(
-        (b) => (b ? resolve(b) : reject(new Error("Mask export failed"))),
+        (b) => {
+          canvas.width = 0;
+          canvas.height = 0;
+          if (b) resolve(b);
+          else reject(new Error("Mask export failed"));
+        },
         "image/png"
       );
     });
@@ -682,6 +689,8 @@ async function buildExportBlob(format) {
       ctx.fillRect(0, 0, targetW, targetH);
     }
     ctx.drawImage(fgCanvas, 0, 0);
+    fgCanvas.width = 0;
+    fgCanvas.height = 0;
   } else {
     if (format === "jpg" || state.activeBackdrop !== "checker") {
       ctx.fillStyle =
@@ -701,7 +710,12 @@ async function buildExportBlob(format) {
 
   return new Promise((resolve, reject) => {
     canvas.toBlob(
-      (b) => (b ? resolve(b) : reject(new Error("Image encoding failed"))),
+      (b) => {
+        canvas.width = 0;
+        canvas.height = 0;
+        if (b) resolve(b);
+        else reject(new Error("Image encoding failed"));
+      },
       mimeType,
       quality
     );
@@ -1085,6 +1099,7 @@ async function runSegmentation() {
 
   if (state.abortController) {
     state.abortController.abort();
+    fetch("/api/cancel", { method: "POST" }).catch(() => {});
   }
   const controller = new AbortController();
   state.abortController = controller;
@@ -1143,7 +1158,13 @@ async function runSegmentation() {
     state.exportWidth = Math.max(1, Math.round(width * state.exportScale));
     state.exportHeight = Math.max(1, Math.round(height * state.exportScale));
 
-    if (state.resultObjectUrl) URL.revokeObjectURL(state.resultObjectUrl);
+    if (state.previewObjectUrl && state.previewObjectUrl !== state.resultObjectUrl) {
+      URL.revokeObjectURL(state.previewObjectUrl);
+    }
+    state.previewObjectUrl = null;
+    if (state.resultObjectUrl) {
+      URL.revokeObjectURL(state.resultObjectUrl);
+    }
     state.resultObjectUrl = URL.createObjectURL(state.resultBlob);
 
     await new Promise((resolve) => {
