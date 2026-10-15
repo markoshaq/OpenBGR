@@ -62,36 +62,32 @@ Instead of relying on a single checkpoint, **REMOVEBG** maps each hardware prese
 
 ---
 
-## Quick Start
+## Quick Start (Zero-Config Setup)
 
-Requires **Python 3.10+**.
+Works on **macOS, Windows, and Linux** — even if you do not have Python installed yet.
 
-### macOS & Linux
+### Option A: Double-Click (No Terminal Required)
+1. Click **Code → Download ZIP** on GitHub and extract the folder.
+2. Double-click the launcher for your operating system:
+   - **macOS:** Double-click **`Start Mac.command`** in Finder.
+   - **Windows:** Double-click **`start.bat`** in File Explorer.
+
+### Option B: One-Command Terminal Launch
 
 ```bash
-git clone https://github.com/markoshaq/removebg.git
-cd removebg
-./start.sh
+# macOS & Linux
+git clone https://github.com/markoshaq/removebg.git && cd removebg && ./start.sh
 ```
-
-### Windows
 
 ```bat
-git clone https://github.com/markoshaq/removebg.git
-cd removebg
-start.bat
+:: Windows (Command Prompt / PowerShell)
+git clone https://github.com/markoshaq/removebg.git && cd removebg && start.bat
 ```
-*(Or double-click `start.bat` directly in Windows Explorer).*
 
-On first launch, the bootstrap script automatically:
-1. Provisions an isolated `.venv` virtual environment.
-2. Installs dependencies and writes a `.venv/.installed` state marker so subsequent launches start in **< 1 second**.
-3. Preloads cached model weights in a background daemon thread and opens `http://127.0.0.1:7860`.
-
-> **Windows / Linux NVIDIA CUDA Tip:** If your system's default `pip` index resolves to a CPU-only PyTorch wheel, install the CUDA-enabled wheel inside `.venv`:
-> ```bash
-> .venv/Scripts/pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
-> ```
+### What the Bootstrapper Does Automatically on First Run:
+1. **Auto-Python Provisioning:** Uses your system Python 3.10+ if present, or automatically fetches a standalone Python 3.12 runtime via [`uv`](https://docs.astral.sh/uv/) if Python is not installed.
+2. **Auto-CUDA GPU Detection:** On Windows and Linux, checks for `nvidia-smi` and automatically installs the **CUDA 12.4 GPU build of PyTorch** when an NVIDIA GPU is detected (or Apple Metal `MPS` on macOS).
+3. **Instant Subsequent Launches:** Writes a `.venv/.installed` state marker so every future launch starts in **< 1 second** and opens `http://127.0.0.1:7860`.
 
 ---
 
