@@ -145,12 +145,13 @@
 
         <!-- Split-Plane Comparison Stage -->
         <div class="stage" id="stage">
-          <img id="afterImg" alt="Cutout Result" />
+          <img id="stageSizerImg" class="stage-sizer" alt="" aria-hidden="true" />
+          <img id="afterImg" class="stage-layer" alt="Cutout Result" />
           <div class="before-clip" id="beforeClip">
-            <img id="beforeImg" alt="Original Source" />
+            <img id="beforeImg" class="stage-layer" alt="Original Source" />
           </div>
           <div class="stage-label left" id="lblLeft">ORIGINAL</div>
-          <div class="stage-label right" id="lblRight">RGBA CUTOUT</div>
+          <div class="stage-label right" id="lblRight">PNG • 100%</div>
           <div class="split-line" id="splitLine" style="left: 50%;">
             <div class="split-handle">↔</div>
           </div>
@@ -162,58 +163,6 @@
           <div class="busy-title" id="busyTitle">RUNNING INFERENCE</div>
           <div class="busy-sub" id="busySub">Executing BiRefNet locally. First run of a model downloads weights once.</div>
           <button type="button" class="action-btn cancel-btn" id="btnCancel">CANCEL PROCESSING</button>
-        </div>
-
-        <!-- Interrupt Confirmation Modal -->
-        <div class="modal-backdrop" id="confirmModal">
-          <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
-            <div class="modal-title" id="modalTitle">STOP CURRENT IMAGE?</div>
-            <div class="modal-desc" id="modalDesc">
-              This will stop the current image processing. Do you want to continue?
-            </div>
-            <div class="modal-actions">
-              <button type="button" class="action-btn" id="btnModalCancel">KEEP PROCESSING</button>
-              <button type="button" class="action-btn primary" id="btnModalConfirm">STOP &amp; CONTINUE</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Info / About Modal -->
-        <div class="modal-backdrop" id="infoModal">
-          <div class="modal-dialog info-dialog" role="dialog" aria-modal="true" aria-labelledby="infoModalTitle">
-            <div class="modal-title" id="infoModalTitle">SYSTEM INFO // LOCAL AI STUDIO</div>
-            <div class="modal-desc">
-              100% local, offline background removal powered by <strong>BiRefNet</strong>. Zero cloud uploads, zero telemetry, and zero image compression.
-            </div>
-            <div class="info-list">
-              <div class="info-row">
-                <span class="info-key">COMPUTE ENGINE</span>
-                <span class="info-val" id="hwCompute">DETECTING...</span>
-              </div>
-              <div class="info-row">
-                <span class="info-key">LOW-END (LITE 1K)</span>
-                <span class="info-val">BiRefNet_lite (Swin-T) — Fast inference for CPUs &amp; integrated GPUs.</span>
-              </div>
-              <div class="info-row">
-                <span class="info-key">MID-RANGE (FULL 1K)</span>
-                <span class="info-val">BiRefNet (Swin-L) — Studio-grade hair, fur &amp; soft alpha matting.</span>
-              </div>
-              <div class="info-row">
-                <span class="info-key">HIGH-END (ULTRA 2K)</span>
-                <span class="info-val">BiRefNet_HR (Swin-L) — High-density tensor for 4K/8K photography.</span>
-              </div>
-              <div class="info-row">
-                <span class="info-key">DEFRINGE</span>
-                <span class="info-val">Removes background color bleed along semi-transparent hair &amp; borders.</span>
-              </div>
-            </div>
-            <div class="info-footer">
-              <a href="https://github.com/markoshaq" target="_blank" rel="noopener noreferrer" class="credit-link">
-                MADE BY MARKOSHAQ ↗
-              </a>
-              <button type="button" class="action-btn primary" id="btnInfoClose">CLOSE</button>
-            </div>
-          </div>
         </div>
       </main>
 
@@ -304,6 +253,58 @@
         </a>
       </div>
     </footer>
+
+    <!-- Full-Window Interrupt Confirmation Modal -->
+    <div class="modal-backdrop" id="confirmModal">
+      <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+        <div class="modal-title" id="modalTitle">STOP CURRENT IMAGE?</div>
+        <div class="modal-desc" id="modalDesc">
+          This will stop the current image processing. Do you want to continue?
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="action-btn" id="btnModalCancel">KEEP PROCESSING</button>
+          <button type="button" class="action-btn primary" id="btnModalConfirm">STOP &amp; CONTINUE</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Full-Window Info / About Modal -->
+    <div class="modal-backdrop" id="infoModal">
+      <div class="modal-dialog info-dialog" role="dialog" aria-modal="true" aria-labelledby="infoModalTitle">
+        <div class="modal-title" id="infoModalTitle">SYSTEM INFO // LOCAL AI STUDIO</div>
+        <div class="modal-desc">
+          100% local, offline background removal powered by <strong>BiRefNet</strong>. Zero cloud uploads, zero telemetry, and zero image compression.
+        </div>
+        <div class="info-list">
+          <div class="info-row">
+            <span class="info-key">COMPUTE ENGINE</span>
+            <span class="info-val" id="hwCompute">DETECTING...</span>
+          </div>
+          <div class="info-row">
+            <span class="info-key">LOW-END (LITE 1K)</span>
+            <span class="info-val">BiRefNet_lite (Swin-T) — Fast inference for CPUs &amp; integrated GPUs.</span>
+          </div>
+          <div class="info-row">
+            <span class="info-key">MID-RANGE (FULL 1K)</span>
+            <span class="info-val">BiRefNet (Swin-L) — Studio-grade hair, fur &amp; soft alpha matting.</span>
+          </div>
+          <div class="info-row">
+            <span class="info-key">HIGH-END (ULTRA 2K)</span>
+            <span class="info-val">BiRefNet_HR (Swin-L) — High-density tensor for 4K/8K photography.</span>
+          </div>
+          <div class="info-row">
+            <span class="info-key">DEFRINGE</span>
+            <span class="info-val">Removes background color bleed along semi-transparent hair &amp; borders.</span>
+          </div>
+        </div>
+        <div class="info-footer">
+          <a href="https://github.com/markoshaq" target="_blank" rel="noopener noreferrer" class="credit-link">
+            MADE BY MARKOSHAQ ↗
+          </a>
+          <button type="button" class="action-btn primary" id="btnInfoClose">CLOSE</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="/static/app.js"></script>

@@ -726,14 +726,24 @@ body {
   display: inline-block;
 }
 
-.stage img {
+.stage-sizer {
   display: block;
   max-width: calc(100vw - 582px);
   max-height: calc(100vh - 118px);
   width: auto;
   height: auto;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.stage-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
   pointer-events: none;
+  image-rendering: auto;
 }
 
 .before-clip {
@@ -867,13 +877,15 @@ body {
 }
 
 .modal-backdrop {
-  position: absolute;
+  position: fixed;
   inset: 0;
-  background: rgba(9, 9, 11, 0.82);
+  background: rgba(0, 0, 0, 0.84);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
   display: none;
   align-items: center;
   justify-content: center;
-  z-index: 50;
+  z-index: 9999;
   padding: 16px;
 }
 
