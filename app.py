@@ -59,6 +59,7 @@ import asyncio
 import base64
 import gc
 import io
+import json
 import os
 import platform
 import shutil
@@ -787,12 +788,51 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 class DesktopApi:
     """
     JavaScript-to-Python bridge exposed as `window.pywebview.api` when running
-    inside the native pywebview desktop window. Allows the frontend EXPORT button
-    to open a native OS "Save As" file dialog.
+    inside the native pywebview desktop window. Provides native OS file dialogs
+    (Open / Save As) and a clean programmatic Quit for the native menu bar.
     """
+
+    # Safety cap for the base64 bridge payload when reading picked images (~64 MP photos are fine).
+    OPEN_DIALOG_MAX_BYTES = 48 * 1024 * 1024
 
     def __init__(self) -> None:
         self.window: Any = None
+
+    def open_image_dialog(self) -> dict[str, Any]:
+        """
+        Opens the native OS "Open Image" dialog, reads the selected file, and
+        returns it base64-encoded so the frontend can ingest it as a Blob.
+        """
+        if self.window is None:
+            return {"cancelled": True}
+        try:
+            import webview
+
+            result = self.window.create_file_dialog(
+                webview.OPEN_DIALOG,
+                allow_multiple=False,
+                file_types=(
+                    "Image Files (*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif;*.tif;*.tiff;*.avif)",
+                    "All files (*.*)",
+                ),
+            )
+            if not result:
+                return {"cancelled": True}
+
+            path_str = result[0] if isinstance(result, (list, tuple)) else str(result)
+            file_path = Path(path_str)
+            data = file_path.read_bytes()
+            if len(data) > self.OPEN_DIALOG_MAX_BYTES:
+                return {
+                    "cancelled": True,
+                    "error": "Selected image exceeds the 48 MB native-dialog bridge limit.",
+                }
+            return {
+                "name": file_path.name,
+                "data_b64": base64.b64encode(data).decode("ascii"),
+            }
+        except Exception as exc:
+            return {"cancelled": True, "error": str(exc)}
 
     def save_file(self, data_base64: str, default_filename: str) -> dict[str, Any]:
         """Opens a native OS Save dialog and writes the base64-encoded image to disk."""
@@ -814,6 +854,203 @@ class DesktopApi:
             return {"saved": True, "path": target_path}
         except Exception as exc:
             return {"saved": False, "error": str(exc)}
+
+    def quit(self) -> dict[str, Any]:
+        """
+        Destroys the native window, which unblocks `webview.start()` on the main
+        thread so the shutdown path (cancel + unload + os._exit) runs cleanly.
+        """
+        try:
+            if self.window is not None:
+                self.window.destroy()
+        except Exception:
+            pass
+        return {"quit": True}
+
+
+# ---------------------------------------------------------------------------
+# Native Window State Persistence & Menu Bar
+# ---------------------------------------------------------------------------
+
+# Per-user desktop preferences dir; survives app updates and keeps the repo clean.
+APP_CONFIG_DIR = Path.home() / ".openbgr"
+WINDOW_STATE_PATH = APP_CONFIG_DIR / "window.json"
+
+
+def load_window_state() -> dict[str, int]:
+    """Returns the last saved native window geometry (x, y, width, height)."""
+    try:
+        data = json.loads(WINDOW_STATE_PATH.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return {
+                k: int(data[k])
+                for k in ("x", "y", "width", "height")
+                if isinstance(data.get(k), (int, float))
+            }
+    except Exception:
+        pass
+    return {}
+
+
+def attach_window_state_persistence(window: Any) -> None:
+    """
+    Saves the window's position and size to `~/.openbgr/window.json` whenever it
+    is moved or resized (debounced), so the app restores its frame on next launch.
+    """
+    debounce_timer: list[Optional[threading.Timer]] = [None]
+
+    def _persist() -> None:
+        try:
+            APP_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            WINDOW_STATE_PATH.write_text(
+                json.dumps(
+                    {
+                        "x": int(window.x),
+                        "y": int(window.y),
+                        "width": int(window.width),
+                        "height": int(window.height),
+                    }
+                ),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+    def _schedule() -> None:
+        if debounce_timer[0] is not None:
+            debounce_timer[0].cancel()
+        debounce_timer[0] = threading.Timer(0.4, _persist)
+        debounce_timer[0].daemon = True
+        debounce_timer[0].start()
+
+    try:
+        window.events.resized += lambda *a, **k: _schedule()
+        window.events.moved += lambda *a, **k: _schedule()
+    except Exception:
+        pass
+
+
+def set_macos_app_name(name: str) -> None:
+    """
+    Renames the macOS menu-bar application name from "Python" to `name`.
+
+    The Cocoa menu bar reads `CFBundleName` from the running process's main
+    bundle before `NSApplication` finishes launching. Mutating the bundle's info
+    dictionary before `webview.start()` (which bootstraps NSApp) makes the
+    menu bar show "OpenBGR" instead of "Python".
+    """
+    if platform.system() != "Darwin":
+        return
+    try:
+        from Foundation import NSBundle  # type: ignore
+
+        bundle = NSBundle.mainBundle()
+        for info_dict in (
+            bundle.infoDictionary(),
+            bundle.localizedInfoDictionary(),
+        ):
+            if info_dict is not None:
+                info_dict["CFBundleName"] = name
+                info_dict["CFBundleDisplayName"] = name
+    except Exception:
+        pass
+
+
+def build_native_menus(window: Any) -> list[Any]:
+    """
+    Builds the native OS menu bar for the desktop window.
+
+    macOS gets a proper "OpenBGR" application menu (About / Preferences / Quit)
+    plus File / Edit / View. Windows and Linux get File (with Preferences and
+    Quit), Edit, View, and Help. Menu actions evaluate small JS calls into the
+    frontend's `window.openBGR` command bridge.
+    """
+    import webview
+    from webview.menu import Menu, MenuAction, MenuSeparator
+
+    def cmd(js_code: str):
+        def _run() -> None:
+            try:
+                window.evaluate_js(js_code)
+            except Exception:
+                pass
+
+        return _run
+
+    def quit_app() -> None:
+        try:
+            window.destroy()
+        except Exception:
+            pass
+
+    def call(fn: str):
+        return cmd(f"window.openBGR && window.openBGR.{fn}")
+
+    view_menu = Menu(
+        "View",
+        [
+            MenuAction("Split", call("setView('split')")),
+            MenuAction("Cutout", call("setView('cutout')")),
+            MenuAction("Original", call("setView('original')")),
+            MenuSeparator(),
+            MenuAction("Zoom In", call("zoomIn()")),
+            MenuAction("Zoom Out", call("zoomOut()")),
+            MenuAction("Actual Size", call("zoomReset()")),
+            MenuSeparator(),
+            MenuAction("Toggle Loupe 4x", call("toggleLoupe()")),
+        ],
+    )
+
+    edit_menu = Menu(
+        "Edit",
+        [
+            MenuAction("Copy Image", call("copyImage()")),
+            MenuAction("Paste Image", call("pasteImage()")),
+            MenuSeparator(),
+            MenuAction("Cancel Processing", call("cancelProcessing()")),
+        ],
+    )
+
+    if platform.system() == "Darwin":
+        app_menu = Menu(
+            "OpenBGR",
+            [
+                MenuAction("About OpenBGR", call("openSettings('about')")),
+                MenuSeparator(),
+                MenuAction("Preferences...", call("openSettings('preferences')")),
+                MenuSeparator(),
+                MenuAction("Quit OpenBGR", quit_app),
+            ],
+        )
+        file_menu = Menu(
+            "File",
+            [
+                MenuAction("Open Image...", call("openImage()")),
+                MenuAction("Export...", call("exportImage()")),
+                MenuSeparator(),
+                MenuAction("Close Tab", call("closeActiveTab()")),
+            ],
+        )
+        return [app_menu, file_menu, edit_menu, view_menu]
+
+    file_menu = Menu(
+        "File",
+        [
+            MenuAction("Open Image...", call("openImage()")),
+            MenuAction("Export...", call("exportImage()")),
+            MenuSeparator(),
+            MenuAction("Close Tab", call("closeActiveTab()")),
+            MenuSeparator(),
+            MenuAction("Preferences...", call("openSettings('preferences')")),
+            MenuSeparator(),
+            MenuAction("Quit", quit_app),
+        ],
+    )
+    help_menu = Menu(
+        "Help",
+        [MenuAction("About OpenBGR", call("openSettings('about')"))],
+    )
+    return [file_menu, edit_menu, view_menu, help_menu]
 
 
 def wait_for_server(host: str, port: int, timeout_s: float = 15.0) -> bool:
@@ -902,18 +1139,46 @@ if __name__ == "__main__":
         try:
             import webview
 
+            set_macos_app_name("OpenBGR")
             api_bridge = DesktopApi()
+
+            window_kwargs: dict[str, Any] = {}
+            saved_geometry = load_window_state()
+            if saved_geometry.get("width") and saved_geometry.get("height"):
+                window_kwargs["width"] = saved_geometry["width"]
+                window_kwargs["height"] = saved_geometry["height"]
+                if saved_geometry.get("x") is not None:
+                    window_kwargs["x"] = saved_geometry["x"]
+                if saved_geometry.get("y") is not None:
+                    window_kwargs["y"] = saved_geometry["y"]
+            else:
+                window_kwargs["width"] = 1380
+                window_kwargs["height"] = 860
+            if platform.system() == "Darwin":
+                # Native vibrancy gives the titlebar the translucent macOS material.
+                window_kwargs["vibrancy"] = True
+
             window = webview.create_window(
                 title="OpenBGR",
                 url=url,
-                width=1380,
-                height=860,
                 min_size=(980, 640),
                 background_color="#09090b",
                 js_api=api_bridge,
+                **window_kwargs,
             )
             api_bridge.window = window
-            webview.start()
+            attach_window_state_persistence(window)
+
+            try:
+                native_menus = build_native_menus(window)
+            except Exception as menu_exc:
+                print(f"[Desktop] Native menu bar unavailable ({menu_exc}).")
+                native_menus = None
+
+            if native_menus:
+                webview.start(menu=native_menus)
+            else:
+                webview.start()
             # When the native desktop window is closed by the user, release
             # device memory and terminate the process tree immediately so no
             # background server or worker threads remain running.

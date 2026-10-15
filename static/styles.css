@@ -17,8 +17,50 @@
   --border-strong: #3f3f46;
   --text: #fafafa;
   --muted: #8e8e93;
+  /* Active-selection accent; overridden by Preferences > Accent */
+  --accent: #fafafa;
+  --accent-contrast: #09090b;
+  /* Loupe magnifier checkerboard tiles */
+  --checker-a: #16161a;
+  --checker-b: #0e0e11;
   --mono: "SF Mono", "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+}
+
+/* Light theme palette (Preferences > Theme) */
+.theme-light {
+  --bg: #f4f4f5;
+  --surface: #ffffff;
+  --surface-2: #e9e9ec;
+  --border: #d4d4d8;
+  --border-strong: #a1a1aa;
+  --text: #18181b;
+  --muted: #52525b;
+  --accent: #18181b;
+  --accent-contrast: #fafafa;
+  --checker-a: #dcdce0;
+  --checker-b: #f4f4f5;
+}
+
+/* Compact UI density (Preferences > UI Density) */
+.density-compact .sidebar-section {
+  padding: 10px 14px;
+  gap: 8px;
+}
+
+.density-compact .preset-card,
+.density-compact .toggle-card {
+  padding: 8px 10px;
+}
+
+.density-compact .preset-desc,
+.density-compact .field-hint {
+  font-size: 10px;
+}
+
+.density-compact .modal-dialog .sidebar-section,
+.density-compact .settings-block {
+  padding: 8px 0;
 }
 
 * {
@@ -79,8 +121,8 @@ body {
   font-weight: 700;
   letter-spacing: 0.08em;
   padding: 4px 8px;
-  background: var(--text);
-  color: var(--bg);
+  background: var(--accent);
+  color: var(--accent-contrast);
 }
 
 .topbar-center {
@@ -129,8 +171,8 @@ body {
 }
 
 .seg-btn.active {
-  background: var(--text);
-  color: var(--bg);
+  background: var(--accent);
+  color: var(--accent-contrast);
   font-weight: 600;
 }
 
@@ -189,9 +231,9 @@ body {
 }
 
 .info-btn:hover {
-  background: var(--text);
-  color: var(--bg);
-  border-color: var(--text);
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border-color: var(--accent);
 }
 
 /* -------------------------------------------------------------------------
@@ -288,7 +330,7 @@ body {
 
 .preset-card.active,
 .toggle-card.active {
-  border-color: var(--text);
+  border-color: var(--accent);
   background: var(--surface-2);
 }
 
@@ -318,7 +360,7 @@ body {
 }
 
 .preset-card.active .preset-tag {
-  color: var(--text);
+  color: var(--accent);
 }
 
 .preset-desc {
@@ -467,20 +509,20 @@ body {
   content: "";
   position: absolute;
   inset: 3px;
-  border: 1px solid var(--text);
+  border: 1px solid var(--accent);
   mix-blend-mode: difference;
   pointer-events: none;
 }
 
 .swatch-checker {
   background-image:
-    linear-gradient(45deg, #52525b 25%, transparent 25%),
-    linear-gradient(-45deg, #52525b 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, #52525b 75%),
-    linear-gradient(-45deg, transparent 75%, #52525b 75%);
+    linear-gradient(45deg, var(--checker-a) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--checker-a) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--checker-a) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--checker-a) 75%);
   background-size: 8px 8px;
   background-position: 0 0, 0 4px, 4px -4px, -4px 0;
-  background-color: #27272a;
+  background-color: var(--checker-b);
 }
 
 /* Right Sidebar Export Controls */
@@ -527,7 +569,7 @@ body {
   appearance: none;
   width: 12px;
   height: 16px;
-  background: var(--text);
+  background: var(--accent);
   cursor: pointer;
   border: none;
 }
@@ -535,7 +577,7 @@ body {
 .studio-slider::-moz-range-thumb {
   width: 12px;
   height: 16px;
-  background: var(--text);
+  background: var(--accent);
   cursor: pointer;
   border: none;
   border-radius: 0;
@@ -570,8 +612,8 @@ body {
 }
 
 .quick-scale-btn.active {
-  background: var(--text);
-  color: var(--bg);
+  background: var(--accent);
+  color: var(--accent-contrast);
   font-weight: 700;
 }
 
@@ -615,7 +657,7 @@ body {
 }
 
 .px-input:focus {
-  border-color: var(--text);
+  border-color: var(--accent);
 }
 
 .px-sep {
@@ -645,18 +687,17 @@ body {
 
 .action-btn:hover {
   background: var(--surface-2);
-  border-color: var(--text);
+  border-color: var(--accent);
 }
 
 .action-btn.primary {
-  background: var(--text);
-  color: var(--bg);
-  border-color: var(--text);
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border-color: var(--accent);
 }
 
 .action-btn.primary:hover {
-  background: #d4d4d8;
-  border-color: #d4d4d8;
+  filter: brightness(0.88);
 }
 
 .danger-btn {
@@ -730,7 +771,7 @@ body {
   background: var(--surface-2);
   color: var(--text);
   font-weight: 600;
-  box-shadow: inset 0 2px 0 var(--text);
+  box-shadow: inset 0 2px 0 var(--accent);
 }
 
 .tab-title {
@@ -798,13 +839,13 @@ body {
 
 .checkerboard-canvas {
   background-image:
-    linear-gradient(45deg, #16161a 25%, transparent 25%),
-    linear-gradient(-45deg, #16161a 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, #16161a 75%),
-    linear-gradient(-45deg, transparent 75%, #16161a 75%);
+    linear-gradient(45deg, var(--checker-a) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--checker-a) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--checker-a) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--checker-a) 75%);
   background-size: 20px 20px;
   background-position: 0 0, 0 10px, 10px -10px, -10px 0;
-  background-color: #0e0e11;
+  background-color: var(--checker-b);
 }
 
 .empty-state {
@@ -820,7 +861,7 @@ body {
 
 .empty-state:hover,
 .viewport.dragover .empty-state {
-  border-color: var(--text);
+  border-color: var(--accent);
   background: var(--surface);
 }
 
@@ -887,7 +928,7 @@ body {
   width: 180px;
   height: 180px;
   border-radius: 50%;
-  border: 1.5px solid var(--text);
+  border: 1.5px solid var(--accent);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(0, 0, 0, 0.85);
   pointer-events: none;
   display: none;
@@ -930,7 +971,7 @@ body {
   top: 0;
   bottom: 0;
   width: 1px;
-  background: var(--text);
+  background: var(--accent);
   cursor: ew-resize;
   z-index: 10;
 }
@@ -943,7 +984,7 @@ body {
   width: 24px;
   height: 24px;
   background: var(--bg);
-  border: 1px solid var(--text);
+  border: 1px solid var(--accent);
   color: var(--text);
   font-family: var(--mono);
   font-size: 10px;
@@ -1011,7 +1052,7 @@ body {
   left: -40%;
   width: 40%;
   height: 100%;
-  background: var(--text);
+  background: var(--accent);
   animation: slide 0.9s infinite linear;
 }
 
@@ -1215,4 +1256,85 @@ body {
 
 input[type="file"] {
   display: none;
+}
+
+/* -------------------------------------------------------------------------
+ * 6. Preferences Controls, Scrollable Settings Dialog & Light Theme Overrides
+ * ------------------------------------------------------------------------- */
+.info-dialog {
+  max-width: 520px;
+  max-height: 86vh;
+  overflow-y: auto;
+}
+
+.pref-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.pref-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.pref-segmented .seg-btn {
+  padding: 4px 12px;
+  font-size: 10px;
+}
+
+.pref-select {
+  width: auto;
+  min-width: 200px;
+  padding: 6px 8px;
+  font-size: 10px;
+}
+
+.accent-swatches {
+  width: 168px;
+  flex-shrink: 0;
+}
+
+.accent-swatches .swatch {
+  height: 22px;
+}
+
+/* Light theme component overrides */
+.theme-light .empty-state {
+  background: rgba(255, 255, 255, 0.88);
+}
+
+.theme-light .busy-overlay {
+  background: rgba(244, 244, 245, 0.88);
+}
+
+.theme-light .stage-label {
+  background: rgba(255, 255, 255, 0.88);
+}
+
+.theme-light .has-tooltip::after {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+}
+
+.theme-light .loupe-canvas {
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(0, 0, 0, 0.15);
+}
+
+.theme-light .error-toast {
+  background: #fde8e8;
+  border-color: #dc2626;
+  color: #b91c1c;
+}
+
+.theme-light .cancel-btn:hover,
+.theme-light .danger-btn:hover,
+.theme-light .tab-close:hover {
+  border-color: #dc2626;
+  color: #b91c1c;
+  background: rgba(220, 38, 38, 0.08);
 }

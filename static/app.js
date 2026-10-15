@@ -25,6 +25,46 @@ const DOT_TOOLTIPS = {
 };
 
 const STORAGE_KEY_CONFIRM_CLOSE = "openbgr_confirm_close_tab";
+const STORAGE_KEY_PREFS = "openbgr_prefs";
+
+/** Accent palette for Preferences > Accent (accent color, contrasting label color) */
+const ACCENTS = {
+  white: ["#fafafa", "#09090b"],
+  green: ["#34d399", "#052e1b"],
+  blue: ["#60a5fa", "#0b1c3a"],
+  amber: ["#fbbf24", "#3a2a05"],
+  red: ["#f87171", "#3a0a0a"],
+  violet: ["#a78bfa", "#1e1245"],
+};
+
+/**
+ * Loads persisted user preferences from localStorage, migrating the legacy
+ * standalone confirm-close key and filling unspecified fields with defaults.
+ */
+function loadPrefs() {
+  let stored = {};
+  try {
+    stored = JSON.parse(localStorage.getItem(STORAGE_KEY_PREFS) || "{}");
+  } catch (_) {}
+  const legacyConfirm = localStorage.getItem(STORAGE_KEY_CONFIRM_CLOSE);
+  return {
+    theme: "dark",
+    accent: "default",
+    density: "comfortable",
+    defaultFormat: "png",
+    defaultBackdrop: "checker",
+    confirmClose: legacyConfirm !== null ? legacyConfirm !== "false" : true,
+    ...stored,
+  };
+}
+
+const prefs = loadPrefs();
+
+function savePrefs() {
+  try {
+    localStorage.setItem(STORAGE_KEY_PREFS, JSON.stringify(prefs));
+  } catch (_) {}
+}
 
 /** Offscreen master Image element holding the active tab's 100% RGBA cutout */
 const masterCutoutImg = new Image();
@@ -35,7 +75,7 @@ let nextTabSeq = 1;
 const state = {
   tabs: [],                  // Array of open image tab objects
   activeTabId: null,         // ID of currently selected tab
-  confirmCloseTab: localStorage.getItem(STORAGE_KEY_CONFIRM_CLOSE) !== "false",
+  confirmCloseTab: prefs.confirmClose,
   tier: "mid",               // "low" (BiRefNet_lite 1K) | "mid" (BiRefNet Full 1K) | "high" (BiRefNet_HR 2K)
   defringe: true,            // Morphological edge color decontamination toggle
   despill: true,             // Rim color spill / background reflection neutralization toggle
@@ -56,11 +96,11 @@ const state = {
   previewRenderToken: 0,     // Monotonic counter to discard stale async canvas renders
   naturalWidth: 0,           // Native pixel width of active cutout
   naturalHeight: 0,          // Native pixel height of active cutout
-  exportFormat: "png",       // "png" | "webp" | "jpg" | "mask"
+  exportFormat: prefs.defaultFormat, // "png" | "webp" | "jpg" | "mask"
   exportScale: 1,            // Scale multiplier (0.1 to 2.0)
   exportWidth: 0,            // Target export width in pixels
   exportHeight: 0,           // Target export height in pixels
-  activeBackdrop: "checker", // "checker" or hex color string (e.g. "#ffffff")
+  activeBackdrop: prefs.defaultBackdrop, // "checker" or hex color string (e.g. "#ffffff")
   zoom: 1,                   // Viewport zoom factor (1.0 to 8.0)
   panX: 0,                   // Viewport pan X offset in px
   panY: 0,                   // Viewport pan Y offset in px
@@ -109,6 +149,13 @@ const dom = {
   btnInfo: document.getElementById("btnInfo"),
   btnInfoClose: document.getElementById("btnInfoClose"),
   btnToggleConfirmClose: document.getElementById("btnToggleConfirmClose"),
+  prefThemeDark: document.getElementById("prefThemeDark"),
+  prefThemeLight: document.getElementById("prefThemeLight"),
+  prefDensityComfortable: document.getElementById("prefDensityComfortable"),
+  prefDensityCompact: document.getElementById("prefDensityCompact"),
+  accentSwatches: document.getElementById("accentSwatches"),
+  prefDefaultFormat: document.getElementById("prefDefaultFormat"),
+  prefDefaultBackdrop: document.getElementById("prefDefaultBackdrop"),
 
   fileInput: document.getElementById("fileInput"),
   btnOpen: document.getElementById("btnOpen"),
@@ -443,16 +490,7 @@ async function switchToTab(tabId) {
   }
   dom.exportFormatSelect.value = state.exportFormat;
 
-  document.querySelectorAll(".swatch").forEach((s) => {
-    s.classList.toggle("active", s.getAttribute("data-bg") === state.activeBackdrop);
-  });
-  if (state.activeBackdrop === "checker") {
-    dom.viewport.style.background = "";
-    dom.viewport.classList.add("checkerboard-canvas");
-  } else {
-    dom.viewport.classList.remove("checkerboard-canvas");
-    dom.viewport.style.background = state.activeBackdrop;
-  }
+  applyBackdrop(state.activeBackdrop);
 
   if (!tab.sourceFile) {
     resetToEmptyWorkspace();
@@ -854,6 +892,57 @@ function setViewMode(mode) {
 }
 
 /**
+ * Applies the persisted appearance preferences (theme, accent, UI density) to
+ * the document root and re-syncs the Preferences modal controls.
+ */
+function applyPreferences() {
+  const root = document.documentElement;
+  root.classList.toggle("theme-light", prefs.theme === "light");
+  root.classList.toggle("density-compact", prefs.density === "compact");
+
+  const accent = ACCENTS[prefs.accent];
+  if (prefs.accent !== "default" && accent) {
+    root.style.setProperty("--accent", accent[0]);
+    root.style.setProperty("--accent-contrast", accent[1]);
+  } else {
+    // Falls back to the per-theme --accent default (mono light/dark).
+    root.style.removeProperty("--accent");
+    root.style.removeProperty("--accent-contrast");
+  }
+
+  dom.prefThemeDark?.classList.toggle("active", prefs.theme !== "light");
+  dom.prefThemeLight?.classList.toggle("active", prefs.theme === "light");
+  dom.prefDensityComfortable?.classList.toggle("active", prefs.density !== "compact");
+  dom.prefDensityCompact?.classList.toggle("active", prefs.density === "compact");
+  document.querySelectorAll("#accentSwatches .swatch").forEach((s) => {
+    s.classList.toggle("active", s.getAttribute("data-accent") === prefs.accent);
+  });
+  if (dom.prefDefaultFormat) dom.prefDefaultFormat.value = prefs.defaultFormat;
+  if (dom.prefDefaultBackdrop) dom.prefDefaultBackdrop.value = prefs.defaultBackdrop;
+  dom.btnToggleConfirmClose?.classList.toggle("active", prefs.confirmClose);
+}
+
+/**
+ * Applies a matte backdrop ("checker" or a hex color) to the viewport,
+ * swatch selection state, and live stage preview.
+ * @param {string} value
+ */
+function applyBackdrop(value) {
+  state.activeBackdrop = value;
+  document.querySelectorAll(".swatch").forEach((s) => {
+    s.classList.toggle("active", s.getAttribute("data-bg") === value);
+  });
+  if (value === "checker") {
+    dom.viewport.style.background = "";
+    dom.viewport.classList.add("checkerboard-canvas");
+  } else {
+    dom.viewport.classList.remove("checkerboard-canvas");
+    dom.viewport.style.background = value;
+  }
+  updateLiveStagePreview();
+}
+
+/**
  * Applies CSS `clip-path` and divider coordinates according to `state.viewMode`
  * and `state.splitPercent`.
  */
@@ -958,10 +1047,13 @@ function renderLoupeAtPointer(clientX, clientY) {
 
   // 1. Fill circular loupe backdrop (checkerboard or solid matte)
   if (state.activeBackdrop === "checker") {
+    const cs = getComputedStyle(document.documentElement);
+    const checkerA = cs.getPropertyValue("--checker-a").trim() || "#16161a";
+    const checkerB = cs.getPropertyValue("--checker-b").trim() || "#0e0e11";
     const tile = 10;
     for (let y = 0; y < size; y += tile) {
       for (let x = 0; x < size; x += tile) {
-        ctx.fillStyle = ((x / tile + y / tile) & 1) === 0 ? "#16161a" : "#0e0e11";
+        ctx.fillStyle = ((x / tile + y / tile) & 1) === 0 ? checkerA : checkerB;
         ctx.fillRect(x, y, tile, tile);
       }
     }
@@ -1254,10 +1346,57 @@ if (dom.btnToggleConfirmClose) {
   dom.btnToggleConfirmClose.classList.toggle("active", state.confirmCloseTab);
   dom.btnToggleConfirmClose.addEventListener("click", () => {
     state.confirmCloseTab = !state.confirmCloseTab;
-    localStorage.setItem(STORAGE_KEY_CONFIRM_CLOSE, String(state.confirmCloseTab));
+    prefs.confirmClose = state.confirmCloseTab;
+    savePrefs();
     dom.btnToggleConfirmClose.classList.toggle("active", state.confirmCloseTab);
   });
 }
+
+// Preferences modal: Appearance (theme / accent / density) & Behavior defaults
+dom.prefThemeDark?.addEventListener("click", () => {
+  prefs.theme = "dark";
+  savePrefs();
+  applyPreferences();
+});
+dom.prefThemeLight?.addEventListener("click", () => {
+  prefs.theme = "light";
+  savePrefs();
+  applyPreferences();
+});
+dom.prefDensityComfortable?.addEventListener("click", () => {
+  prefs.density = "comfortable";
+  savePrefs();
+  applyPreferences();
+});
+dom.prefDensityCompact?.addEventListener("click", () => {
+  prefs.density = "compact";
+  savePrefs();
+  applyPreferences();
+});
+dom.accentSwatches?.querySelectorAll(".swatch").forEach((sw) => {
+  sw.addEventListener("click", () => {
+    prefs.accent = sw.getAttribute("data-accent") || "default";
+    savePrefs();
+    applyPreferences();
+  });
+});
+dom.prefDefaultFormat?.addEventListener("change", (e) => {
+  prefs.defaultFormat = e.target.value;
+  savePrefs();
+  // Adopt as the live selection when the workspace is still empty
+  if (!state.resultBlob) {
+    state.exportFormat = prefs.defaultFormat;
+    dom.exportFormatSelect.value = state.exportFormat;
+    updateExportTelemetry();
+  }
+});
+dom.prefDefaultBackdrop?.addEventListener("change", (e) => {
+  prefs.defaultBackdrop = e.target.value;
+  savePrefs();
+  if (!state.resultBlob) {
+    applyBackdrop(prefs.defaultBackdrop);
+  }
+});
 
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
@@ -1275,6 +1414,37 @@ window.addEventListener("keydown", (e) => {
 
   // Ignore shortcuts when typing in an input field
   if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "SELECT")) {
+    return;
+  }
+
+  // Native-menu parity shortcuts (Cmd on macOS, Ctrl on Windows/Linux)
+  if (e.metaKey || e.ctrlKey) {
+    const key = e.key.toLowerCase();
+    if (key === "o") {
+      e.preventDefault();
+      window.openBGR.openImage();
+    } else if (key === "e") {
+      e.preventDefault();
+      window.openBGR.exportImage();
+    } else if (key === "w") {
+      e.preventDefault();
+      window.openBGR.closeActiveTab();
+    } else if (key === ",") {
+      e.preventDefault();
+      window.openBGR.openSettings("preferences");
+    } else if (key === "0") {
+      e.preventDefault();
+      setZoom(1);
+    } else if (key === "=" || key === "+") {
+      e.preventDefault();
+      setZoom(state.zoom + 0.25);
+    } else if (key === "-") {
+      e.preventDefault();
+      setZoom(state.zoom - 0.25);
+    } else if (key === "c" && e.shiftKey) {
+      e.preventDefault();
+      window.openBGR.copyImage();
+    }
     return;
   }
 
@@ -1482,29 +1652,15 @@ window.addEventListener("touchend", () => {
 // 8. Matte Backdrop Swatches & Custom Color Picker
 document.querySelectorAll(".swatch[data-bg]").forEach((swatch) => {
   swatch.addEventListener("click", () => {
-    document.querySelectorAll(".swatch").forEach((s) => s.classList.remove("active"));
-    swatch.classList.add("active");
-
-    const bgValue = swatch.getAttribute("data-bg") || "checker";
-    state.activeBackdrop = bgValue;
-    if (bgValue === "checker") {
-      dom.viewport.style.background = "";
-      dom.viewport.classList.add("checkerboard-canvas");
-    } else {
-      dom.viewport.classList.remove("checkerboard-canvas");
-      dom.viewport.style.background = bgValue;
-    }
-    updateLiveStagePreview();
+    applyBackdrop(swatch.getAttribute("data-bg") || "checker");
+    saveStateToActiveTab();
   });
 });
 
 document.getElementById("colorPicker").addEventListener("input", (e) => {
-  document.querySelectorAll(".swatch").forEach((s) => s.classList.remove("active"));
+  applyBackdrop(e.target.value);
   e.target.classList.add("active");
-  state.activeBackdrop = e.target.value;
-  dom.viewport.classList.remove("checkerboard-canvas");
-  dom.viewport.style.background = e.target.value;
-  updateLiveStagePreview();
+  saveStateToActiveTab();
 });
 
 // 9. File Selection, Drag-and-Drop, and Clipboard Paste (with active-job guard)
@@ -1513,21 +1669,65 @@ function triggerOpenFileDialog() {
   dom.fileInput.click();
 }
 
-dom.emptyState.addEventListener("click", () => triggerOpenFileDialog());
+/**
+ * Decodes a base64 string into a Blob (used by the native OS Open dialog bridge).
+ * @param {string} b64
+ * @returns {Blob}
+ */
+function base64ToBlob(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) {
+    bytes[i] = bin.charCodeAt(i);
+  }
+  return new Blob([bytes]);
+}
 
-dom.btnOpen.addEventListener("click", () => {
+/**
+ * Opens an image via the native OS file dialog when running inside the
+ * pywebview desktop window, falling back to the HTML file input in browsers.
+ */
+async function openImageDialog() {
+  if (window.pywebview?.api?.open_image_dialog) {
+    try {
+      const res = await window.pywebview.api.open_image_dialog();
+      if (res?.error) {
+        setError(res.error);
+        return;
+      }
+      if (res?.data_b64) {
+        const blob = base64ToBlob(res.data_b64);
+        ingestImageFile(new File([blob], res.name || "image.png"));
+      }
+      return;
+    } catch (_) {
+      // Fall through to the HTML file input if the bridge call fails
+    }
+  }
+  triggerOpenFileDialog();
+}
+
+/**
+ * Entry point for every "open image" surface (button, dropzone, menu, ⌘O).
+ * Guards against interrupting an in-flight inference job.
+ */
+function requestOpenImage() {
   if (state.isProcessing) {
     openConfirmModal(
       "This will stop the current image processing. Do you want to open a new image?",
       () => {
         cancelProcessing();
-        triggerOpenFileDialog();
+        openImageDialog();
       }
     );
     return;
   }
-  triggerOpenFileDialog();
-});
+  openImageDialog();
+}
+
+dom.emptyState.addEventListener("click", () => requestOpenImage());
+
+dom.btnOpen.addEventListener("click", () => requestOpenImage());
 
 dom.fileInput.addEventListener("change", (e) => {
   const file = e.target.files?.[0];
@@ -1658,5 +1858,75 @@ dom.btnCopy.addEventListener("click", async () => {
   }
 });
 
-// Initialize studio status on page load
+/**
+ * Reads an image from the OS clipboard via `navigator.clipboard.read()`
+ * (used by the native Edit > Paste Image menu item).
+ */
+async function pasteImageFromClipboard() {
+  const finish = (blob) => {
+    if (state.isProcessing) {
+      openConfirmModal(
+        "This will stop the current image processing. Do you want to load the pasted image?",
+        () => {
+          cancelProcessing();
+          ingestImageFile(blob);
+        }
+      );
+    } else {
+      ingestImageFile(blob);
+    }
+  };
+  try {
+    const items = await navigator.clipboard.read();
+    for (const item of items) {
+      const imgType = item.types.find((t) => t.startsWith("image/"));
+      if (imgType) {
+        finish(await item.getType(imgType));
+        return;
+      }
+    }
+    setError("Clipboard does not contain an image.");
+  } catch (_) {
+    setError("Clipboard read is not permitted in this context.");
+  }
+}
+
+/**
+ * Command bridge invoked by the native OS menu bar (pywebview) and by
+ * keyboard shortcuts. Mirrors the native menu structure 1:1.
+ */
+window.openBGR = {
+  openImage: () => requestOpenImage(),
+  exportImage: () => {
+    if (!dom.btnDownload.classList.contains("disabled")) dom.btnDownload.click();
+  },
+  copyImage: () => {
+    if (!dom.btnCopy.classList.contains("disabled")) dom.btnCopy.click();
+  },
+  closeActiveTab: () => {
+    if (state.activeTabId) requestCloseTab(state.activeTabId);
+  },
+  pasteImage: () => pasteImageFromClipboard(),
+  setView: (mode) => {
+    if (["split", "cutout", "original"].includes(mode)) setViewMode(mode);
+  },
+  zoomIn: () => setZoom(state.zoom + 0.25),
+  zoomOut: () => setZoom(state.zoom - 0.25),
+  zoomReset: () => setZoom(1),
+  toggleLoupe: () => toggleLoupe(),
+  cancelProcessing: () => cancelProcessing(),
+  openSettings: (section) => {
+    dom.infoModal.classList.add("active");
+    if (section) {
+      document
+        .getElementById(`settings-${section}`)
+        ?.scrollIntoView({ block: "start" });
+    }
+  },
+};
+
+// Initialize persisted preferences, default backdrop, format select & server status
+applyPreferences();
+dom.exportFormatSelect.value = state.exportFormat;
+applyBackdrop(state.activeBackdrop);
 syncServerStatus(true);

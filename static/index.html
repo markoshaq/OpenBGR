@@ -5,6 +5,25 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>OpenBGR — Local Background Remover</title>
   <link rel="stylesheet" href="/static/styles.css" />
+  <script>
+    // Apply persisted appearance preferences before first paint to avoid a theme flash.
+    (function () {
+      try {
+        var p = JSON.parse(localStorage.getItem("openbgr_prefs") || "{}");
+        if (p.theme === "light") document.documentElement.classList.add("theme-light");
+        if (p.density === "compact") document.documentElement.classList.add("density-compact");
+        var ACCENTS = {
+          white: ["#fafafa", "#09090b"], green: ["#34d399", "#052e1b"],
+          blue: ["#60a5fa", "#0b1c3a"], amber: ["#fbbf24", "#3a2a05"],
+          red: ["#f87171", "#3a0a0a"], violet: ["#a78bfa", "#1e1245"],
+        };
+        if (p.accent && ACCENTS[p.accent]) {
+          document.documentElement.style.setProperty("--accent", ACCENTS[p.accent][0]);
+          document.documentElement.style.setProperty("--accent-contrast", ACCENTS[p.accent][1]);
+        }
+      } catch (e) {}
+    })();
+  </script>
 </head>
 <body>
   <div class="app-shell no-image" id="appShell">
@@ -350,10 +369,39 @@
     <!-- Full-Window Settings & System Info Modal -->
     <div class="modal-backdrop" id="infoModal">
       <div class="modal-dialog info-dialog" role="dialog" aria-modal="true" aria-labelledby="infoModalTitle">
-        <div class="modal-title" id="infoModalTitle">SETTINGS &amp; SYSTEM INFO</div>
+        <div class="modal-title" id="infoModalTitle">PREFERENCES &amp; SYSTEM INFO</div>
+
+        <div class="settings-block" id="settings-preferences">
+          <div class="section-header">APPEARANCE</div>
+          <div class="pref-row">
+            <span class="pref-label">THEME</span>
+            <div class="segmented pref-segmented">
+              <button type="button" class="seg-btn" id="prefThemeDark">DARK</button>
+              <button type="button" class="seg-btn" id="prefThemeLight">LIGHT</button>
+            </div>
+          </div>
+          <div class="pref-row">
+            <span class="pref-label">ACCENT</span>
+            <div class="swatches-grid accent-swatches" id="accentSwatches">
+              <button type="button" class="swatch active" data-accent="default" style="background:#fafafa" title="Default Monochrome"></button>
+              <button type="button" class="swatch" data-accent="green" style="background:#34d399" title="Green"></button>
+              <button type="button" class="swatch" data-accent="blue" style="background:#60a5fa" title="Blue"></button>
+              <button type="button" class="swatch" data-accent="amber" style="background:#fbbf24" title="Amber"></button>
+              <button type="button" class="swatch" data-accent="red" style="background:#f87171" title="Red"></button>
+              <button type="button" class="swatch" data-accent="violet" style="background:#a78bfa" title="Violet"></button>
+            </div>
+          </div>
+          <div class="pref-row">
+            <span class="pref-label">UI DENSITY</span>
+            <div class="segmented pref-segmented">
+              <button type="button" class="seg-btn" id="prefDensityComfortable">COMFORTABLE</button>
+              <button type="button" class="seg-btn" id="prefDensityCompact">COMPACT</button>
+            </div>
+          </div>
+        </div>
 
         <div class="settings-block">
-          <div class="section-header">PREFERENCES</div>
+          <div class="section-header">BEHAVIOR</div>
           <button type="button" class="toggle-card active" id="btnToggleConfirmClose">
             <div class="toggle-card-top">
               <span>CONFIRM BEFORE CLOSING IMAGE TAB</span>
@@ -361,6 +409,24 @@
             </div>
             <div class="preset-desc">Ask for confirmation when clicking × on an open image tab.</div>
           </button>
+          <div class="pref-row">
+            <span class="pref-label">DEFAULT EXPORT FORMAT</span>
+            <select class="studio-select pref-select" id="prefDefaultFormat">
+              <option value="png">PNG — 32-Bit Lossless RGBA</option>
+              <option value="webp">WEBP — Transparent WebP</option>
+              <option value="jpg">JPG — Matte Composited</option>
+              <option value="mask">MASK — 8-Bit Alpha Matte</option>
+            </select>
+          </div>
+          <div class="pref-row">
+            <span class="pref-label">DEFAULT MATTE BACKDROP</span>
+            <select class="studio-select pref-select" id="prefDefaultBackdrop">
+              <option value="checker">Transparency Grid</option>
+              <option value="#ffffff">Pure White</option>
+              <option value="#000000">Pure Black</option>
+              <option value="#18181b">Studio Dark Gray</option>
+            </select>
+          </div>
         </div>
 
         <div class="section-header" style="margin-top: 4px;">SYSTEM SPECIFICATIONS</div>
@@ -386,6 +452,18 @@
             <span class="info-val">Removes background color bleed along semi-transparent hair &amp; borders.</span>
           </div>
         </div>
+
+        <div class="settings-block about-block" id="settings-about">
+          <div class="section-header">ABOUT</div>
+          <div class="info-row">
+            <span class="info-key">OPENBGR</span>
+            <span class="info-val">
+              Local AI background removal studio. 100% offline after model download —
+              no uploads, no telemetry, no subscriptions.
+            </span>
+          </div>
+        </div>
+
         <div class="info-footer">
           <a href="https://github.com/markoshaq" target="_blank" rel="noopener noreferrer" class="credit-link">
             MADE BY MARKOSHAQ ↗
