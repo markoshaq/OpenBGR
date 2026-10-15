@@ -1454,10 +1454,47 @@ if __name__ == "__main__":
         MANAGER.unload()
         os._exit(0)
 
+    def _start_signal_watchdog() -> None:
+        """
+        When the native desktop window is open, the main thread is parked inside
+        Cocoa's run loop (`webview.start()`), so Python-level signal handlers
+        never execute and SIGTERM would be silently swallowed. `set_wakeup_fd`
+        pushes signal numbers into a pipe at C level; this daemon thread blocks
+        on the pipe and hard-exits on SIGINT/SIGTERM/SIGHUP regardless of what
+        the main thread is doing.
+        """
+        try:
+            import select
+
+            r_fd, w_fd = os.pipe()
+            os.set_blocking(r_fd, False)
+            os.set_blocking(w_fd, False)
+            signal.set_wakeup_fd(w_fd)
+            lethal = {signal.SIGINT, signal.SIGTERM}
+            if hasattr(signal, "SIGHUP"):
+                lethal.add(signal.SIGHUP)
+
+            def _watch() -> None:
+                try:
+                    while True:
+                        select.select([r_fd], [], [])
+                        data = os.read(r_fd, 64)
+                        if data and any(b in lethal for b in data):
+                            MANAGER.request_cancel()
+                            MANAGER.unload()
+                            os._exit(0)
+                except Exception:
+                    os._exit(0)
+
+            threading.Thread(target=_watch, daemon=True).start()
+        except Exception:
+            pass
+
     signal.signal(signal.SIGINT, _graceful_exit)
     signal.signal(signal.SIGTERM, _graceful_exit)
     if hasattr(signal, "SIGHUP"):
         signal.signal(signal.SIGHUP, _graceful_exit)
+    _start_signal_watchdog()
 
     port = int(os.environ.get("PORT", "7860"))
     host = "127.0.0.1"

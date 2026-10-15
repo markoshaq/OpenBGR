@@ -24,6 +24,21 @@ const DOT_TOOLTIPS = {
   unavailable: "UNAVAILABLE OFFLINE — Model is not cached and device is offline",
 };
 
+/** Short availability phrases appended to tier-button tooltips */
+const TIER_STATUS_SHORT = {
+  ready: "CACHED OFFLINE",
+  downloadable: "DOWNLOADS ON 1ST RUN",
+  unavailable: "NOT CACHED — DEVICE OFFLINE",
+};
+
+/** Full model descriptions shown in the Hardware Preset hover tooltips */
+const TIER_META = {
+  low: "LITE 1K — BiRefNet_lite · Swin-T @1024px · ~110 MB. Fastest on CPU & integrated GPUs.",
+  mid: "FULL 1K — BiRefNet · Swin-L @1024px · ~440 MB. Studio hair, fur & soft alpha.",
+  high: "ULTRA 2K — BiRefNet_HR · Swin-L @2K HR. Max detail for 4K/8K photography.",
+  matting: "MATTING — BiRefNet-matting. True alpha for glass, smoke & sheer fabric.",
+};
+
 const STORAGE_KEY_CONFIRM_CLOSE = "openbgr_confirm_close_tab";
 const STORAGE_KEY_PREFS = "openbgr_prefs";
 
@@ -500,7 +515,7 @@ async function switchToTab(tabId) {
   renderTabBar();
 
   // Sync sidebar & view controls to this tab's state
-  document.querySelectorAll("#tierSelector .preset-card").forEach((btn) => {
+  document.querySelectorAll("#tierSelector .tier-btn").forEach((btn) => {
     btn.classList.toggle("active", btn.getAttribute("data-tier") === state.tier);
   });
   dom.btnDefringe.classList.toggle("active", state.defringe);
@@ -662,6 +677,14 @@ function updateCacheIndicator() {
     const status = getTierAvailability(tierInfo);
     applyDotState(document.getElementById(`dot-${key}`), status);
     applyDotState(document.getElementById(`sysdot-${key}`), status);
+
+    // Keep each tier button's hover tooltip = model spec + live cache status
+    const tierBtn = document.querySelector(`#tierSelector .tier-btn[data-tier="${key}"]`);
+    if (tierBtn) {
+      const tip = `${TIER_META[key] || ""} ${TIER_STATUS_SHORT[status] || ""}`.trim();
+      tierBtn.setAttribute("data-tooltip", tip);
+      tierBtn.setAttribute("title", tip);
+    }
 
     const badge = document.getElementById(`sysbadge-${key}`);
     if (badge) {
@@ -916,7 +939,7 @@ async function syncServerStatus(isInitialLoad = false) {
  */
 function selectTier(tierKey, reprocess = true) {
   state.tier = tierKey;
-  document.querySelectorAll("#tierSelector .preset-card").forEach((btn) => {
+  document.querySelectorAll("#tierSelector .tier-btn").forEach((btn) => {
     btn.classList.toggle("active", btn.getAttribute("data-tier") === tierKey);
   });
   updateCacheIndicator();
@@ -1661,7 +1684,7 @@ window.addEventListener("keyup", (e) => {
 });
 
 // 3. Left Sidebar: Hardware Preset Cards
-document.querySelectorAll("#tierSelector .preset-card").forEach((btn) => {
+document.querySelectorAll("#tierSelector .tier-btn").forEach((btn) => {
   btn.addEventListener("click", () => {
     const targetTier = btn.getAttribute("data-tier");
     if (targetTier && targetTier !== state.tier) {

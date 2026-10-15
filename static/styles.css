@@ -48,9 +48,12 @@
   gap: 8px;
 }
 
-.density-compact .preset-card,
 .density-compact .toggle-card {
   padding: 8px 10px;
+}
+
+.density-compact .tier-btn {
+  padding: 6px 4px 5px;
 }
 
 .density-compact .preset-desc,
@@ -416,14 +419,73 @@ body {
   line-height: 1.45;
 }
 
-/* Preset Stack Cards */
+/* Preset Stack Cards (toggles) & Horizontal Hardware Tier Row */
 .preset-stack {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
-.preset-card,
+.tier-row {
+  display: flex;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.tier-btn {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 9px 4px 8px;
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--border);
+  color: var(--muted);
+  cursor: pointer;
+  font-family: var(--mono);
+  transition: background 0.12s, color 0.12s, box-shadow 0.12s;
+}
+
+.tier-btn:last-child {
+  border-right: none;
+}
+
+.tier-btn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.tier-btn.active {
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.tier-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--text);
+}
+
+.tier-sub {
+  font-size: 8px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.tier-btn.active .tier-sub {
+  color: var(--accent);
+}
+
+.tier-btn .tier-dot {
+  top: 6px;
+  right: 6px;
+}
+
 .toggle-card {
   position: relative;
   background: var(--bg);
@@ -438,19 +500,16 @@ body {
   transition: border-color 0.12s, background 0.12s;
 }
 
-.preset-card:hover,
 .toggle-card:hover {
   background: var(--surface-2);
   border-color: var(--border-strong);
 }
 
-.preset-card.active,
 .toggle-card.active {
   border-color: var(--accent);
   background: var(--surface-2);
 }
 
-.preset-card-top,
 .toggle-card-top {
   display: flex;
   align-items: center;
@@ -463,20 +522,6 @@ body {
 
 .toggle-card-top {
   padding-right: 0;
-}
-
-.preset-name {
-  color: var(--text);
-}
-
-.preset-tag {
-  font-size: 10px;
-  font-weight: 500;
-  color: var(--muted);
-}
-
-.preset-card.active .preset-tag {
-  color: var(--accent);
 }
 
 .preset-desc {
@@ -559,6 +604,14 @@ body {
   left: auto;
   right: 0;
   transform: none;
+}
+
+/* Tier-row tooltips carry the full model spec — allow wrapping */
+.sidebar-left .tier-btn.has-tooltip::after {
+  white-space: normal;
+  width: max-content;
+  max-width: 232px;
+  text-align: left;
 }
 
 .topbar .has-tooltip::after {
