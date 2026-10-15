@@ -2146,3 +2146,41 @@ input[type="file"] {
 .app-shell.batch-active .batch-hide {
   display: none;
 }
+
+/* Batch rows are draggable (drag out to tab bar = new image tab) */
+.batch-row {
+  cursor: grab;
+  font-size: 11px;
+  padding: 10px 12px;
+}
+
+.batch-row:active {
+  cursor: grabbing;
+}
+
+.batch-row.dragging {
+  opacity: 0.4;
+}
+
+.batch-dot {
+  width: 8px;
+  height: 8px;
+}
+
+.batch-row-status {
+  font-size: 9px;
+  width: 82px;
+}
+
+.batch-row-remove {
+  font-size: 13px;
+}
+
+.batch-empty-hint {
+  font-size: 10px;
+  padding: 48px 0;
+}
+
+.tab-bar-drop .tab-item {
+  outline: none;
+}

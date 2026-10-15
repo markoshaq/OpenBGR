@@ -145,6 +145,7 @@ const state = {
     results: [],             // [{name, blob}] collected for browser ZIP export
   },
   dragTabId: null,           // Tab being dragged for folder-style batch merge
+  dragBatchItem: null,       // {tabId, index} batch row being dragged out to a tab
 };
 
 /** DOM Element References */
@@ -319,7 +320,10 @@ function renderTabBar() {
         .forEach((el) => el.classList.remove("drop-target"));
     });
     tabEl.addEventListener("dragover", (e) => {
-      if (!state.dragTabId || state.dragTabId === tab.id) return;
+      const dragging =
+        state.dragTabId === tab.id ||
+        (state.dragBatchItem && state.dragBatchItem.tabId === tab.id);
+      if ((!state.dragTabId && !state.dragBatchItem) || dragging) return;
       e.preventDefault();
       e.stopPropagation();
       e.dataTransfer.dropEffect = "move";
@@ -329,10 +333,21 @@ function renderTabBar() {
       tabEl.classList.remove("drop-target");
     });
     tabEl.addEventListener("drop", (e) => {
-      if (!state.dragTabId) return;
+      if (!state.dragTabId && !state.dragBatchItem) return;
       e.preventDefault();
       e.stopPropagation();
       tabEl.classList.remove("drop-target");
+      const item = state.dragBatchItem;
+      if (item) {
+        state.dragBatchItem = null;
+        const src = state.tabs.find((t) => t.id === item.tabId);
+        if (tab.kind === "batch") {
+          moveBatchItemToBatch(item, tab);
+        } else if (src) {
+          extractBatchItemToTab(src, item.index);
+        }
+        return;
+      }
       const srcId = state.dragTabId;
       state.dragTabId = null;
       if (srcId !== tab.id) mergeTabsIntoBatch(srcId, tab.id);
@@ -393,6 +408,22 @@ function renderTabBar() {
   });
   dom.tabBar.appendChild(addBtn);
 }
+
+// Dropping a dragged batch row onto empty tab-bar space pulls it out as a tab.
+dom.tabBar?.addEventListener("dragover", (e) => {
+  if (!state.dragBatchItem) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = "copy";
+});
+dom.tabBar?.addEventListener("drop", (e) => {
+  const item = state.dragBatchItem;
+  if (!item) return;
+  e.preventDefault();
+  e.stopPropagation();
+  state.dragBatchItem = null;
+  const src = state.tabs.find((t) => t.id === item.tabId);
+  if (src) extractBatchItemToTab(src, item.index);
+});
 
 /**
  * Creates a new blank tab showing the empty dropzone/paste screen and switches to it.
@@ -925,6 +956,26 @@ function renderBatchPanel(tab) {
     const row = document.createElement("div");
     row.className = "batch-row";
     row.setAttribute("data-idx", String(i));
+    row.draggable = true;
+    row.addEventListener("dragstart", (e) => {
+      if (state.batch.running) {
+        e.preventDefault();
+        return;
+      }
+      state.dragBatchItem = { tabId: tab.id, index: i };
+      row.classList.add("dragging");
+      e.dataTransfer.effectAllowed = "copyMove";
+      try {
+        e.dataTransfer.setData("text/plain", entry.name);
+      } catch (_) {}
+    });
+    row.addEventListener("dragend", () => {
+      state.dragBatchItem = null;
+      row.classList.remove("dragging");
+      dom.tabBar
+        .querySelectorAll(".drop-target")
+        .forEach((el) => el.classList.remove("drop-target"));
+    });
 
     const dot = document.createElement("span");
     dot.className = `batch-dot st-${entry.status}`;
@@ -1060,6 +1111,47 @@ function mergeTabsIntoBatch(srcId, dstId) {
   }
 
   switchToTab(dst.id);
+}
+
+/**
+ * Pulls one entry out of a batch queue into its own image tab.
+ */
+function extractBatchItemToTab(tab, index) {
+  const entry = tab.batchFiles[index];
+  if (!entry || state.batch.running) return;
+  tab.batchFiles.splice(index, 1);
+  ingestImageFile(entry.file);
+  if (tab.batchFiles.length === 0) {
+    closeTabImmediate(tab.id);
+  } else {
+    renderTabBar();
+    if (tab.id === state.activeTabId) renderBatchPanel(tab);
+  }
+}
+
+/** Moves a dragged batch row into another batch tab's queue. */
+function moveBatchItemToBatch(item, targetTab) {
+  const src = state.tabs.find((t) => t.id === item.tabId);
+  if (
+    !src ||
+    !targetTab ||
+    targetTab.kind !== "batch" ||
+    src.id === targetTab.id ||
+    state.batch.running
+  ) {
+    return;
+  }
+  const entry = src.batchFiles[item.index];
+  if (!entry) return;
+  src.batchFiles.splice(item.index, 1);
+  entry.status = "queued";
+  targetTab.batchFiles.push(entry);
+  if (src.batchFiles.length === 0) {
+    closeTabImmediate(src.id);
+  } else if (src.id === state.activeTabId) {
+    renderBatchPanel(src);
+  }
+  renderTabBar();
 }
 
 /**
@@ -2983,6 +3075,17 @@ window.addEventListener("dragleave", () => {
 window.addEventListener("drop", (e) => {
   e.preventDefault();
   dom.viewport.classList.remove("dragover");
+
+  // Dragged batch row released outside the tab bar → new image tab.
+  const item = state.dragBatchItem;
+  if (item) {
+    state.dragBatchItem = null;
+    if (e.target.closest && e.target.closest(".batch-list")) return;
+    const src = state.tabs.find((t) => t.id === item.tabId);
+    if (src) extractBatchItemToTab(src, item.index);
+    return;
+  }
+
   const files = Array.from(e.dataTransfer?.files || []);
   if (files.length === 0) return;
 
