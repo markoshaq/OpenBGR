@@ -174,6 +174,7 @@ body {
 .studio-body {
   display: grid;
   grid-template-columns: 264px 1fr 276px;
+  min-height: 0;
   height: 100%;
   overflow: hidden;
 }
@@ -182,6 +183,7 @@ body {
   background: var(--surface);
   display: flex;
   flex-direction: column;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
 }
@@ -366,8 +368,10 @@ body {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
 }
 
-/* Keep left-sidebar tooltips inside the viewport */
+/* Keep left-sidebar tooltips inside the sidebar bounds */
 .sidebar-left .has-tooltip::after {
+  bottom: auto;
+  top: calc(100% + 6px);
   left: auto;
   right: 0;
   transform: none;
@@ -642,6 +646,8 @@ body {
   position: relative;
   width: 100%;
   height: 100%;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
   display: flex;
   align-items: center;
