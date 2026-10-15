@@ -56,6 +56,7 @@ const state = {
 
 /** DOM Element References */
 const dom = {
+  appShell: document.getElementById("appShell"),
   viewport: document.getElementById("viewport"),
   emptyState: document.getElementById("emptyState"),
   stage: document.getElementById("stage"),
@@ -457,6 +458,7 @@ function ingestImageFile(file) {
   state.previewBlob = null;
   state.naturalWidth = 0;
   state.naturalHeight = 0;
+  dom.appShell?.classList.remove("no-image");
   dom.btnDownload.classList.add("disabled");
   dom.btnCopy.classList.add("disabled");
 
@@ -556,7 +558,9 @@ async function runSegmentation() {
     dom.btnCopy.classList.remove("disabled");
 
     updateExportTelemetry();
-    dom.statTier.textContent = tierLabel.toUpperCase();
+    if (dom.statTier) {
+      dom.statTier.textContent = tierLabel.toUpperCase();
+    }
     dom.statTime.textContent = inferenceMs ? `${(inferenceMs / 1000).toFixed(2)}S` : "DONE";
 
     setViewMode("split");
