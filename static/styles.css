@@ -643,6 +643,17 @@ body {
   border-color: #d4d4d8;
 }
 
+.danger-btn {
+  color: var(--muted);
+  border-color: var(--border);
+}
+
+.danger-btn:hover {
+  border-color: #ef4444;
+  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.1);
+}
+
 .action-btn:disabled,
 .action-btn.disabled {
   opacity: 0.35;

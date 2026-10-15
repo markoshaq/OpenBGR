@@ -85,6 +85,7 @@ const dom = {
 
   fileInput: document.getElementById("fileInput"),
   btnOpen: document.getElementById("btnOpen"),
+  btnRemoveImage: document.getElementById("btnRemoveImage"),
   btnCopy: document.getElementById("btnCopy"),
   btnDownload: document.getElementById("btnDownload"),
   btnDefringe: document.getElementById("btnDefringe"),
@@ -448,8 +449,63 @@ function handleSplitDrag(clientX) {
 }
 
 /**
+ * Completely removes the current image from the viewer and resets the studio
+ * back to the initial empty dropzone state with all options locked.
+ */
+function removeCurrentImage() {
+  if (state.abortController) {
+    state.abortController.abort();
+    state.abortController = null;
+  }
+  state.isProcessing = false;
+  dom.busyOverlay.classList.remove("active");
+  closeConfirmModal();
+  setError(null);
+
+  state.sourceFile = null;
+  state.resultBlob = null;
+  state.previewBlob = null;
+  state.naturalWidth = 0;
+  state.naturalHeight = 0;
+  state.exportWidth = 0;
+  state.exportHeight = 0;
+
+  if (state.originalObjectUrl) {
+    URL.revokeObjectURL(state.originalObjectUrl);
+    state.originalObjectUrl = null;
+  }
+  if (state.resultObjectUrl) {
+    URL.revokeObjectURL(state.resultObjectUrl);
+    state.resultObjectUrl = null;
+  }
+  if (state.previewObjectUrl) {
+    URL.revokeObjectURL(state.previewObjectUrl);
+    state.previewObjectUrl = null;
+  }
+
+  dom.stageSizerImg.removeAttribute("src");
+  dom.beforeImg.removeAttribute("src");
+  dom.afterImg.removeAttribute("src");
+
+  dom.stage.classList.remove("visible");
+  dom.emptyState.style.display = "";
+
+  dom.exportWidthInput.value = "";
+  dom.exportHeightInput.value = "";
+  dom.statFile.textContent = "NONE";
+  dom.statDim.textContent = "—";
+  dom.statTime.textContent = "—";
+
+  dom.btnRemoveImage?.classList.add("disabled");
+  dom.btnDownload.classList.add("disabled");
+  dom.btnCopy.classList.add("disabled");
+  dom.appShell?.classList.add("no-image");
+}
+
+/**
  * Loads a user-supplied image File or clipboard Blob into the workspace
- * and triggers background removal.
+ * and triggers background removal. Studio options remain locked until
+ * processing finishes.
  * @param {File|Blob} file
  */
 function ingestImageFile(file) {
@@ -458,7 +514,8 @@ function ingestImageFile(file) {
   state.previewBlob = null;
   state.naturalWidth = 0;
   state.naturalHeight = 0;
-  dom.appShell?.classList.remove("no-image");
+  dom.appShell?.classList.add("no-image");
+  dom.btnRemoveImage?.classList.remove("disabled");
   dom.btnDownload.classList.add("disabled");
   dom.btnCopy.classList.add("disabled");
 
@@ -496,6 +553,8 @@ async function runSegmentation() {
   state.abortController = controller;
   state.isProcessing = true;
 
+  // Keep studio options locked while processing is active
+  dom.appShell?.classList.add("no-image");
   setError(null);
   dom.busyOverlay.classList.add("active");
   dom.statTime.textContent = "PROCESSING...";
@@ -554,6 +613,8 @@ async function runSegmentation() {
       masterCutoutImg.src = state.resultObjectUrl;
     });
 
+    // Processing is complete: unlock all studio options
+    dom.appShell?.classList.remove("no-image");
     dom.btnDownload.classList.remove("disabled");
     dom.btnCopy.classList.remove("disabled");
 
@@ -577,6 +638,10 @@ async function runSegmentation() {
       state.abortController = null;
       dom.busyOverlay.classList.remove("active");
       closeConfirmModal();
+      // If a previous result exists on this image (e.g. user cancelled a preset switch), restore controls
+      if (state.resultBlob) {
+        dom.appShell?.classList.remove("no-image");
+      }
     }
   }
 }
@@ -788,6 +853,20 @@ dom.btnOpen.addEventListener("click", () => {
     return;
   }
   triggerOpenFileDialog();
+});
+
+dom.btnRemoveImage?.addEventListener("click", () => {
+  if (!state.sourceFile) return;
+  if (state.isProcessing) {
+    openConfirmModal(
+      "This will stop the current image processing and remove the image. Do you want to continue?",
+      () => {
+        removeCurrentImage();
+      }
+    );
+    return;
+  }
+  removeCurrentImage();
 });
 
 dom.fileInput.addEventListener("change", (e) => {
