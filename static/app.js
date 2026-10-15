@@ -895,7 +895,7 @@ function renderLoupeAtPointer(clientX, clientY) {
     ctx.fillRect(0, 0, size, size);
   }
 
-  const drawMagnifiedSource = (imgEl, clipX, clipW) => {
+  const drawMagnifiedSource = (imgEl) => {
     const imgW = imgEl.naturalWidth;
     const imgH = imgEl.naturalHeight;
     if (!imgW || !imgH) return;
@@ -905,34 +905,18 @@ function renderLoupeAtPointer(clientX, clientY) {
     const sx = normX * imgW - sampleW / 2;
     const sy = normY * imgH - sampleH / 2;
 
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(clipX, 0, clipW, size);
-    ctx.clip();
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
     ctx.drawImage(imgEl, sx, sy, sampleW, sampleH, 0, 0, size, size);
-    ctx.restore();
   };
 
-  if (state.viewMode === "split") {
-    drawMagnifiedSource(dom.beforeImg, 0, size / 2);
-    drawMagnifiedSource(dom.afterImg, size / 2, size / 2);
-    // Center split hairline inside the loupe
-    ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
-    ctx.fillRect(size / 2 - 0.5, 0, 1, size);
-  } else if (state.viewMode === "original") {
-    drawMagnifiedSource(dom.beforeImg, 0, size);
+  if (state.viewMode === "original") {
+    drawMagnifiedSource(dom.beforeImg);
+  } else if (state.viewMode === "split" && normX * 100 < state.splitPercent) {
+    drawMagnifiedSource(dom.beforeImg);
   } else {
-    drawMagnifiedSource(dom.afterImg, 0, size);
+    drawMagnifiedSource(dom.afterImg);
   }
-
-  // Subtle center target reticle
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.55)";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.arc(size / 2, size / 2, 4, 0, Math.PI * 2);
-  ctx.stroke();
 }
 
 /**
@@ -940,7 +924,7 @@ function renderLoupeAtPointer(clientX, clientY) {
  * @param {number} clientX
  */
 function handleSplitDrag(clientX) {
-  if (!state.isDraggingSplit || state.viewMode !== "split") return;
+  if (state.loupeEnabled || !state.isDraggingSplit || state.viewMode !== "split") return;
   const rect = dom.stage.getBoundingClientRect();
   if (!rect.width) return;
 
@@ -1333,7 +1317,7 @@ dom.stage.addEventListener("mousedown", (e) => {
     dom.stage.classList.add("panning");
     return;
   }
-  if (e.button === 0 && state.viewMode === "split") {
+  if (e.button === 0 && state.viewMode === "split" && !state.loupeEnabled) {
     state.isDraggingSplit = true;
     handleSplitDrag(e.clientX);
   }
@@ -1368,7 +1352,7 @@ window.addEventListener("mouseup", () => {
 dom.stage.addEventListener(
   "touchstart",
   (e) => {
-    if (state.viewMode !== "split") return;
+    if (state.viewMode !== "split" || state.loupeEnabled) return;
     state.isDraggingSplit = true;
     if (e.touches[0]) handleSplitDrag(e.touches[0].clientX);
   },

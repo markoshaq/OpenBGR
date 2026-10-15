@@ -873,8 +873,13 @@ body {
   cursor: grabbing;
 }
 
-.stage.loupe-active {
-  cursor: crosshair;
+.stage.loupe-active,
+.stage.loupe-active * {
+  cursor: none !important;
+}
+
+.stage.loupe-active .split-line {
+  pointer-events: none;
 }
 
 .loupe-canvas {
