@@ -1,10 +1,10 @@
 /**
  * OpenBGR — Frontend Studio Controller
  * ====================================
- * Handles hardware preset switching, drag-and-drop / clipboard image ingestion,
- * split-plane comparison rendering, active request cancellation, live client-side
- * multi-format / custom-pixel preview & export, and communication with the local
- * FastAPI segmentation backend.
+ * Handles multi-image workspace tabs, hardware preset switching, drag-and-drop /
+ * clipboard image ingestion, split-plane comparison rendering, active request
+ * cancellation, live client-side multi-format / custom-pixel preview & export,
+ * and communication with the local FastAPI segmentation backend.
  */
 
 "use strict";
@@ -24,11 +24,18 @@ const DOT_TOOLTIPS = {
   unavailable: "UNAVAILABLE OFFLINE — Model is not cached and device is offline",
 };
 
-/** Offscreen master Image element holding the untouched 100% RGBA cutout */
+const STORAGE_KEY_CONFIRM_CLOSE = "openbgr_confirm_close_tab";
+
+/** Offscreen master Image element holding the active tab's 100% RGBA cutout */
 const masterCutoutImg = new Image();
+
+let nextTabSeq = 1;
 
 /** Application State */
 const state = {
+  tabs: [],                  // Array of open image tab objects
+  activeTabId: null,         // ID of currently selected tab
+  confirmCloseTab: localStorage.getItem(STORAGE_KEY_CONFIRM_CLOSE) !== "false",
   tier: "mid",               // "low" (BiRefNet_lite 1K) | "mid" (BiRefNet Full 1K) | "high" (BiRefNet_HR 2K)
   defringe: true,            // Morphological edge color decontamination toggle
   viewMode: "split",         // "split" | "cutout" | "original"
@@ -36,13 +43,13 @@ const state = {
   isDraggingSplit: false,    // Pointer drag state for split comparator
   isProcessing: false,       // Whether an inference request is currently in-flight
   abortController: null,     // AbortController for the active fetch request
-  pendingConfirmFn: null,    // Callback to execute if user confirms interrupting active processing
-  sourceFile: null,          // Active File/Blob object
-  resultBlob: null,          // Latest segmented master 32-bit RGBA PNG Blob
-  previewBlob: null,         // Latest live-rendered output Blob (matching format & scale)
-  originalObjectUrl: null,   // Object URL for source preview
-  resultObjectUrl: null,     // Object URL for master 100% RGBA cutout
-  previewObjectUrl: null,    // Object URL for live formatted/scaled stage preview
+  pendingConfirmFn: null,    // Callback to execute if user confirms modal dialog
+  sourceFile: null,          // Active tab's File/Blob object
+  resultBlob: null,          // Active tab's segmented master 32-bit RGBA PNG Blob
+  previewBlob: null,         // Active tab's live-rendered output Blob
+  originalObjectUrl: null,   // Active tab's Object URL for source preview
+  resultObjectUrl: null,     // Active tab's Object URL for master 100% RGBA cutout
+  previewObjectUrl: null,    // Active tab's Object URL for live formatted/scaled stage preview
   previewRenderToken: 0,     // Monotonic counter to discard stale async canvas renders
   naturalWidth: 0,           // Native pixel width of active cutout
   naturalHeight: 0,          // Native pixel height of active cutout
@@ -57,6 +64,7 @@ const state = {
 /** DOM Element References */
 const dom = {
   appShell: document.getElementById("appShell"),
+  tabBar: document.getElementById("tabBar"),
   viewport: document.getElementById("viewport"),
   emptyState: document.getElementById("emptyState"),
   stage: document.getElementById("stage"),
@@ -75,6 +83,7 @@ const dom = {
   errorToast: document.getElementById("errorToast"),
 
   confirmModal: document.getElementById("confirmModal"),
+  modalTitle: document.getElementById("modalTitle"),
   modalDesc: document.getElementById("modalDesc"),
   btnModalCancel: document.getElementById("btnModalCancel"),
   btnModalConfirm: document.getElementById("btnModalConfirm"),
@@ -82,10 +91,10 @@ const dom = {
   infoModal: document.getElementById("infoModal"),
   btnInfo: document.getElementById("btnInfo"),
   btnInfoClose: document.getElementById("btnInfoClose"),
+  btnToggleConfirmClose: document.getElementById("btnToggleConfirmClose"),
 
   fileInput: document.getElementById("fileInput"),
   btnOpen: document.getElementById("btnOpen"),
-  btnRemoveImage: document.getElementById("btnRemoveImage"),
   btnCopy: document.getElementById("btnCopy"),
   btnDownload: document.getElementById("btnDownload"),
   btnDefringe: document.getElementById("btnDefringe"),
@@ -105,6 +114,291 @@ const dom = {
 };
 
 /**
+ * Returns the currently active tab object, or null if no tabs exist.
+ */
+function getActiveTab() {
+  return state.tabs.find((t) => t.id === state.activeTabId) || null;
+}
+
+/**
+ * Saves the current studio state fields back into the active tab record.
+ */
+function saveStateToActiveTab() {
+  const tab = getActiveTab();
+  if (!tab) return;
+  tab.tier = state.tier;
+  tab.defringe = state.defringe;
+  tab.viewMode = state.viewMode;
+  tab.splitPercent = state.splitPercent;
+  tab.resultBlob = state.resultBlob;
+  tab.previewBlob = state.previewBlob;
+  tab.resultObjectUrl = state.resultObjectUrl;
+  tab.previewObjectUrl = state.previewObjectUrl;
+  tab.naturalWidth = state.naturalWidth;
+  tab.naturalHeight = state.naturalHeight;
+  tab.exportFormat = state.exportFormat;
+  tab.exportScale = state.exportScale;
+  tab.exportWidth = state.exportWidth;
+  tab.exportHeight = state.exportHeight;
+  tab.activeBackdrop = state.activeBackdrop;
+  tab.elapsedText = dom.statTime.textContent;
+}
+
+/**
+ * Renders the top multi-image tab bar (`#tabBar`).
+ */
+function renderTabBar() {
+  if (!dom.tabBar) return;
+  dom.tabBar.innerHTML = "";
+
+  if (state.tabs.length === 0) {
+    dom.tabBar.classList.remove("visible");
+    return;
+  }
+
+  dom.tabBar.classList.add("visible");
+
+  state.tabs.forEach((tab) => {
+    const tabEl = document.createElement("div");
+    tabEl.className = `tab-item${tab.id === state.activeTabId ? " active" : ""}`;
+    tabEl.setAttribute("data-tab-id", tab.id);
+    tabEl.title = tab.name;
+
+    const titleSpan = document.createElement("span");
+    titleSpan.className = "tab-title";
+    titleSpan.textContent = tab.name;
+
+    const closeBtn = document.createElement("button");
+    closeBtn.type = "button";
+    closeBtn.className = "tab-close";
+    closeBtn.title = "Close image tab";
+    closeBtn.textContent = "×";
+    closeBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      requestCloseTab(tab.id);
+    });
+
+    tabEl.addEventListener("click", () => {
+      if (tab.id === state.activeTabId) return;
+      if (state.isProcessing) {
+        openConfirmModal(
+          {
+            title: "STOP CURRENT IMAGE?",
+            message: `Switching to "${tab.name}" will stop the current image processing.`,
+            confirmText: "STOP & SWITCH",
+            cancelText: "KEEP PROCESSING",
+          },
+          () => {
+            cancelProcessing();
+            switchToTab(tab.id);
+          }
+        );
+        return;
+      }
+      switchToTab(tab.id);
+    });
+
+    tabEl.appendChild(titleSpan);
+    tabEl.appendChild(closeBtn);
+    dom.tabBar.appendChild(tabEl);
+  });
+
+  const addBtn = document.createElement("button");
+  addBtn.type = "button";
+  addBtn.className = "tab-add";
+  addBtn.title = "Open another image";
+  addBtn.textContent = "+";
+  addBtn.addEventListener("click", () => {
+    dom.btnOpen.click();
+  });
+  dom.tabBar.appendChild(addBtn);
+}
+
+/**
+ * Requests closing a tab by ID, showing a confirmation dialog if
+ * `state.confirmCloseTab` is enabled in Settings.
+ * @param {string} tabId
+ */
+function requestCloseTab(tabId) {
+  const tab = state.tabs.find((t) => t.id === tabId);
+  if (!tab) return;
+
+  if (state.confirmCloseTab) {
+    openConfirmModal(
+      {
+        title: "CLOSE IMAGE TAB?",
+        message: `Remove "${tab.name}" from the viewer?`,
+        confirmText: "CLOSE IMAGE",
+        cancelText: "CANCEL",
+      },
+      () => {
+        closeTabImmediate(tabId);
+      }
+    );
+  } else {
+    closeTabImmediate(tabId);
+  }
+}
+
+/**
+ * Immediately closes and cleans up a tab by ID.
+ * @param {string} tabId
+ */
+function closeTabImmediate(tabId) {
+  const idx = state.tabs.findIndex((t) => t.id === tabId);
+  if (idx === -1) return;
+
+  const tab = state.tabs[idx];
+  const wasActive = tab.id === state.activeTabId;
+
+  if (wasActive && state.isProcessing) {
+    if (state.abortController) {
+      state.abortController.abort();
+      state.abortController = null;
+    }
+    state.isProcessing = false;
+    dom.busyOverlay.classList.remove("active");
+  }
+
+  if (tab.originalObjectUrl) URL.revokeObjectURL(tab.originalObjectUrl);
+  if (tab.resultObjectUrl) URL.revokeObjectURL(tab.resultObjectUrl);
+  if (tab.previewObjectUrl && tab.previewObjectUrl !== tab.resultObjectUrl) {
+    URL.revokeObjectURL(tab.previewObjectUrl);
+  }
+
+  state.tabs.splice(idx, 1);
+
+  if (state.tabs.length === 0) {
+    state.activeTabId = null;
+    resetToEmptyWorkspace();
+    renderTabBar();
+    return;
+  }
+
+  if (wasActive) {
+    const nextTab = state.tabs[Math.min(idx, state.tabs.length - 1)];
+    state.activeTabId = null;
+    switchToTab(nextTab.id);
+  } else {
+    renderTabBar();
+  }
+}
+
+/**
+ * Resets the center viewport and controls when zero tabs are open.
+ */
+function resetToEmptyWorkspace() {
+  setError(null);
+  state.sourceFile = null;
+  state.resultBlob = null;
+  state.previewBlob = null;
+  state.originalObjectUrl = null;
+  state.resultObjectUrl = null;
+  state.previewObjectUrl = null;
+  state.naturalWidth = 0;
+  state.naturalHeight = 0;
+  state.exportWidth = 0;
+  state.exportHeight = 0;
+
+  dom.stageSizerImg.removeAttribute("src");
+  dom.beforeImg.removeAttribute("src");
+  dom.afterImg.removeAttribute("src");
+
+  dom.stage.classList.remove("visible");
+  dom.emptyState.style.display = "";
+
+  dom.exportWidthInput.value = "";
+  dom.exportHeightInput.value = "";
+  dom.statFile.textContent = "NONE";
+  dom.statDim.textContent = "—";
+  dom.statTime.textContent = "—";
+
+  dom.btnDownload.classList.add("disabled");
+  dom.btnCopy.classList.add("disabled");
+  dom.appShell?.classList.add("no-image");
+}
+
+/**
+ * Switches the active workspace view to the specified tab ID.
+ * @param {string} tabId
+ */
+async function switchToTab(tabId) {
+  if (state.activeTabId && state.activeTabId !== tabId) {
+    saveStateToActiveTab();
+  }
+
+  const tab = state.tabs.find((t) => t.id === tabId);
+  if (!tab) return;
+
+  state.activeTabId = tab.id;
+  state.sourceFile = tab.sourceFile;
+  state.originalObjectUrl = tab.originalObjectUrl;
+  state.resultBlob = tab.resultBlob;
+  state.previewBlob = tab.previewBlob;
+  state.resultObjectUrl = tab.resultObjectUrl;
+  state.previewObjectUrl = tab.previewObjectUrl;
+  state.naturalWidth = tab.naturalWidth;
+  state.naturalHeight = tab.naturalHeight;
+  state.tier = tab.tier;
+  state.defringe = tab.defringe;
+  state.viewMode = tab.viewMode;
+  state.splitPercent = tab.splitPercent;
+  state.exportFormat = tab.exportFormat;
+  state.exportScale = tab.exportScale;
+  state.exportWidth = tab.exportWidth;
+  state.exportHeight = tab.exportHeight;
+  state.activeBackdrop = tab.activeBackdrop;
+
+  renderTabBar();
+
+  // Sync sidebar & view controls to this tab's state
+  document.querySelectorAll("#tierSelector .preset-card").forEach((btn) => {
+    btn.classList.toggle("active", btn.getAttribute("data-tier") === state.tier);
+  });
+  dom.btnDefringe.classList.toggle("active", state.defringe);
+  dom.exportFormatSelect.value = state.exportFormat;
+
+  document.querySelectorAll(".swatch").forEach((s) => {
+    s.classList.toggle("active", s.getAttribute("data-bg") === state.activeBackdrop);
+  });
+  if (state.activeBackdrop === "checker") {
+    dom.viewport.style.background = "";
+    dom.viewport.classList.add("checkerboard-canvas");
+  } else {
+    dom.viewport.classList.remove("checkerboard-canvas");
+    dom.viewport.style.background = state.activeBackdrop;
+  }
+
+  dom.emptyState.style.display = "none";
+  dom.stage.classList.add("visible");
+  dom.stageSizerImg.src = state.originalObjectUrl;
+  dom.beforeImg.src = state.originalObjectUrl;
+  dom.statFile.textContent = tab.name.toUpperCase();
+  dom.statTime.textContent = tab.elapsedText || "—";
+
+  if (state.resultBlob && state.resultObjectUrl) {
+    await new Promise((resolve) => {
+      masterCutoutImg.onload = resolve;
+      masterCutoutImg.onerror = resolve;
+      masterCutoutImg.src = state.resultObjectUrl;
+    });
+    dom.afterImg.src = state.previewObjectUrl || state.resultObjectUrl;
+    dom.appShell?.classList.remove("no-image");
+    dom.btnDownload.classList.remove("disabled");
+    dom.btnCopy.classList.remove("disabled");
+    setViewMode(state.viewMode);
+    updateExportTelemetry();
+  } else {
+    dom.afterImg.src = state.originalObjectUrl;
+    dom.appShell?.classList.add("no-image");
+    dom.btnDownload.classList.add("disabled");
+    dom.btnCopy.classList.add("disabled");
+    setViewMode("original");
+    runSegmentation();
+  }
+}
+
+/**
  * Displays or clears the top error notification banner.
  * @param {string|null} message
  */
@@ -119,18 +413,24 @@ function setError(message) {
 }
 
 /**
- * Opens the confirmation dialog before interrupting an active inference job.
- * @param {string} message
+ * Opens the confirmation dialog.
+ * @param {string|{title?: string, message: string, confirmText?: string, cancelText?: string}} opts
  * @param {() => void} onConfirm
  */
-function openConfirmModal(message, onConfirm) {
-  dom.modalDesc.textContent = message;
+function openConfirmModal(opts, onConfirm) {
+  const cfg = typeof opts === "string" ? { message: opts } : opts;
+  if (dom.modalTitle) {
+    dom.modalTitle.textContent = cfg.title || "STOP CURRENT IMAGE?";
+  }
+  dom.modalDesc.textContent = cfg.message;
+  dom.btnModalConfirm.textContent = cfg.confirmText || "STOP & CONTINUE";
+  dom.btnModalCancel.textContent = cfg.cancelText || "KEEP PROCESSING";
   state.pendingConfirmFn = onConfirm;
   dom.confirmModal.classList.add("active");
 }
 
 /**
- * Closes the confirmation dialog without interrupting the active job.
+ * Closes the confirmation dialog without executing the pending action.
  */
 function closeConfirmModal() {
   state.pendingConfirmFn = null;
@@ -154,6 +454,7 @@ function cancelProcessing() {
   if (!state.resultBlob && state.sourceFile) {
     setViewMode("original");
   }
+  saveStateToActiveTab();
 }
 
 /**
@@ -214,7 +515,6 @@ async function buildExportBlob(format) {
   const targetW = Math.max(1, state.exportWidth || srcW);
   const targetH = Math.max(1, state.exportHeight || srcH);
 
-  // Fast path: untouched 100% native resolution transparent PNG.
   if (
     format === "png" &&
     targetW === srcW &&
@@ -279,8 +579,7 @@ async function buildExportBlob(format) {
 
 /**
  * Updates the live stage preview (`dom.afterImg`) to reflect the currently
- * selected Output Format (`PNG`, `WEBP`, `JPG`, `MASK`), Resolution Scale,
- * Custom Dimensions (`WIDTH × HEIGHT`), and Matte Backdrop.
+ * selected Output Format, Resolution Scale, Custom Dimensions, and Matte Backdrop.
  */
 async function updateLiveStagePreview() {
   if (!state.resultBlob || !masterCutoutImg.complete || !masterCutoutImg.naturalWidth) {
@@ -303,9 +602,8 @@ async function updateLiveStagePreview() {
       state.previewObjectUrl = URL.createObjectURL(blob);
     }
     dom.afterImg.src = state.previewObjectUrl;
-  } catch (_) {
-    // Keep previous preview on transient canvas error
-  }
+    saveStateToActiveTab();
+  } catch (_) {}
 }
 
 /**
@@ -389,6 +687,7 @@ function selectTier(tierKey, reprocess = true) {
     btn.classList.toggle("active", btn.getAttribute("data-tier") === tierKey);
   });
   updateCacheIndicator();
+  saveStateToActiveTab();
 
   if (reprocess && state.sourceFile) {
     runSegmentation();
@@ -406,6 +705,7 @@ function setViewMode(mode) {
   document.getElementById("viewCutout").classList.toggle("active", mode === "cutout");
   document.getElementById("viewOriginal").classList.toggle("active", mode === "original");
   renderStageGeometry();
+  saveStateToActiveTab();
 }
 
 /**
@@ -449,78 +749,55 @@ function handleSplitDrag(clientX) {
 }
 
 /**
- * Completely removes the current image from the viewer and resets the studio
- * back to the initial empty dropzone state with all options locked.
- */
-function removeCurrentImage() {
-  if (state.abortController) {
-    state.abortController.abort();
-    state.abortController = null;
-  }
-  state.isProcessing = false;
-  dom.busyOverlay.classList.remove("active");
-  closeConfirmModal();
-  setError(null);
-
-  state.sourceFile = null;
-  state.resultBlob = null;
-  state.previewBlob = null;
-  state.naturalWidth = 0;
-  state.naturalHeight = 0;
-  state.exportWidth = 0;
-  state.exportHeight = 0;
-
-  if (state.originalObjectUrl) {
-    URL.revokeObjectURL(state.originalObjectUrl);
-    state.originalObjectUrl = null;
-  }
-  if (state.resultObjectUrl) {
-    URL.revokeObjectURL(state.resultObjectUrl);
-    state.resultObjectUrl = null;
-  }
-  if (state.previewObjectUrl) {
-    URL.revokeObjectURL(state.previewObjectUrl);
-    state.previewObjectUrl = null;
-  }
-
-  dom.stageSizerImg.removeAttribute("src");
-  dom.beforeImg.removeAttribute("src");
-  dom.afterImg.removeAttribute("src");
-
-  dom.stage.classList.remove("visible");
-  dom.emptyState.style.display = "";
-
-  dom.exportWidthInput.value = "";
-  dom.exportHeightInput.value = "";
-  dom.statFile.textContent = "NONE";
-  dom.statDim.textContent = "—";
-  dom.statTime.textContent = "—";
-
-  dom.btnRemoveImage?.classList.add("disabled");
-  dom.btnDownload.classList.add("disabled");
-  dom.btnCopy.classList.add("disabled");
-  dom.appShell?.classList.add("no-image");
-}
-
-/**
- * Loads a user-supplied image File or clipboard Blob into the workspace
- * and triggers background removal. Studio options remain locked until
- * processing finishes.
+ * Creates a new image tab for a user-supplied File or clipboard Blob,
+ * switches to it, and triggers background removal.
  * @param {File|Blob} file
  */
 function ingestImageFile(file) {
+  saveStateToActiveTab();
+
+  const tabId = `tab-${nextTabSeq++}`;
+  const rawName = file.name || `CLIPBOARD_${nextTabSeq - 1}.PNG`;
+  const objUrl = URL.createObjectURL(file);
+
+  const newTab = {
+    id: tabId,
+    name: rawName,
+    sourceFile: file,
+    originalObjectUrl: objUrl,
+    resultBlob: null,
+    resultObjectUrl: null,
+    previewBlob: null,
+    previewObjectUrl: null,
+    naturalWidth: 0,
+    naturalHeight: 0,
+    tier: state.tier,
+    defringe: state.defringe,
+    viewMode: "split",
+    splitPercent: 50,
+    exportFormat: state.exportFormat,
+    exportScale: state.exportScale,
+    exportWidth: 0,
+    exportHeight: 0,
+    activeBackdrop: state.activeBackdrop,
+    elapsedText: "PROCESSING...",
+  };
+
+  state.tabs.push(newTab);
+  state.activeTabId = tabId;
+
   state.sourceFile = file;
+  state.originalObjectUrl = objUrl;
   state.resultBlob = null;
   state.previewBlob = null;
+  state.resultObjectUrl = null;
+  state.previewObjectUrl = null;
   state.naturalWidth = 0;
   state.naturalHeight = 0;
+
   dom.appShell?.classList.add("no-image");
-  dom.btnRemoveImage?.classList.remove("disabled");
   dom.btnDownload.classList.add("disabled");
   dom.btnCopy.classList.add("disabled");
-
-  if (state.originalObjectUrl) URL.revokeObjectURL(state.originalObjectUrl);
-  state.originalObjectUrl = URL.createObjectURL(file);
 
   dom.stageSizerImg.src = state.originalObjectUrl;
   dom.beforeImg.src = state.originalObjectUrl;
@@ -528,8 +805,10 @@ function ingestImageFile(file) {
 
   dom.emptyState.style.display = "none";
   dom.stage.classList.add("visible");
-  dom.statFile.textContent = (file.name || "CLIPBOARD_IMAGE").toUpperCase();
+  dom.statFile.textContent = rawName.toUpperCase();
+  dom.statDim.textContent = "—";
 
+  renderTabBar();
   runSegmentation();
 }
 
@@ -606,7 +885,6 @@ async function runSegmentation() {
     if (state.resultObjectUrl) URL.revokeObjectURL(state.resultObjectUrl);
     state.resultObjectUrl = URL.createObjectURL(state.resultBlob);
 
-    // Load the master 100% RGBA cutout into `masterCutoutImg`, then trigger live preview.
     await new Promise((resolve) => {
       masterCutoutImg.onload = resolve;
       masterCutoutImg.onerror = resolve;
@@ -625,6 +903,7 @@ async function runSegmentation() {
     dom.statTime.textContent = inferenceMs ? `${(inferenceMs / 1000).toFixed(2)}S` : "DONE";
 
     setViewMode("split");
+    saveStateToActiveTab();
     syncServerStatus(false);
   } catch (err) {
     if (err.name === "AbortError") {
@@ -638,7 +917,6 @@ async function runSegmentation() {
       state.abortController = null;
       dom.busyOverlay.classList.remove("active");
       closeConfirmModal();
-      // If a previous result exists on this image (e.g. user cancelled a preset switch), restore controls
       if (state.resultBlob) {
         dom.appShell?.classList.remove("no-image");
       }
@@ -654,7 +932,7 @@ async function runSegmentation() {
 window.addEventListener("online", () => updateCacheIndicator());
 window.addEventListener("offline", () => updateCacheIndicator());
 
-// 2. Cancel Button, Confirmation Modal & Info Modal Controls
+// 2. Cancel Button, Confirmation Modal & Settings Modal Controls
 dom.btnCancel.addEventListener("click", () => {
   cancelProcessing();
 });
@@ -689,6 +967,16 @@ dom.infoModal.addEventListener("click", (e) => {
   }
 });
 
+// Sync initial state of "Confirm before closing image tab" toggle in Settings
+if (dom.btnToggleConfirmClose) {
+  dom.btnToggleConfirmClose.classList.toggle("active", state.confirmCloseTab);
+  dom.btnToggleConfirmClose.addEventListener("click", () => {
+    state.confirmCloseTab = !state.confirmCloseTab;
+    localStorage.setItem(STORAGE_KEY_CONFIRM_CLOSE, String(state.confirmCloseTab));
+    dom.btnToggleConfirmClose.classList.toggle("active", state.confirmCloseTab);
+  });
+}
+
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     if (dom.infoModal.classList.contains("active")) {
@@ -715,6 +1003,7 @@ document.querySelectorAll("#tierSelector .preset-card").forEach((btn) => {
 dom.btnDefringe.addEventListener("click", () => {
   state.defringe = !state.defringe;
   dom.btnDefringe.classList.toggle("active", state.defringe);
+  saveStateToActiveTab();
   if (state.sourceFile) runSegmentation();
 });
 
@@ -783,6 +1072,7 @@ dom.stage.addEventListener("mousedown", (e) => {
 window.addEventListener("mousemove", (e) => handleSplitDrag(e.clientX));
 window.addEventListener("mouseup", () => {
   state.isDraggingSplit = false;
+  saveStateToActiveTab();
 });
 
 dom.stage.addEventListener(
@@ -803,6 +1093,7 @@ window.addEventListener(
 );
 window.addEventListener("touchend", () => {
   state.isDraggingSplit = false;
+  saveStateToActiveTab();
 });
 
 // 8. Matte Backdrop Swatches & Custom Color Picker
@@ -853,20 +1144,6 @@ dom.btnOpen.addEventListener("click", () => {
     return;
   }
   triggerOpenFileDialog();
-});
-
-dom.btnRemoveImage?.addEventListener("click", () => {
-  if (!state.sourceFile) return;
-  if (state.isProcessing) {
-    openConfirmModal(
-      "This will stop the current image processing and remove the image. Do you want to continue?",
-      () => {
-        removeCurrentImage();
-      }
-    );
-    return;
-  }
-  removeCurrentImage();
 });
 
 dom.fileInput.addEventListener("change", (e) => {

@@ -24,19 +24,23 @@
       </div>
 
       <div class="hardware-readout">
-        <button type="button" class="info-btn" id="btnInfo" title="About &amp; System Info" aria-label="Information">i</button>
+        <button type="button" class="info-btn" id="btnInfo" title="Settings &amp; System Info" aria-label="Settings">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+        </button>
       </div>
     </header>
 
-    <!-- 2. Main 3-Column Studio Body (Left Sidebar | Center Viewport | Right Sidebar) -->
+    <!-- 2. Main 3-Column Studio Body (Left Sidebar | Center Column | Right Sidebar) -->
     <div class="studio-body">
       <!-- Left Sidebar: Settings, Presets, Defringe & Matte Backdrop -->
       <aside class="sidebar sidebar-left">
         <div class="sidebar-section">
           <div class="section-header">SOURCE IMAGE</div>
           <button type="button" class="action-btn full-width" id="btnOpen">OPEN IMAGE FILE</button>
-          <button type="button" class="action-btn danger-btn full-width disabled" id="btnRemoveImage">REMOVE IMAGE</button>
-          <input type="file" id="fileInput" accept="image/*" />
+          <input type="file" id="fileInput" accept="image/*" multiple />
         </div>
 
         <div class="sidebar-section">
@@ -127,45 +131,49 @@
         </div>
       </aside>
 
-      <!-- Center Interactive Canvas Viewport -->
-      <main class="viewport checkerboard-canvas" id="viewport">
-        <div class="error-toast" id="errorToast"></div>
+      <!-- Center Column: Image Tabs Bar + Interactive Canvas Viewport -->
+      <div class="center-column">
+        <div class="tabbar" id="tabBar"></div>
 
-        <!-- Empty / Dropzone State -->
-        <div class="empty-state" id="emptyState">
-          <div class="empty-title">Drop image file, click to browse, or paste</div>
-          <div class="empty-desc">
-            100% local processing, zero image compression, full-resolution 32-bit RGBA PNG output.
-          </div>
-          <div class="empty-shortcuts">
-            <span class="kbd">CLICK TO BROWSE</span>
-            <span class="kbd">DRAG &amp; DROP</span>
-            <span class="kbd">⌘V / CTRL+V PASTE</span>
-          </div>
-        </div>
+        <main class="viewport checkerboard-canvas" id="viewport">
+          <div class="error-toast" id="errorToast"></div>
 
-        <!-- Split-Plane Comparison Stage -->
-        <div class="stage" id="stage">
-          <img id="stageSizerImg" class="stage-sizer" alt="" aria-hidden="true" />
-          <img id="afterImg" class="stage-layer" alt="Cutout Result" />
-          <div class="before-clip" id="beforeClip">
-            <img id="beforeImg" class="stage-layer" alt="Original Source" />
+          <!-- Empty / Dropzone State -->
+          <div class="empty-state" id="emptyState">
+            <div class="empty-title">Drop image file, click to browse, or paste</div>
+            <div class="empty-desc">
+              100% local processing, zero image compression, full-resolution 32-bit RGBA PNG output.
+            </div>
+            <div class="empty-shortcuts">
+              <span class="kbd">CLICK TO BROWSE</span>
+              <span class="kbd">DRAG &amp; DROP</span>
+              <span class="kbd">⌘V / CTRL+V PASTE</span>
+            </div>
           </div>
-          <div class="stage-label left" id="lblLeft">ORIGINAL</div>
-          <div class="stage-label right" id="lblRight">PNG • 100%</div>
-          <div class="split-line" id="splitLine" style="left: 50%;">
-            <div class="split-handle">↔</div>
-          </div>
-        </div>
 
-        <!-- Inference Progress Overlay -->
-        <div class="busy-overlay" id="busyOverlay">
-          <div class="progress-bar"></div>
-          <div class="busy-title" id="busyTitle">RUNNING INFERENCE</div>
-          <div class="busy-sub" id="busySub">Executing BiRefNet locally. First run of a model downloads weights once.</div>
-          <button type="button" class="action-btn cancel-btn" id="btnCancel">CANCEL PROCESSING</button>
-        </div>
-      </main>
+          <!-- Split-Plane Comparison Stage -->
+          <div class="stage" id="stage">
+            <img id="stageSizerImg" class="stage-sizer" alt="" aria-hidden="true" />
+            <img id="afterImg" class="stage-layer" alt="Cutout Result" />
+            <div class="before-clip" id="beforeClip">
+              <img id="beforeImg" class="stage-layer" alt="Original Source" />
+            </div>
+            <div class="stage-label left" id="lblLeft">ORIGINAL</div>
+            <div class="stage-label right" id="lblRight">PNG • 100%</div>
+            <div class="split-line" id="splitLine" style="left: 50%;">
+              <div class="split-handle">↔</div>
+            </div>
+          </div>
+
+          <!-- Inference Progress Overlay -->
+          <div class="busy-overlay" id="busyOverlay">
+            <div class="progress-bar"></div>
+            <div class="busy-title" id="busyTitle">RUNNING INFERENCE</div>
+            <div class="busy-sub" id="busySub">Executing BiRefNet locally. First run of a model downloads weights once.</div>
+            <button type="button" class="action-btn cancel-btn" id="btnCancel">CANCEL PROCESSING</button>
+          </div>
+        </main>
+      </div>
 
       <!-- Right Sidebar: Export Format, Resolution Slider, Custom PX & Download Actions -->
       <aside class="sidebar sidebar-right">
@@ -268,13 +276,23 @@
       </div>
     </div>
 
-    <!-- Full-Window Info / About Modal -->
+    <!-- Full-Window Settings & System Info Modal -->
     <div class="modal-backdrop" id="infoModal">
       <div class="modal-dialog info-dialog" role="dialog" aria-modal="true" aria-labelledby="infoModalTitle">
-        <div class="modal-title" id="infoModalTitle">SYSTEM INFO // LOCAL AI STUDIO</div>
-        <div class="modal-desc">
-          100% local, offline background removal powered by <strong>BiRefNet</strong>. Zero cloud uploads, zero telemetry, and zero image compression.
+        <div class="modal-title" id="infoModalTitle">SETTINGS &amp; SYSTEM INFO</div>
+
+        <div class="settings-block">
+          <div class="section-header">PREFERENCES</div>
+          <button type="button" class="toggle-card active" id="btnToggleConfirmClose">
+            <div class="toggle-card-top">
+              <span>CONFIRM BEFORE CLOSING IMAGE TAB</span>
+              <span class="toggle-indicator"></span>
+            </div>
+            <div class="preset-desc">Ask for confirmation when clicking × on an open image tab.</div>
+          </button>
         </div>
+
+        <div class="section-header" style="margin-top: 4px;">SYSTEM SPECIFICATIONS</div>
         <div class="info-list">
           <div class="info-row">
             <span class="info-key">COMPUTE ENGINE</span>
