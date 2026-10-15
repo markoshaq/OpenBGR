@@ -99,9 +99,15 @@ body {
 
 /* Grey out all image-dependent options when no source image is loaded */
 .app-shell.no-image .topbar-center,
-.app-shell.no-image .requires-image,
-.app-shell.no-image .sidebar-right,
 .app-shell.no-image .status-center {
+  opacity: 0.3;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Result-dependent controls stay locked until processing produces a cutout */
+.app-shell.no-result .requires-image,
+.app-shell.no-result .sidebar-right {
   opacity: 0.3;
   pointer-events: none;
   user-select: none;

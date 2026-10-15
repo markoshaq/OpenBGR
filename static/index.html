@@ -26,7 +26,7 @@
   </script>
 </head>
 <body>
-  <div class="app-shell no-image" id="appShell">
+  <div class="app-shell no-image no-result" id="appShell">
     <!-- 1. Top Hardware, Menu Bar & View Mode Header -->
     <header class="topbar">
       <div class="brand">
@@ -339,6 +339,7 @@
         <div class="sidebar-section">
           <div class="section-header">SOURCE IMAGE</div>
           <button type="button" class="action-btn full-width" id="btnOpen">OPEN IMAGE FILE</button>
+          <button type="button" class="action-btn primary full-width disabled" id="btnProcess">PROCESS IMAGE</button>
           <input type="file" id="fileInput" accept="image/*" multiple />
         </div>
 

@@ -185,6 +185,7 @@ const dom = {
 
   fileInput: document.getElementById("fileInput"),
   btnOpen: document.getElementById("btnOpen"),
+  btnProcess: document.getElementById("btnProcess"),
   btnCopy: document.getElementById("btnCopy"),
   btnDownload: document.getElementById("btnDownload"),
   btnDefringe: document.getElementById("btnDefringe"),
@@ -475,6 +476,7 @@ function resetToEmptyWorkspace() {
   dom.btnDownload.classList.add("disabled");
   dom.btnCopy.classList.add("disabled");
   dom.appShell?.classList.add("no-image");
+  dom.appShell?.classList.add("no-result");
   syncMenuBarState();
 }
 
@@ -551,20 +553,20 @@ async function switchToTab(tabId) {
     });
     dom.afterImg.src = state.previewObjectUrl || state.resultObjectUrl;
     dom.appShell?.classList.remove("no-image");
+    dom.appShell?.classList.remove("no-result");
     dom.btnDownload.classList.remove("disabled");
     dom.btnCopy.classList.remove("disabled");
     setViewMode(state.viewMode);
     updateExportTelemetry();
   } else {
     dom.afterImg.src = state.originalObjectUrl;
-    dom.appShell?.classList.add("no-image");
+    dom.appShell?.classList.remove("no-image");
+    dom.appShell?.classList.add("no-result");
     dom.btnDownload.classList.add("disabled");
     dom.btnCopy.classList.add("disabled");
     setViewMode("original");
-    if (tab.elapsedText !== "CANCELLED" && tab.elapsedText !== "ERROR") {
-      runSegmentation();
-    }
   }
+  syncMenuBarState();
 }
 
 /**
@@ -1018,6 +1020,16 @@ function syncMenuBarState() {
       checkSpan.textContent = checked ? "✓" : "";
     }
   });
+
+  // PROCESS button: enabled only with a loaded image and no active job
+  if (dom.btnProcess) {
+    dom.btnProcess.classList.toggle("disabled", !hasImage || isBusy);
+    dom.btnProcess.textContent = isBusy
+      ? "PROCESSING…"
+      : hasResult
+        ? "REPROCESS IMAGE"
+        : "PROCESS IMAGE";
+  }
 }
 
 /**
@@ -1256,7 +1268,7 @@ function ingestImageFile(file) {
     currentTab.name = rawName;
     currentTab.sourceFile = file;
     currentTab.originalObjectUrl = objUrl;
-    currentTab.elapsedText = "PROCESSING...";
+    currentTab.elapsedText = "READY";
     targetTab = currentTab;
   } else {
     const tabId = `tab-${nextTabSeq++}`;
@@ -1283,7 +1295,7 @@ function ingestImageFile(file) {
       exportWidth: 0,
       exportHeight: 0,
       activeBackdrop: state.activeBackdrop,
-      elapsedText: "PROCESSING...",
+      elapsedText: "READY",
     };
     state.tabs.push(targetTab);
     state.activeTabId = targetTab.id;
@@ -1298,7 +1310,8 @@ function ingestImageFile(file) {
   state.naturalWidth = 0;
   state.naturalHeight = 0;
 
-  dom.appShell?.classList.add("no-image");
+  dom.appShell?.classList.remove("no-image");
+  dom.appShell?.classList.add("no-result");
   dom.btnDownload.classList.add("disabled");
   dom.btnCopy.classList.add("disabled");
 
@@ -1310,9 +1323,11 @@ function ingestImageFile(file) {
   dom.stage.classList.add("visible");
   dom.statFile.textContent = rawName.toUpperCase();
   dom.statDim.textContent = "—";
+  dom.statTime.textContent = "READY";
 
   renderTabBar();
-  runSegmentation();
+  setViewMode("original");
+  syncMenuBarState();
 }
 
 /**
@@ -1338,8 +1353,8 @@ async function runSegmentation() {
   state.abortController = controller;
   state.isProcessing = true;
 
-  // Keep studio options locked while processing is active
-  dom.appShell?.classList.add("no-image");
+  // Lock result-dependent controls while a new result is being computed
+  dom.appShell?.classList.add("no-result");
   setError(null);
   dom.busyOverlay.classList.add("active");
   dom.statTime.textContent = "PROCESSING...";
@@ -1408,7 +1423,7 @@ async function runSegmentation() {
     });
 
     // Processing is complete: unlock all studio options
-    dom.appShell?.classList.remove("no-image");
+    dom.appShell?.classList.remove("no-result");
     dom.btnDownload.classList.remove("disabled");
     dom.btnCopy.classList.remove("disabled");
 
@@ -1434,7 +1449,7 @@ async function runSegmentation() {
       dom.busyOverlay.classList.remove("active");
       closeConfirmModal();
       if (state.resultBlob) {
-        dom.appShell?.classList.remove("no-image");
+        dom.appShell?.classList.remove("no-result");
       }
       syncMenuBarState();
     }
@@ -1697,14 +1712,21 @@ window.addEventListener("keyup", (e) => {
   }
 });
 
-// 3. Left Sidebar: Hardware Preset Cards
+// 3. Left Sidebar: Hardware Preset Buttons (select only — processing is manual)
 document.querySelectorAll("#tierSelector .tier-btn").forEach((btn) => {
   btn.addEventListener("click", () => {
     const targetTier = btn.getAttribute("data-tier");
     if (targetTier && targetTier !== state.tier) {
-      selectTier(targetTier, true);
+      selectTier(targetTier, false);
     }
   });
+});
+
+// PROCESS / REPROCESS button — the only trigger that runs segmentation
+dom.btnProcess?.addEventListener("click", () => {
+  if (state.sourceFile && !state.isProcessing) {
+    runSegmentation();
+  }
 });
 
 // 4. Left Sidebar: Edge Defringe, Color Spill Suppression, Glass Matting & Shadow Cutoff
@@ -1713,7 +1735,6 @@ dom.btnDefringe.addEventListener("click", () => {
   dom.btnDefringe.classList.toggle("active", state.defringe);
   saveStateToActiveTab();
   syncMenuBarState();
-  if (state.sourceFile) runSegmentation();
 });
 
 dom.btnDespill?.addEventListener("click", () => {
@@ -1721,7 +1742,6 @@ dom.btnDespill?.addEventListener("click", () => {
   dom.btnDespill.classList.toggle("active", state.despill);
   saveStateToActiveTab();
   syncMenuBarState();
-  if (state.sourceFile) runSegmentation();
 });
 
 dom.btnMatting?.addEventListener("click", () => {
@@ -1729,7 +1749,6 @@ dom.btnMatting?.addEventListener("click", () => {
   dom.btnMatting.classList.toggle("active", state.matting);
   saveStateToActiveTab();
   syncMenuBarState();
-  if (state.sourceFile) runSegmentation();
 });
 
 dom.shadowCutoffSlider?.addEventListener("input", (e) => {
@@ -2272,14 +2291,14 @@ window.openBGR = {
   },
   selectPreset: (tierKey) => {
     if (["low", "mid", "high"].includes(tierKey) && tierKey !== state.tier) {
-      selectTier(tierKey, true);
+      selectTier(tierKey, false);
     }
   },
   toggleDefringe: () => dom.btnDefringe.click(),
   toggleDespill: () => dom.btnDespill?.click(),
   toggleMatting: () => dom.btnMatting?.click(),
   rerunSegmentation: () => {
-    if (state.sourceFile) runSegmentation();
+    if (state.sourceFile && !state.isProcessing) runSegmentation();
   },
   cancelProcessing: () => {
     if (state.isProcessing) cancelProcessing();
