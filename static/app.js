@@ -655,7 +655,13 @@ function applyDotState(dotEl, status) {
   dotEl.classList.add(status);
   const tip = DOT_TOOLTIPS[status] || "";
   dotEl.setAttribute("data-tooltip", tip);
-  dotEl.setAttribute("title", tip);
+  // Only fall back to the native title tooltip when no styled has-tooltip
+  // tooltip covers this element (itself or an ancestor).
+  if (dotEl.classList.contains("has-tooltip") || dotEl.closest(".has-tooltip")) {
+    dotEl.removeAttribute("title");
+  } else {
+    dotEl.setAttribute("title", tip);
+  }
 }
 
 /**
@@ -683,7 +689,6 @@ function updateCacheIndicator() {
     if (tierBtn) {
       const tip = `${TIER_META[key] || ""} ${TIER_STATUS_SHORT[status] || ""}`.trim();
       tierBtn.setAttribute("data-tooltip", tip);
-      tierBtn.setAttribute("title", tip);
     }
 
     // Same combined tooltip on the Matting toggle (its spec + cache status)
@@ -692,7 +697,6 @@ function updateCacheIndicator() {
       if (matBtn) {
         const tip = `${TIER_META.matting} ${TIER_STATUS_SHORT[status] || ""}`.trim();
         matBtn.setAttribute("data-tooltip", tip);
-        matBtn.setAttribute("title", tip);
       }
     }
 
