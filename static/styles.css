@@ -597,17 +597,13 @@ body {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
 }
 
-/* Keep left-sidebar tooltips inside the sidebar bounds */
+/* Keep left-sidebar tooltips inside the sidebar bounds & wrap long text */
 .sidebar-left .has-tooltip::after {
   bottom: auto;
   top: calc(100% + 6px);
   left: auto;
   right: 0;
   transform: none;
-}
-
-/* Tier-row tooltips carry the full model spec — allow wrapping */
-.sidebar-left .tier-btn.has-tooltip::after {
   white-space: normal;
   width: max-content;
   max-width: 232px;

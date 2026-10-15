@@ -686,6 +686,16 @@ function updateCacheIndicator() {
       tierBtn.setAttribute("title", tip);
     }
 
+    // Same combined tooltip on the Matting toggle (its spec + cache status)
+    if (key === "matting") {
+      const matBtn = document.getElementById("btnMatting");
+      if (matBtn) {
+        const tip = `${TIER_META.matting} ${TIER_STATUS_SHORT[status] || ""}`.trim();
+        matBtn.setAttribute("data-tooltip", tip);
+        matBtn.setAttribute("title", tip);
+      }
+    }
+
     const badge = document.getElementById(`sysbadge-${key}`);
     if (badge) {
       const isActive = Boolean(tierInfo?.active);

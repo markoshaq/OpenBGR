@@ -302,46 +302,45 @@
           <div class="preset-stack">
             <button
               type="button"
-              class="toggle-card active"
+              class="toggle-card active has-tooltip"
               id="btnDefringe"
               title="Morphological edge color decontamination: removes background color halos from semi-transparent hair and border pixels"
+              data-tooltip="DEFRINGE EDGES — Removes background color bleed along hair, fur &amp; soft borders via morphological edge decontamination."
             >
               <div class="toggle-card-top">
                 <span>DEFRINGE EDGES</span>
                 <span class="toggle-indicator"></span>
               </div>
-              <div class="preset-desc">Removes background color bleed along hair &amp; soft borders</div>
             </button>
 
             <button
               type="button"
-              class="toggle-card active"
+              class="toggle-card active has-tooltip"
               id="btnDespill"
               title="Neutralizes colored light reflections (color spill/bounce) from the removed background on hair, skin rims, and glass"
+              data-tooltip="SUPPRESS COLOR SPILL — Neutralizes background color reflections on rims, hair &amp; glass surfaces."
             >
               <div class="toggle-card-top">
                 <span>SUPPRESS COLOR SPILL</span>
                 <span class="toggle-indicator"></span>
               </div>
-              <div class="preset-desc">Neutralizes background color reflections on rims &amp; glass</div>
             </button>
 
             <button
               type="button"
-              class="toggle-card"
+              class="toggle-card has-tooltip"
               id="btnMatting"
               title="Uses ZhengPeng7/BiRefNet-matting to preserve natural semi-transparency on see-through glass, windows, eyeglasses, water &amp; sheer fabric"
+              data-tooltip="GLASS &amp; SHEER MATTING — BiRefNet-matting for see-through glass, windows, smoke &amp; sheer fabric. Checking cache…"
             >
               <div class="toggle-card-top" style="padding-right: 14px;">
                 <span>GLASS &amp; SHEER MATTING</span>
                 <span class="toggle-indicator"></span>
                 <span
-                  class="tier-dot has-tooltip"
+                  class="tier-dot"
                   id="dot-matting"
-                  data-tooltip="Checking cache status..."
                 ></span>
               </div>
-              <div class="preset-desc">BiRefNet-Matting for see-through glass, windows &amp; smoke</div>
             </button>
           </div>
         </div>
