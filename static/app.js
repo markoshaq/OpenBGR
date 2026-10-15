@@ -48,6 +48,10 @@ const dom = {
   btnModalCancel: document.getElementById("btnModalCancel"),
   btnModalConfirm: document.getElementById("btnModalConfirm"),
 
+  infoModal: document.getElementById("infoModal"),
+  btnInfo: document.getElementById("btnInfo"),
+  btnInfoClose: document.getElementById("btnInfoClose"),
+
   fileInput: document.getElementById("fileInput"),
   btnOpen: document.getElementById("btnOpen"),
   btnCopy: document.getElementById("btnCopy"),
@@ -358,9 +362,25 @@ dom.btnModalConfirm.addEventListener("click", () => {
   if (typeof fn === "function") fn();
 });
 
+dom.btnInfo.addEventListener("click", () => {
+  dom.infoModal.classList.add("active");
+});
+
+dom.btnInfoClose.addEventListener("click", () => {
+  dom.infoModal.classList.remove("active");
+});
+
+dom.infoModal.addEventListener("click", (e) => {
+  if (e.target === dom.infoModal) {
+    dom.infoModal.classList.remove("active");
+  }
+});
+
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
-    if (dom.confirmModal.classList.contains("active")) {
+    if (dom.infoModal.classList.contains("active")) {
+      dom.infoModal.classList.remove("active");
+    } else if (dom.confirmModal.classList.contains("active")) {
       closeConfirmModal();
     } else if (state.isProcessing) {
       cancelProcessing();

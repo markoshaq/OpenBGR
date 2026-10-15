@@ -99,6 +99,28 @@ body {
   font-weight: 600;
 }
 
+.info-btn {
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+
+.info-btn:hover {
+  background: var(--text);
+  color: var(--bg);
+  border-color: var(--text);
+}
+
 /* -------------------------------------------------------------------------
  * 2. Secondary Control Strip (Tiers, View Mode, Matte Backdrop, Actions)
  * ------------------------------------------------------------------------- */
@@ -565,6 +587,59 @@ body {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 8px;
+}
+
+.info-dialog {
+  max-width: 480px;
+}
+
+.info-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 0;
+  margin: 4px 0;
+}
+
+.info-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.info-key {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.info-val {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.info-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 4px;
+}
+
+.credit-link {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  text-decoration: none;
+  transition: color 0.12s;
+}
+
+.credit-link:hover {
+  color: var(--text);
+  text-decoration: underline;
 }
 
 .error-toast {

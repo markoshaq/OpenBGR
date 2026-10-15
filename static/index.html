@@ -20,6 +20,7 @@
         <div class="hw-item">
           MODEL CACHE: <span class="hw-value" id="hwCache">—</span>
         </div>
+        <button type="button" class="info-btn" id="btnInfo" title="About &amp; System Info" aria-label="Information">i</button>
       </div>
     </header>
 
@@ -147,6 +148,40 @@
           </div>
         </div>
       </div>
+
+      <!-- Info / About Modal -->
+      <div class="modal-backdrop" id="infoModal">
+        <div class="modal-dialog info-dialog" role="dialog" aria-modal="true" aria-labelledby="infoModalTitle">
+          <div class="modal-title" id="infoModalTitle">SYSTEM INFO // LOCAL AI STUDIO</div>
+          <div class="modal-desc">
+            100% local, offline background removal powered by <strong>BiRefNet</strong>. Zero cloud uploads, zero telemetry, and zero image compression.
+          </div>
+          <div class="info-list">
+            <div class="info-row">
+              <span class="info-key">LOW-END (LITE 1K)</span>
+              <span class="info-val">BiRefNet_lite (Swin-T) — Fast inference for CPUs &amp; integrated GPUs.</span>
+            </div>
+            <div class="info-row">
+              <span class="info-key">MID-RANGE (FULL 1K)</span>
+              <span class="info-val">BiRefNet (Swin-L) — Studio-grade hair, fur &amp; soft alpha matting.</span>
+            </div>
+            <div class="info-row">
+              <span class="info-key">HIGH-END (ULTRA 2K)</span>
+              <span class="info-val">BiRefNet_HR (Swin-L) — High-density tensor for 4K/8K photography.</span>
+            </div>
+            <div class="info-row">
+              <span class="info-key">DEFRINGE</span>
+              <span class="info-val">Removes background color bleed along semi-transparent hair &amp; borders.</span>
+            </div>
+          </div>
+          <div class="info-footer">
+            <a href="https://github.com/markoshaq" target="_blank" rel="noopener noreferrer" class="credit-link">
+              MADE BY MARKOSHAQ ↗
+            </a>
+            <button type="button" class="action-btn primary" id="btnInfoClose">CLOSE</button>
+          </div>
+        </div>
+      </div>
     </main>
 
     <!-- 4. Bottom Telemetry Bar -->
@@ -159,6 +194,9 @@
       </div>
       <div class="status-group">
         <div class="status-kv">OUTPUT: <span>32-BIT LOSSLESS PNG</span></div>
+        <a href="https://github.com/markoshaq" target="_blank" rel="noopener noreferrer" class="credit-link">
+          MADE BY MARKOSHAQ ↗
+        </a>
       </div>
     </footer>
   </div>
