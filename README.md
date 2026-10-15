@@ -45,17 +45,19 @@
 
 ---
 
-## Universal Hardware Presets
+## Universal Hardware Presets (Spatial Token Scaling & Backbone Selection)
 
-Instead of hardcoding parameters for a single GPU class, **REMOVEBG** exposes three adaptive execution tiers that decouple internal segmentation tensor dimensions from the final output resolution (masks are always upsampled back to 100% native source dimensions via `LANCZOS` interpolation):
+Instead of hardcoding parameters for a single GPU class, **REMOVEBG** exposes three adaptive execution tiers that decouple internal segmentation tensor dimensions from the final output resolution (alpha masks are always upsampled back to 100% native source dimensions via `LANCZOS` interpolation):
 
-| Preset | Backbone Architecture | Internal Tensor | Memory Footprint | Target Hardware | Typical Latency (GPU/MPS) |
-| :--- | :--- | :---: | :---: | :--- | :---: |
-| **Low-End (`Fast`)** | `BiRefNet_lite` (Swin-T) | `768 × 768` | ~180 MB | Integrated GPUs, CPUs, Laptops | **~0.7s – 1.2s** |
-| **Mid-Range (`Balanced`)** | `BiRefNet_lite` (Swin-T) | `1024 × 1024` | ~220 MB | Consumer GPUs, Apple Silicon | **~1.3s – 2.1s** |
-| **High-End (`Ultra`)** | `BiRefNet` (Swin-L) | `1024 × 1024` | ~900 MB | Dedicated Workstation GPUs | **~2.5s – 4.0s** |
+| Preset | Backbone Architecture | Internal Tensor | Spatial Pixels | Memory Footprint | Target Hardware | Typical Latency (GPU/MPS) |
+| :--- | :--- | :---: | :---: | :---: | :--- | :---: |
+| **Low-End (`Fast`)** | `BiRefNet_lite` (Swin-T) | `768 × 768` | `589,824` (-44%) | ~180 MB | Integrated GPUs, CPUs, Laptops | **~0.7s – 1.2s** |
+| **Mid-Range (`Balanced`)** | `BiRefNet_lite` (Swin-T) | `1024 × 1024` | `1,048,576` (100%) | ~220 MB | Consumer GPUs, Apple Silicon | **~1.3s – 2.1s** |
+| **High-End (`Ultra`)** | `BiRefNet` (Swin-L) | `1024 × 1024` | `1,048,576` (100%) | ~900 MB | Dedicated Workstation GPUs | **~2.5s – 4.0s** |
 
-*Note: Switching between **Low-End** and **Mid-Range** reuses the in-memory `BiRefNet_lite` weights with zero reload overhead.*
+### Why do Low-End and Mid-Range share `BiRefNet_lite`?
+- **Low-End vs. Mid-Range (Spatial Token Scaling):** Both presets use the lightweight **Swin-T (`BiRefNet_lite`)** backbone, meaning switching between them requires **zero additional downloads and zero memory reload overhead**. However, **Low-End** evaluates the network on a `768 × 768` tensor (`589,824` pixels) instead of `1024 × 1024` (`1,048,576` pixels)—processing **44% fewer spatial tokens** through the Swin Transformer attention blocks for nearly **2× faster inference** on CPUs and integrated graphics.
+- **Mid-Range vs. High-End (Backbone Scaling):** **High-End** swaps the Swin-T backbone (~200 MB) for the full **Swin-L (`BiRefNet`)** architecture (~900 MB) at `1024 × 1024`, providing deeper multi-scale feature representations for intricate hair strands, fur, and fine semi-transparent meshes.
 
 ---
 
@@ -122,9 +124,11 @@ curl -X POST "http://127.0.0.1:7860/api/remove-bg" \
 
 ```text
 removebg/
-├── app.py               # FastAPI server, ModelManager, FP16 inference & edge decontamination
+├── app.py               # FastAPI engine, ModelManager, FP16 inference & edge decontamination
 ├── static/
-│   └── index.html       # Zero-dependency studio UI (split comparator, clipboard & matte tools)
+│   ├── index.html       # Semantic studio layout (4-row grid workspace)
+│   ├── styles.css       # Industrial high-contrast design system & split-plane styles
+│   └── app.js           # Modular frontend controller, pointer physics & telemetry client
 ├── requirements.txt     # Pinned production dependencies
 ├── start.sh             # One-command bootstrapper for macOS & Linux
 ├── start.bat            # One-command bootstrapper for Windows

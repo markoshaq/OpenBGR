@@ -3,538 +3,12 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>REMOVEBG</title>
-  <style>
-    :root {
-      --bg: #09090b;
-      --surface: #111113;
-      --surface-2: #18181b;
-      --border: #27272a;
-      --border-strong: #3f3f46;
-      --text: #fafafa;
-      --muted: #8e8e93;
-      --mono: "SF Mono", "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
-      --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
-    }
-
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
-
-    html, body {
-      height: 100%;
-      background: var(--bg);
-      color: var(--text);
-      font-family: var(--sans);
-      -webkit-font-smoothing: antialiased;
-      overflow: hidden;
-    }
-
-    .app-shell {
-      display: grid;
-      grid-template-rows: 48px 44px 1fr 36px;
-      height: 100vh;
-      width: 100vw;
-    }
-
-    /* Top Bar */
-    .topbar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0 16px;
-      background: var(--surface);
-      border-bottom: 1px solid var(--border);
-    }
-
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-    }
-
-    .brand-mark {
-      font-family: var(--mono);
-      font-size: 13px;
-      font-weight: 700;
-      letter-spacing: 0.08em;
-      padding: 4px 8px;
-      background: var(--text);
-      color: var(--bg);
-    }
-
-    .brand-meta {
-      font-family: var(--mono);
-      font-size: 11px;
-      color: var(--muted);
-      letter-spacing: 0.03em;
-    }
-
-    .hardware-readout {
-      display: flex;
-      align-items: center;
-      gap: 16px;
-      font-family: var(--mono);
-      font-size: 11px;
-      color: var(--muted);
-    }
-
-    .hw-item {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-
-    .hw-value {
-      color: var(--text);
-      font-weight: 600;
-    }
-
-    /* Control Strip */
-    .controlbar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0 16px;
-      background: var(--bg);
-      border-bottom: 1px solid var(--border);
-      gap: 12px;
-      overflow-x: auto;
-    }
-
-    .control-cluster {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      flex-shrink: 0;
-    }
-
-    .cluster-label {
-      font-family: var(--mono);
-      font-size: 10px;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      color: var(--muted);
-    }
-
-    .segmented {
-      display: inline-flex;
-      border: 1px solid var(--border);
-      background: var(--surface);
-    }
-
-    .seg-btn {
-      background: transparent;
-      border: none;
-      border-right: 1px solid var(--border);
-      color: var(--muted);
-      padding: 6px 12px;
-      font-family: var(--mono);
-      font-size: 11px;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      transition: background 0.1s, color 0.1s;
-    }
-
-    .seg-btn:last-child {
-      border-right: none;
-    }
-
-    .seg-btn:hover {
-      color: var(--text);
-      background: var(--surface-2);
-    }
-
-    .seg-btn.active {
-      background: var(--text);
-      color: var(--bg);
-      font-weight: 600;
-    }
-
-    .seg-sub {
-      opacity: 0.7;
-      font-size: 10px;
-    }
-
-    .divider-v {
-      width: 1px;
-      height: 20px;
-      background: var(--border);
-    }
-
-    .toggle-btn {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      color: var(--muted);
-      padding: 6px 10px;
-      font-family: var(--mono);
-      font-size: 11px;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-    }
-
-    .toggle-btn:hover {
-      color: var(--text);
-      border-color: var(--border-strong);
-    }
-
-    .toggle-btn.active {
-      border-color: var(--text);
-      color: var(--text);
-    }
-
-    .toggle-indicator {
-      width: 6px;
-      height: 6px;
-      background: var(--border-strong);
-    }
-
-    .toggle-btn.active .toggle-indicator {
-      background: var(--text);
-    }
-
-    .swatches {
-      display: inline-flex;
-      border: 1px solid var(--border);
-    }
-
-    .swatch {
-      width: 24px;
-      height: 24px;
-      border: none;
-      border-right: 1px solid var(--border);
-      cursor: pointer;
-      position: relative;
-    }
-
-    .swatch:last-child {
-      border-right: none;
-    }
-
-    .swatch.active::after {
-      content: "";
-      position: absolute;
-      inset: 2px;
-      border: 1px solid var(--text);
-      mix-blend-mode: difference;
-      pointer-events: none;
-    }
-
-    .swatch-checker {
-      background-image:
-        linear-gradient(45deg, #52525b 25%, transparent 25%),
-        linear-gradient(-45deg, #52525b 25%, transparent 25%),
-        linear-gradient(45deg, transparent 75%, #52525b 75%),
-        linear-gradient(-45deg, transparent 75%, #52525b 75%);
-      background-size: 8px 8px;
-      background-position: 0 0, 0 4px, 4px -4px, -4px 0;
-      background-color: #27272a;
-    }
-
-    .action-btn {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      color: var(--text);
-      padding: 6px 12px;
-      font-family: var(--mono);
-      font-size: 11px;
-      font-weight: 600;
-      cursor: pointer;
-      text-decoration: none;
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-    }
-
-    .action-btn:hover {
-      background: var(--surface-2);
-      border-color: var(--border-strong);
-    }
-
-    .action-btn.primary {
-      background: var(--text);
-      color: var(--bg);
-      border-color: var(--text);
-    }
-
-    .action-btn.primary:hover {
-      background: #d4d4d8;
-      border-color: #d4d4d8;
-    }
-
-    .action-btn:disabled,
-    .action-btn.disabled {
-      opacity: 0.35;
-      pointer-events: none;
-    }
-
-    /* Main Viewport */
-    .viewport {
-      position: relative;
-      width: 100%;
-      height: 100%;
-      overflow: hidden;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      user-select: none;
-    }
-
-    .checkerboard-canvas {
-      background-image:
-        linear-gradient(45deg, #16161a 25%, transparent 25%),
-        linear-gradient(-45deg, #16161a 25%, transparent 25%),
-        linear-gradient(45deg, transparent 75%, #16161a 75%),
-        linear-gradient(-45deg, transparent 75%, #16161a 75%);
-      background-size: 20px 20px;
-      background-position: 0 0, 0 10px, 10px -10px, -10px 0;
-      background-color: #0e0e11;
-    }
-
-    /* Drop State */
-    .empty-state {
-      border: 1px dashed var(--border-strong);
-      background: rgba(17, 17, 19, 0.85);
-      padding: 48px 56px;
-      max-width: 520px;
-      width: 90%;
-      text-align: left;
-      cursor: pointer;
-      transition: border-color 0.12s, background 0.12s;
-    }
-
-    .empty-state:hover,
-    .viewport.dragover .empty-state {
-      border-color: var(--text);
-      background: var(--surface);
-    }
-
-    .empty-tag {
-      font-family: var(--mono);
-      font-size: 10px;
-      text-transform: uppercase;
-      letter-spacing: 0.1em;
-      color: var(--muted);
-      margin-bottom: 12px;
-    }
-
-    .empty-title {
-      font-size: 20px;
-      font-weight: 600;
-      letter-spacing: -0.02em;
-      margin-bottom: 8px;
-    }
-
-    .empty-desc {
-      font-size: 13px;
-      color: var(--muted);
-      line-height: 1.6;
-      margin-bottom: 24px;
-    }
-
-    .empty-shortcuts {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      font-family: var(--mono);
-      font-size: 11px;
-    }
-
-    .kbd {
-      border: 1px solid var(--border-strong);
-      background: var(--surface-2);
-      padding: 3px 7px;
-      color: var(--text);
-    }
-
-    /* Stage */
-    .stage {
-      display: none;
-      position: relative;
-      line-height: 0;
-      max-width: calc(100vw - 48px);
-      max-height: calc(100vh - 160px);
-      border: 1px solid var(--border);
-    }
-
-    .stage.visible {
-      display: inline-block;
-    }
-
-    .stage img {
-      display: block;
-      max-width: calc(100vw - 50px);
-      max-height: calc(100vh - 162px);
-      width: auto;
-      height: auto;
-      object-fit: contain;
-      pointer-events: none;
-    }
-
-    .before-clip {
-      position: absolute;
-      inset: 0;
-      overflow: hidden;
-    }
-
-    .split-line {
-      position: absolute;
-      top: 0;
-      bottom: 0;
-      width: 1px;
-      background: var(--text);
-      cursor: ew-resize;
-      z-index: 10;
-    }
-
-    .split-handle {
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      width: 24px;
-      height: 24px;
-      background: var(--bg);
-      border: 1px solid var(--text);
-      color: var(--text);
-      font-family: var(--mono);
-      font-size: 10px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-
-    .stage-label {
-      position: absolute;
-      top: 8px;
-      padding: 3px 6px;
-      background: rgba(9, 9, 11, 0.85);
-      border: 1px solid var(--border);
-      font-family: var(--mono);
-      font-size: 10px;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      color: var(--muted);
-      pointer-events: none;
-      line-height: 1.2;
-      z-index: 5;
-    }
-
-    .stage-label.left { left: 8px; }
-    .stage-label.right { right: 8px; }
-
-    /* Loading Overlay */
-    .busy-overlay {
-      position: absolute;
-      inset: 0;
-      background: rgba(9, 9, 11, 0.88);
-      display: none;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 10px;
-      z-index: 30;
-      font-family: var(--mono);
-    }
-
-    .busy-overlay.active {
-      display: flex;
-    }
-
-    .progress-bar {
-      width: 180px;
-      height: 2px;
-      background: var(--border);
-      position: relative;
-      overflow: hidden;
-    }
-
-    .progress-bar::after {
-      content: "";
-      position: absolute;
-      top: 0;
-      left: -40%;
-      width: 40%;
-      height: 100%;
-      background: var(--text);
-      animation: slide 0.9s infinite linear;
-    }
-
-    @keyframes slide {
-      to { left: 100%; }
-    }
-
-    .busy-title {
-      font-size: 12px;
-      color: var(--text);
-      letter-spacing: 0.05em;
-      text-transform: uppercase;
-    }
-
-    .busy-sub {
-      font-size: 11px;
-      color: var(--muted);
-      max-width: 380px;
-      text-align: center;
-      line-height: 1.5;
-    }
-
-    .error-toast {
-      position: absolute;
-      top: 12px;
-      left: 50%;
-      transform: translateX(-50%);
-      background: #2a0a0a;
-      border: 1px solid #ef4444;
-      color: #fca5a5;
-      font-family: var(--mono);
-      font-size: 11px;
-      padding: 8px 14px;
-      z-index: 40;
-      display: none;
-    }
-
-    .error-toast.visible {
-      display: block;
-    }
-
-    /* Bottom Status Bar */
-    .statusbar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0 16px;
-      background: var(--surface);
-      border-top: 1px solid var(--border);
-      font-family: var(--mono);
-      font-size: 11px;
-      color: var(--muted);
-    }
-
-    .status-group {
-      display: flex;
-      align-items: center;
-      gap: 20px;
-    }
-
-    .status-kv span {
-      color: var(--text);
-    }
-
-    input[type="file"] {
-      display: none;
-    }
-  </style>
+  <title>REMOVEBG — Local AI Segmentation Studio</title>
+  <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
   <div class="app-shell">
-    <!-- Top Header -->
+    <!-- 1. Top Hardware & Telemetry Header -->
     <header class="topbar">
       <div class="brand">
         <div class="brand-mark">REMOVEBG</div>
@@ -550,26 +24,46 @@
       </div>
     </header>
 
-    <!-- Main Control Strip -->
+    <!-- 2. Studio Control Strip -->
     <div class="controlbar">
       <div class="control-cluster">
-        <span class="cluster-label">Hardware Preset</span>
+        <span class="cluster-label">Preset</span>
         <div class="segmented" id="tierSelector">
-          <button type="button" class="seg-btn" data-tier="low" title="Fastest inference (768px Lite). Best for integrated GPUs, CPUs, and older laptops.">
+          <button
+            type="button"
+            class="seg-btn"
+            data-tier="low"
+            title="BiRefNet-Lite (Swin-T) @ 768x768 tensor resolution (44% fewer spatial tokens for ~2x faster inference on CPUs & integrated GPUs)."
+          >
             <span>LOW-END</span>
-            <span class="seg-sub">FAST</span>
+            <span class="seg-sub">768PX LITE</span>
           </button>
-          <button type="button" class="seg-btn active" data-tier="mid" title="1024px Lite model. Ideal balance of speed and edge accuracy for most machines.">
+          <button
+            type="button"
+            class="seg-btn active"
+            data-tier="mid"
+            title="BiRefNet-Lite (Swin-T) @ native 1024x1024 tensor resolution. Sharp fine-edge accuracy with a low ~200 MB memory footprint."
+          >
             <span>MID-RANGE</span>
-            <span class="seg-sub">BALANCED</span>
+            <span class="seg-sub">1024PX LITE</span>
           </button>
-          <button type="button" class="seg-btn" data-tier="high" title="Full Swin-L 1024px model. Maximum hair/fur detail for high-VRAM/RAM machines.">
+          <button
+            type="button"
+            class="seg-btn"
+            data-tier="high"
+            title="BiRefNet-Full (Swin-L) @ 1024x1024 tensor resolution (~900 MB). Maximum precision for complex hair strands, fur, and fine meshes."
+          >
             <span>HIGH-END</span>
-            <span class="seg-sub">ULTRA</span>
+            <span class="seg-sub">1024PX FULL</span>
           </button>
         </div>
 
-        <button type="button" class="toggle-btn active" id="btnDefringe" title="Remove background color bleed from semi-transparent hair and edges">
+        <button
+          type="button"
+          class="toggle-btn active"
+          id="btnDefringe"
+          title="Morphological edge color decontamination: removes background color halos from semi-transparent hair and border pixels"
+        >
           <span class="toggle-indicator"></span>
           <span>DEFRINGE</span>
         </button>
@@ -603,11 +97,11 @@
       </div>
     </div>
 
-    <!-- Canvas Viewport -->
+    <!-- 3. Interactive Canvas Viewport -->
     <main class="viewport checkerboard-canvas" id="viewport">
       <div class="error-toast" id="errorToast"></div>
 
-      <!-- Dropzone when no file loaded -->
+      <!-- Empty / Dropzone State -->
       <div class="empty-state" id="emptyState">
         <div class="empty-tag">INPUT // SOURCE IMAGE</div>
         <div class="empty-title">Drop image file, click to browse, or paste</div>
@@ -621,7 +115,7 @@
         </div>
       </div>
 
-      <!-- Comparison Stage -->
+      <!-- Split-Plane Comparison Stage -->
       <div class="stage" id="stage">
         <img id="afterImg" alt="Cutout Result" />
         <div class="before-clip" id="beforeClip">
@@ -634,7 +128,7 @@
         </div>
       </div>
 
-      <!-- Busy Overlay -->
+      <!-- Inference Progress Overlay -->
       <div class="busy-overlay" id="busyOverlay">
         <div class="progress-bar"></div>
         <div class="busy-title" id="busyTitle">RUNNING INFERENCE</div>
@@ -642,7 +136,7 @@
       </div>
     </main>
 
-    <!-- Bottom Telemetry Bar -->
+    <!-- 4. Bottom Telemetry Bar -->
     <footer class="statusbar">
       <div class="status-group">
         <div class="status-kv">FILE: <span id="statFile">NONE</span></div>
@@ -656,314 +150,6 @@
     </footer>
   </div>
 
-  <script>
-    let currentTier = "mid";
-    let defringeEnabled = true;
-    let viewMode = "split"; // "split" | "cutout" | "original"
-    let splitPct = 50;
-    let isDragging = false;
-
-    let currentFile = null;
-    let currentResultBlob = null;
-    let originalUrl = null;
-    let resultUrl = null;
-    let statusData = null;
-
-    const viewport = document.getElementById("viewport");
-    const emptyState = document.getElementById("emptyState");
-    const stage = document.getElementById("stage");
-    const beforeImg = document.getElementById("beforeImg");
-    const afterImg = document.getElementById("afterImg");
-    const beforeClip = document.getElementById("beforeClip");
-    const splitLine = document.getElementById("splitLine");
-    const lblLeft = document.getElementById("lblLeft");
-    const lblRight = document.getElementById("lblRight");
-
-    const busyOverlay = document.getElementById("busyOverlay");
-    const busyTitle = document.getElementById("busyTitle");
-    const busySub = document.getElementById("busySub");
-    const errorToast = document.getElementById("errorToast");
-
-    const fileInput = document.getElementById("fileInput");
-    const btnOpen = document.getElementById("btnOpen");
-    const btnCopy = document.getElementById("btnCopy");
-    const btnDownload = document.getElementById("btnDownload");
-    const btnDefringe = document.getElementById("btnDefringe");
-
-    const hwCompute = document.getElementById("hwCompute");
-    const hwCache = document.getElementById("hwCache");
-    const statFile = document.getElementById("statFile");
-    const statDim = document.getElementById("statDim");
-    const statTier = document.getElementById("statTier");
-    const statTime = document.getElementById("statTime");
-
-    function setError(msg) {
-      if (!msg) {
-        errorToast.classList.remove("visible");
-        errorToast.textContent = "";
-        return;
-      }
-      errorToast.textContent = `ERROR // ${msg}`;
-      errorToast.classList.add("visible");
-    }
-
-    function updateCacheDisplay() {
-      if (!statusData || !statusData.tiers) return;
-      const tierInfo = statusData.tiers[currentTier];
-      if (!tierInfo) return;
-      hwCache.textContent = tierInfo.cached ? "READY OFFLINE" : "DOWNLOADS ON 1ST RUN";
-    }
-
-    async function loadStatus(initial = false) {
-      try {
-        const res = await fetch("/api/status");
-        statusData = await res.json();
-        hwCompute.textContent = `${statusData.device_label} (${statusData.precision})`.toUpperCase();
-        if (initial && statusData.recommended_tier) {
-          selectTier(statusData.recommended_tier, false);
-        }
-        updateCacheDisplay();
-      } catch (_) {
-        hwCompute.textContent = "LOCAL ENGINE";
-      }
-    }
-
-    function selectTier(tier, reprocess = true) {
-      currentTier = tier;
-      document.querySelectorAll("#tierSelector .seg-btn").forEach((btn) => {
-        btn.classList.toggle("active", btn.getAttribute("data-tier") === tier);
-      });
-      updateCacheDisplay();
-      if (reprocess && currentFile) {
-        runInference();
-      }
-    }
-
-    document.querySelectorAll("#tierSelector .seg-btn").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const t = btn.getAttribute("data-tier");
-        if (t && t !== currentTier) selectTier(t, true);
-      });
-    });
-
-    btnDefringe.addEventListener("click", () => {
-      defringeEnabled = !defringeEnabled;
-      btnDefringe.classList.toggle("active", defringeEnabled);
-      if (currentFile) runInference();
-    });
-
-    function setViewMode(mode) {
-      viewMode = mode;
-      document.getElementById("viewSplit").classList.toggle("active", mode === "split");
-      document.getElementById("viewCutout").classList.toggle("active", mode === "cutout");
-      document.getElementById("viewOriginal").classList.toggle("active", mode === "original");
-      renderStageView();
-    }
-
-    document.getElementById("viewSplit").addEventListener("click", () => setViewMode("split"));
-    document.getElementById("viewCutout").addEventListener("click", () => setViewMode("cutout"));
-    document.getElementById("viewOriginal").addEventListener("click", () => setViewMode("original"));
-
-    function renderStageView() {
-      if (viewMode === "split") {
-        beforeClip.style.display = "block";
-        splitLine.style.display = "block";
-        lblLeft.style.display = "block";
-        lblRight.style.display = "block";
-        beforeClip.style.clipPath = `inset(0 ${100 - splitPct}% 0 0)`;
-        splitLine.style.left = `${splitPct}%`;
-      } else if (viewMode === "cutout") {
-        beforeClip.style.display = "none";
-        splitLine.style.display = "none";
-        lblLeft.style.display = "none";
-        lblRight.style.display = "block";
-      } else {
-        beforeClip.style.display = "block";
-        beforeClip.style.clipPath = "inset(0 0 0 0)";
-        splitLine.style.display = "none";
-        lblLeft.style.display = "block";
-        lblRight.style.display = "none";
-      }
-    }
-
-    function updateSplitFromPointer(clientX) {
-      if (!isDragging || viewMode !== "split") return;
-      const rect = stage.getBoundingClientRect();
-      if (!rect.width) return;
-      splitPct = Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100));
-      renderStageView();
-    }
-
-    stage.addEventListener("mousedown", (e) => {
-      if (viewMode !== "split") return;
-      isDragging = true;
-      updateSplitFromPointer(e.clientX);
-    });
-    window.addEventListener("mousemove", (e) => updateSplitFromPointer(e.clientX));
-    window.addEventListener("mouseup", () => { isDragging = false; });
-
-    stage.addEventListener("touchstart", (e) => {
-      if (viewMode !== "split") return;
-      isDragging = true;
-      if (e.touches[0]) updateSplitFromPointer(e.touches[0].clientX);
-    }, { passive: true });
-    window.addEventListener("touchmove", (e) => {
-      if (isDragging && e.touches[0]) updateSplitFromPointer(e.touches[0].clientX);
-    }, { passive: true });
-    window.addEventListener("touchend", () => { isDragging = false; });
-
-    // Backdrop swatches
-    document.querySelectorAll(".swatch[data-bg]").forEach((sw) => {
-      sw.addEventListener("click", () => {
-        document.querySelectorAll(".swatch").forEach((s) => s.classList.remove("active"));
-        sw.classList.add("active");
-        const bg = sw.getAttribute("data-bg");
-        if (bg === "checker") {
-          viewport.style.background = "";
-          viewport.classList.add("checkerboard-canvas");
-        } else {
-          viewport.classList.remove("checkerboard-canvas");
-          viewport.style.background = bg;
-        }
-      });
-    });
-
-    document.getElementById("colorPicker").addEventListener("input", (e) => {
-      document.querySelectorAll(".swatch").forEach((s) => s.classList.remove("active"));
-      e.target.classList.add("active");
-      viewport.classList.remove("checkerboard-canvas");
-      viewport.style.background = e.target.value;
-    });
-
-    // File input & Drag/Drop/Paste
-    emptyState.addEventListener("click", () => fileInput.click());
-    btnOpen.addEventListener("click", () => {
-      fileInput.value = "";
-      fileInput.click();
-    });
-
-    fileInput.addEventListener("change", (e) => {
-      if (e.target.files && e.target.files[0]) loadFile(e.target.files[0]);
-    });
-
-    window.addEventListener("dragover", (e) => {
-      e.preventDefault();
-      viewport.classList.add("dragover");
-    });
-
-    window.addEventListener("dragleave", () => {
-      viewport.classList.remove("dragover");
-    });
-
-    window.addEventListener("drop", (e) => {
-      e.preventDefault();
-      viewport.classList.remove("dragover");
-      if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-        loadFile(e.dataTransfer.files[0]);
-      }
-    });
-
-    window.addEventListener("paste", (e) => {
-      const items = e.clipboardData?.items || [];
-      for (const item of items) {
-        if (item.type.startsWith("image/")) {
-          const blob = item.getAsFile();
-          if (blob) loadFile(blob);
-          break;
-        }
-      }
-    });
-
-    btnCopy.addEventListener("click", async () => {
-      if (!currentResultBlob) return;
-      try {
-        await navigator.clipboard.write([
-          new ClipboardItem({ "image/png": currentResultBlob })
-        ]);
-        const prev = btnCopy.textContent;
-        btnCopy.textContent = "COPIED";
-        setTimeout(() => { btnCopy.textContent = prev; }, 1400);
-      } catch (_) {
-        setError("Clipboard copy not supported in this browser context.");
-      }
-    });
-
-    function loadFile(file) {
-      currentFile = file;
-      if (originalUrl) URL.revokeObjectURL(originalUrl);
-      originalUrl = URL.createObjectURL(file);
-
-      beforeImg.src = originalUrl;
-      afterImg.src = originalUrl;
-
-      emptyState.style.display = "none";
-      stage.classList.add("visible");
-      statFile.textContent = (file.name || "CLIPBOARD_IMAGE").toUpperCase();
-
-      runInference();
-    }
-
-    async function runInference() {
-      if (!currentFile) return;
-      setError(null);
-      busyOverlay.classList.add("active");
-
-      const tierInfo = statusData?.tiers?.[currentTier];
-      const isCached = tierInfo ? tierInfo.cached : true;
-      busyTitle.textContent = isCached
-        ? `PROCESSING // ${currentTier.toUpperCase()} PRESET`
-        : `DOWNLOADING MODEL WEIGHTS (ONE-TIME) // ${currentTier.toUpperCase()}`;
-      busySub.textContent = isCached
-        ? "Running local BiRefNet segmentation at full bit depth."
-        : "Fetching model weights from Hugging Face Hub (~1 min). All future runs execute 100% offline.";
-
-      const fd = new FormData();
-      fd.append("file", currentFile);
-      fd.append("tier", currentTier);
-      fd.append("defringe", defringeEnabled ? "true" : "false");
-
-      try {
-        const res = await fetch("/api/remove-bg", { method: "POST", body: fd });
-        if (!res.ok) {
-          let detail = `HTTP ${res.status}`;
-          try {
-            const j = await res.json();
-            if (j.detail) detail = j.detail;
-          } catch (_) {}
-          throw new Error(detail);
-        }
-
-        const ms = parseFloat(res.headers.get("X-Inference-Time-Ms") || "0");
-        const w = res.headers.get("X-Image-Width") || "";
-        const h = res.headers.get("X-Image-Height") || "";
-        const tierLabel = res.headers.get("X-Tier-Used") || currentTier.toUpperCase();
-
-        currentResultBlob = await res.blob();
-        if (resultUrl) URL.revokeObjectURL(resultUrl);
-        resultUrl = URL.createObjectURL(currentResultBlob);
-
-        afterImg.src = resultUrl;
-
-        const stem = (currentFile.name || "image").replace(/\.[^/.]+$/, "");
-        btnDownload.href = resultUrl;
-        btnDownload.download = `${stem}-cutout.png`;
-        btnDownload.classList.remove("disabled");
-        btnCopy.classList.remove("disabled");
-
-        statDim.textContent = w && h ? `${w}×${h} PX` : "ORIGINAL";
-        statTier.textContent = tierLabel.toUpperCase();
-        statTime.textContent = ms ? `${(ms / 1000).toFixed(2)}S` : "DONE";
-
-        setViewMode("split");
-        loadStatus(false);
-      } catch (err) {
-        setError(err.message || "Failed to process image.");
-      } finally {
-        busyOverlay.classList.remove("active");
-      }
-    }
-
-    loadStatus(true);
-  </script>
+  <script src="/static/app.js"></script>
 </body>
 </html>
