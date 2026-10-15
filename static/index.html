@@ -115,25 +115,75 @@
         </div>
 
         <div class="sidebar-section">
-          <div class="section-header">EDGE REFINEMENT</div>
-          <button
-            type="button"
-            class="toggle-card active"
-            id="btnDefringe"
-            title="Morphological edge color decontamination: removes background color halos from semi-transparent hair and border pixels"
-          >
-            <div class="toggle-card-top">
-              <span>DEFRINGE EDGES</span>
-              <span class="toggle-indicator"></span>
-            </div>
-            <div class="preset-desc">Removes background color bleed along hair &amp; soft borders</div>
-          </button>
+          <div class="section-header">EDGE &amp; REFLECTION REFINEMENT</div>
+          <div class="preset-stack">
+            <button
+              type="button"
+              class="toggle-card active"
+              id="btnDefringe"
+              title="Morphological edge color decontamination: removes background color halos from semi-transparent hair and border pixels"
+            >
+              <div class="toggle-card-top">
+                <span>DEFRINGE EDGES</span>
+                <span class="toggle-indicator"></span>
+              </div>
+              <div class="preset-desc">Removes background color bleed along hair &amp; soft borders</div>
+            </button>
+
+            <button
+              type="button"
+              class="toggle-card active"
+              id="btnDespill"
+              title="Neutralizes colored light reflections (color spill/bounce) from the removed background on hair, skin rims, and glass"
+            >
+              <div class="toggle-card-top">
+                <span>SUPPRESS COLOR SPILL</span>
+                <span class="toggle-indicator"></span>
+              </div>
+              <div class="preset-desc">Neutralizes background color reflections on rims &amp; glass</div>
+            </button>
+
+            <button
+              type="button"
+              class="toggle-card"
+              id="btnMatting"
+              title="Uses ZhengPeng7/BiRefNet-matting to preserve natural semi-transparency on see-through glass, windows, eyeglasses, water &amp; sheer fabric"
+            >
+              <div class="toggle-card-top" style="padding-right: 14px;">
+                <span>GLASS &amp; SHEER MATTING</span>
+                <span class="toggle-indicator"></span>
+                <span
+                  class="tier-dot has-tooltip"
+                  id="dot-matting"
+                  data-tooltip="Checking cache status..."
+                ></span>
+              </div>
+              <div class="preset-desc">BiRefNet-Matting for see-through glass, windows &amp; smoke</div>
+            </button>
+          </div>
         </div>
 
         <div class="sidebar-section">
           <div class="section-header">SOURCE IMAGE</div>
           <button type="button" class="action-btn full-width" id="btnOpen">OPEN IMAGE FILE</button>
           <input type="file" id="fileInput" accept="image/*" multiple />
+        </div>
+
+        <div class="sidebar-section requires-image">
+          <div class="section-header-row">
+            <span class="section-header">SHADOW / REFLECTION CUTOFF</span>
+            <span class="scale-pct" id="shadowCutoffLabel">0%</span>
+          </div>
+          <input
+            type="range"
+            class="studio-slider full-width"
+            id="shadowCutoffSlider"
+            min="0"
+            max="75"
+            step="1"
+            value="0"
+          />
+          <div class="field-hint">Slices off faint semi-transparent floor reflections and ghost shadows in real time.</div>
         </div>
 
         <div class="sidebar-section requires-image">

@@ -134,11 +134,13 @@ SYSTEM_MEMORY_GB: float = get_system_memory_gb()
 # pyramids; on 8 GB systems, 1536x1536 (2.25x pixel density of 1024x1024) prevents swap thrashing.
 HR_RESOLUTION: int = 2048 if SYSTEM_MEMORY_GB >= 14.0 else 1536
 
-# Supported Hugging Face model repositories — each tier maps to a distinct trained model.
+# Supported Hugging Face model repositories — each tier maps to a distinct trained model,
+# plus `ZhengPeng7/BiRefNet-matting` for trimap-free alpha matting of glass/water/sheer materials.
 MODELS: dict[str, str] = {
-    "lite": "ZhengPeng7/BiRefNet_lite",  # Swin-T backbone trained at 1024x1024
-    "full": "ZhengPeng7/BiRefNet",       # Swin-L backbone trained at 1024x1024
-    "hr": "ZhengPeng7/BiRefNet_HR",      # Swin-L high-res backbone (1536px / 2048px)
+    "lite": "ZhengPeng7/BiRefNet_lite",         # Swin-T backbone trained at 1024x1024
+    "full": "ZhengPeng7/BiRefNet",              # Swin-L backbone trained at 1024x1024
+    "hr": "ZhengPeng7/BiRefNet_HR",             # Swin-L high-res backbone (1536px / 2048px)
+    "matting": "ZhengPeng7/BiRefNet-matting",   # Swin-L alpha matting backbone for glass/sheer/water
 }
 
 # Hardware execution tiers. Each tier loads a dedicated BiRefNet checkpoint.
@@ -428,29 +430,114 @@ def decontaminate_edge_colors(
     return np.clip(cleaned_rgb, 0, 255).astype(np.uint8)
 
 
+def suppress_color_spill(
+    rgb_np: np.ndarray, mask_pil: Image.Image, alpha_norm: np.ndarray
+) -> np.ndarray:
+    """
+    Neutralizes background color spill (rim reflections & color bounce) along
+    the outer boundary of the subject and inside semi-transparent glass/hair.
+
+    Algorithm:
+    1. Estimates the local removed background RGB color (`local_bg`) adjacent to
+       the subject via normalized box-filter convolution over background pixels (`alpha < 0.15`).
+    2. Computes a spill receiver weight map combining:
+       - The outer solid rim of the subject (via morphological erosion `MinFilter(15)`).
+       - Semi-transparent regions (`0.02 < alpha < 0.98`, such as hair, glass, or sheer fabric).
+    3. Projects each receiver pixel's chromatic vector (`RGB - Luma`) onto the local
+       background's chromatic vector (`B_local - B_luma`). Any positive chromatic alignment
+       (indicating background color bounce/spill) is subtracted while preserving 100% of
+       the pixel's original luminance and sharpness.
+    """
+    bg_mask = (alpha_norm < 0.15).astype(np.float32)
+    if not np.any(bg_mask > 0):
+        return rgb_np
+
+    rgb_float = rgb_np.astype(np.float32)
+
+    # Compute spatially-varying local background color via fast C-accelerated BoxBlur
+    bg_weight_u8 = (bg_mask * 255.0).astype(np.uint8)
+    bg_weight_blur = (
+        np.array(
+            Image.fromarray(bg_weight_u8, mode="L").filter(ImageFilter.BoxBlur(24)),
+            dtype=np.float32,
+        )
+        / 255.0
+    )
+
+    prem_bg_u8 = np.clip(rgb_float * bg_mask[..., None], 0, 255).astype(np.uint8)
+    prem_bg_blur = np.array(
+        Image.fromarray(prem_bg_u8, mode="RGB").filter(ImageFilter.BoxBlur(24)),
+        dtype=np.float32,
+    )
+
+    # Fall back to global median background color where local background weight is zero
+    global_bg = np.median(rgb_float[bg_mask > 0.5], axis=0)
+    valid_w = bg_weight_blur[..., None] > 0.02
+    local_bg = np.where(
+        valid_w,
+        prem_bg_blur / np.maximum(bg_weight_blur[..., None], 0.02),
+        global_bg,
+    )
+
+    # Build rim + semi-transparent receiver weight map
+    eroded_norm = (
+        np.array(mask_pil.filter(ImageFilter.MinFilter(15)), dtype=np.float32) / 255.0
+    )
+    solid_rim_weight = np.clip(alpha_norm - eroded_norm, 0.0, 1.0)
+    translucent_weight = np.clip(4.0 * alpha_norm * (1.0 - alpha_norm), 0.0, 1.0)
+    receiver_weight = np.clip(
+        np.maximum(solid_rim_weight * 0.7, translucent_weight * 0.85), 0.0, 1.0
+    ) * (alpha_norm > 0.02)
+
+    if not np.any(receiver_weight > 0.01):
+        return rgb_np
+
+    # Chromatic projection: isolate color cast without altering pixel luminance
+    fg_luma = np.mean(rgb_float, axis=-1, keepdims=True)
+    bg_luma = np.mean(local_bg, axis=-1, keepdims=True)
+    fg_chroma = rgb_float - fg_luma
+    bg_chroma = local_bg - bg_luma
+
+    bg_chroma_norm_sq = np.sum(bg_chroma * bg_chroma, axis=-1, keepdims=True) + 1e-5
+    proj = np.sum(fg_chroma * bg_chroma, axis=-1, keepdims=True) / bg_chroma_norm_sq
+    # Only subtract positive chromatic alignment (up to 100% of background chroma)
+    spill_amount = np.clip(proj, 0.0, 1.0) * receiver_weight[..., None]
+
+    despilled = rgb_float - spill_amount * bg_chroma
+    return np.clip(despilled, 0, 255).astype(np.uint8)
+
+
 def segment_foreground(
     raw_image: Image.Image,
     tier: str = "mid",
     defringe: bool = True,
+    despill: bool = True,
+    matting: bool = False,
 ) -> tuple[Image.Image, float, dict[str, Any]]:
     """
     Executes the full background removal pipeline on a PIL image:
-    1. Resolves the requested hardware tier and ensures the backbone is loaded.
+    1. Resolves the requested hardware tier (or `BiRefNet-matting` when `matting=True`)
+       and ensures the backbone is loaded.
     2. Applies EXIF orientation transposition (fixing rotated smartphone photos)
        and projects the input to a clean 3-channel RGB image.
-    3. Resizes to the tier's internal tensor resolution (768px or 1024px) and
-       runs a forward pass in FP16 (CUDA/MPS) or FP32 (CPU).
+    3. Resizes to the tier's internal tensor resolution and runs a forward pass
+       in FP16 (CUDA/MPS) or FP32 (CPU).
     4. Upsamples the predicted sigmoid alpha matte back to the exact original
        image dimensions `(orig_w, orig_h)` using Lanczos interpolation.
-    5. Optionally applies morphological edge color decontamination (defringe)
-       and packs the final 32-bit RGBA image.
+    5. Optionally applies morphological edge color decontamination (`defringe`)
+       and rim color spill / reflection suppression (`despill`).
     """
     if tier not in TIERS:
         tier = RECOMMENDED_TIER
 
-    tier_cfg = TIERS[tier]
-    model_key: str = tier_cfg["model_key"]
-    internal_res: int = tier_cfg["resolution"]
+    tier_cfg = dict(TIERS[tier])
+    if matting:
+        model_key = "matting"
+        internal_res = 1024
+        tier_cfg["sublabel"] = "Matting / 1024px Glass & Sheer"
+    else:
+        model_key = tier_cfg["model_key"]
+        internal_res = tier_cfg["resolution"]
 
     # Ensure model weights are resident in memory before starting inference timer.
     model = MANAGER.get_or_load(model_key)
@@ -479,10 +566,15 @@ def segment_foreground(
     )
 
     alpha_np = np.array(mask_pil, dtype=np.uint8)
+    alpha_norm = alpha_np.astype(np.float32) / 255.0
+
     if defringe:
         rgb_np = decontaminate_edge_colors(rgb_image, alpha_np)
     else:
         rgb_np = np.array(rgb_image, dtype=np.uint8)
+
+    if despill:
+        rgb_np = suppress_color_spill(rgb_np, mask_pil, alpha_norm)
 
     # Combine RGB channels with the 8-bit alpha matte into a 32-bit RGBA image.
     rgba_np = np.dstack((rgb_np, alpha_np))
@@ -540,6 +632,11 @@ def api_status() -> dict[str, Any]:
         "recommended_tier": RECOMMENDED_TIER,
         "active_model": MANAGER.active_model_key,
         "tiers": tiers_status,
+        "matting": {
+            "repo_id": MODELS["matting"],
+            "cached": is_model_cached_locally(MODELS["matting"]),
+            "active": MANAGER.active_model_key == "matting",
+        },
     }
 
 
@@ -548,6 +645,8 @@ async def api_remove_bg(
     file: UploadFile = File(...),
     tier: str = Form("mid"),
     defringe: bool = Form(True),
+    despill: bool = Form(True),
+    matting: bool = Form(False),
 ) -> Response:
     """
     Accepts an uploaded image file and returns a full-resolution, lossless
@@ -572,7 +671,7 @@ async def api_remove_bg(
         # Offload blocking PyTorch inference to a worker thread so the ASGI
         # event loop stays responsive to status polls and client cancellation.
         result_img, elapsed_ms, tier_cfg = await asyncio.to_thread(
-            segment_foreground, pil_img, tier, defringe
+            segment_foreground, pil_img, tier, defringe, despill, matting
         )
     except Exception as exc:
         raise HTTPException(

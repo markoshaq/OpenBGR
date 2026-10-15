@@ -38,6 +38,9 @@ const state = {
   confirmCloseTab: localStorage.getItem(STORAGE_KEY_CONFIRM_CLOSE) !== "false",
   tier: "mid",               // "low" (BiRefNet_lite 1K) | "mid" (BiRefNet Full 1K) | "high" (BiRefNet_HR 2K)
   defringe: true,            // Morphological edge color decontamination toggle
+  despill: true,             // Rim color spill / background reflection neutralization toggle
+  matting: false,            // BiRefNet-matting mode for glass, windows & sheer materials
+  shadowCutoff: 0,           // Alpha threshold (0 - 75%) to slice off floor reflections & shadows
   viewMode: "split",         // "split" | "cutout" | "original"
   splitPercent: 50,          // Horizontal divider position (0 - 100)
   isDraggingSplit: false,    // Pointer drag state for split comparator
@@ -112,6 +115,10 @@ const dom = {
   btnCopy: document.getElementById("btnCopy"),
   btnDownload: document.getElementById("btnDownload"),
   btnDefringe: document.getElementById("btnDefringe"),
+  btnDespill: document.getElementById("btnDespill"),
+  btnMatting: document.getElementById("btnMatting"),
+  shadowCutoffSlider: document.getElementById("shadowCutoffSlider"),
+  shadowCutoffLabel: document.getElementById("shadowCutoffLabel"),
 
   exportFormatSelect: document.getElementById("exportFormatSelect"),
   formatHint: document.getElementById("formatHint"),
@@ -142,6 +149,9 @@ function saveStateToActiveTab() {
   if (!tab) return;
   tab.tier = state.tier;
   tab.defringe = state.defringe;
+  tab.despill = state.despill;
+  tab.matting = state.matting;
+  tab.shadowCutoff = state.shadowCutoff;
   tab.viewMode = state.viewMode;
   tab.splitPercent = state.splitPercent;
   tab.resultBlob = state.resultBlob;
@@ -404,6 +414,9 @@ async function switchToTab(tabId) {
   state.naturalHeight = tab.naturalHeight;
   state.tier = tab.tier;
   state.defringe = tab.defringe;
+  state.despill = tab.despill ?? true;
+  state.matting = tab.matting ?? false;
+  state.shadowCutoff = tab.shadowCutoff ?? 0;
   state.viewMode = tab.viewMode;
   state.splitPercent = tab.splitPercent;
   state.exportFormat = tab.exportFormat;
@@ -419,6 +432,14 @@ async function switchToTab(tabId) {
     btn.classList.toggle("active", btn.getAttribute("data-tier") === state.tier);
   });
   dom.btnDefringe.classList.toggle("active", state.defringe);
+  dom.btnDespill?.classList.toggle("active", state.despill);
+  dom.btnMatting?.classList.toggle("active", state.matting);
+  if (dom.shadowCutoffSlider) {
+    dom.shadowCutoffSlider.value = String(state.shadowCutoff);
+  }
+  if (dom.shadowCutoffLabel) {
+    dom.shadowCutoffLabel.textContent = `${state.shadowCutoff}%`;
+  }
   dom.exportFormatSelect.value = state.exportFormat;
 
   document.querySelectorAll(".swatch").forEach((s) => {
@@ -558,7 +579,7 @@ function applyDotState(dotEl, status) {
 }
 
 /**
- * Updates the status dots and tooltips on all 3 preset buttons.
+ * Updates the status dots and tooltips on all 3 preset buttons and the Matting toggle.
  */
 function updateCacheIndicator() {
   const tiers = state.serverStatus?.tiers;
@@ -569,12 +590,18 @@ function updateCacheIndicator() {
     const status = getTierAvailability(tiers[key]);
     applyDotState(dotEl, status);
   });
+
+  if (state.serverStatus?.matting) {
+    const matDot = document.getElementById("dot-matting");
+    applyDotState(matDot, getTierAvailability(state.serverStatus.matting));
+  }
 }
 
 /**
  * Renders the master segmented image (`masterCutoutImg`) onto an offscreen
- * canvas at the target `exportWidth` x `exportHeight` and `format`
- * ("png", "webp", "jpg", or "mask") and returns a Promise resolving to the Blob.
+ * canvas at the target `exportWidth` x `exportHeight`, applies real-time
+ * `shadowCutoff` alpha thresholding, and encodes to `format`
+ * ("png", "webp", "jpg", or "mask").
  *
  * @param {"png"|"webp"|"jpg"|"mask"} format
  * @returns {Promise<Blob>}
@@ -590,6 +617,7 @@ async function buildExportBlob(format) {
     targetW === srcW &&
     targetH === srcH &&
     state.activeBackdrop === "checker" &&
+    state.shadowCutoff === 0 &&
     state.resultBlob
   ) {
     return state.resultBlob;
@@ -602,12 +630,19 @@ async function buildExportBlob(format) {
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = "high";
 
+  // Draw the cutout onto an intermediate buffer if shadow/reflection cutoff or mask is needed
+  const cutoffByte = Math.round((state.shadowCutoff / 100) * 255);
+
   if (format === "mask") {
     ctx.drawImage(masterCutoutImg, 0, 0, targetW, targetH);
     const imgData = ctx.getImageData(0, 0, targetW, targetH);
     const data = imgData.data;
+    const span = Math.max(1, 255 - cutoffByte);
     for (let i = 0; i < data.length; i += 4) {
-      const alpha = data[i + 3];
+      let alpha = data[i + 3];
+      if (cutoffByte > 0) {
+        alpha = alpha <= cutoffByte ? 0 : Math.min(255, Math.round(((alpha - cutoffByte) * 255) / span));
+      }
       data[i] = alpha;
       data[i + 1] = alpha;
       data[i + 2] = alpha;
@@ -622,13 +657,39 @@ async function buildExportBlob(format) {
     });
   }
 
-  if (format === "jpg" || state.activeBackdrop !== "checker") {
-    ctx.fillStyle =
-      state.activeBackdrop === "checker" ? "#ffffff" : state.activeBackdrop;
-    ctx.fillRect(0, 0, targetW, targetH);
-  }
+  if (cutoffByte > 0) {
+    // Apply alpha cutoff on an offscreen foreground layer before compositing onto Matte backdrop
+    const fgCanvas = document.createElement("canvas");
+    fgCanvas.width = targetW;
+    fgCanvas.height = targetH;
+    const fgCtx = fgCanvas.getContext("2d");
+    fgCtx.imageSmoothingEnabled = true;
+    fgCtx.imageSmoothingQuality = "high";
+    fgCtx.drawImage(masterCutoutImg, 0, 0, targetW, targetH);
 
-  ctx.drawImage(masterCutoutImg, 0, 0, targetW, targetH);
+    const imgData = fgCtx.getImageData(0, 0, targetW, targetH);
+    const data = imgData.data;
+    const span = Math.max(1, 255 - cutoffByte);
+    for (let i = 3; i < data.length; i += 4) {
+      const a = data[i];
+      data[i] = a <= cutoffByte ? 0 : Math.min(255, Math.round(((a - cutoffByte) * 255) / span));
+    }
+    fgCtx.putImageData(imgData, 0, 0);
+
+    if (format === "jpg" || state.activeBackdrop !== "checker") {
+      ctx.fillStyle =
+        state.activeBackdrop === "checker" ? "#ffffff" : state.activeBackdrop;
+      ctx.fillRect(0, 0, targetW, targetH);
+    }
+    ctx.drawImage(fgCanvas, 0, 0);
+  } else {
+    if (format === "jpg" || state.activeBackdrop !== "checker") {
+      ctx.fillStyle =
+        state.activeBackdrop === "checker" ? "#ffffff" : state.activeBackdrop;
+      ctx.fillRect(0, 0, targetW, targetH);
+    }
+    ctx.drawImage(masterCutoutImg, 0, 0, targetW, targetH);
+  }
 
   const mimeMap = {
     png: "image/png",
@@ -1014,9 +1075,11 @@ function ingestImageFile(file) {
 async function runSegmentation() {
   if (!state.sourceFile) return;
 
-  const tierInfo = state.serverStatus?.tiers?.[state.tier];
+  const tierInfo = state.matting
+    ? state.serverStatus?.matting
+    : state.serverStatus?.tiers?.[state.tier];
   if (tierInfo && !tierInfo.cached && !navigator.onLine) {
-    setError(`Model for ${state.tier.toUpperCase()} preset is not cached and device is offline.`);
+    setError("Selected model is not cached on disk and device is currently offline.");
     return;
   }
 
@@ -1034,10 +1097,11 @@ async function runSegmentation() {
   dom.statTime.textContent = "PROCESSING...";
 
   const isCached = tierInfo ? tierInfo.cached : true;
+  const modeLabel = state.matting ? "GLASS & SHEER MATTING" : `${state.tier.toUpperCase()} PRESET`;
 
   dom.busyTitle.textContent = isCached
-    ? `PROCESSING // ${state.tier.toUpperCase()} PRESET`
-    : `DOWNLOADING MODEL WEIGHTS (ONE-TIME) // ${state.tier.toUpperCase()}`;
+    ? `PROCESSING // ${modeLabel}`
+    : `DOWNLOADING MODEL WEIGHTS (ONE-TIME) // ${modeLabel}`;
   dom.busySub.textContent = isCached
     ? "Executing local BiRefNet segmentation at full native resolution."
     : "Fetching model weights from Hugging Face Hub (~1 min). All future runs execute 100% offline.";
@@ -1046,6 +1110,8 @@ async function runSegmentation() {
   formData.append("file", state.sourceFile);
   formData.append("tier", state.tier);
   formData.append("defringe", state.defringe ? "true" : "false");
+  formData.append("despill", state.despill ? "true" : "false");
+  formData.append("matting", state.matting ? "true" : "false");
 
   try {
     const response = await fetch("/api/remove-bg", {
@@ -1214,12 +1280,34 @@ document.querySelectorAll("#tierSelector .preset-card").forEach((btn) => {
   });
 });
 
-// 4. Left Sidebar: Edge Defringe Toggle Card
+// 4. Left Sidebar: Edge Defringe, Color Spill Suppression, Glass Matting & Shadow Cutoff
 dom.btnDefringe.addEventListener("click", () => {
   state.defringe = !state.defringe;
   dom.btnDefringe.classList.toggle("active", state.defringe);
   saveStateToActiveTab();
   if (state.sourceFile) runSegmentation();
+});
+
+dom.btnDespill?.addEventListener("click", () => {
+  state.despill = !state.despill;
+  dom.btnDespill.classList.toggle("active", state.despill);
+  saveStateToActiveTab();
+  if (state.sourceFile) runSegmentation();
+});
+
+dom.btnMatting?.addEventListener("click", () => {
+  state.matting = !state.matting;
+  dom.btnMatting.classList.toggle("active", state.matting);
+  saveStateToActiveTab();
+  if (state.sourceFile) runSegmentation();
+});
+
+dom.shadowCutoffSlider?.addEventListener("input", (e) => {
+  state.shadowCutoff = parseInt(e.target.value || "0", 10);
+  if (dom.shadowCutoffLabel) {
+    dom.shadowCutoffLabel.textContent = `${state.shadowCutoff}%`;
+  }
+  updateLiveStagePreview();
 });
 
 // 5. Top Bar: View Mode, Zoom Controls & 4x Loupe Toggle
