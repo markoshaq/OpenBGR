@@ -110,6 +110,7 @@ const state = {
   isProcessing: false,       // Whether an inference request is currently in-flight
   abortController: null,     // AbortController for the active fetch request
   pendingConfirmFn: null,    // Callback to execute if user confirms modal dialog
+  pendingAltFn: null,        // Callback for the optional middle modal action (e.g. "Open as Tabs")
   sourceFile: null,          // Active tab's File/Blob object
   resultBlob: null,          // Active tab's segmented master 32-bit RGBA PNG Blob
   previewBlob: null,         // Active tab's live-rendered output Blob
@@ -177,6 +178,7 @@ const dom = {
   modalTitle: document.getElementById("modalTitle"),
   modalDesc: document.getElementById("modalDesc"),
   btnModalCancel: document.getElementById("btnModalCancel"),
+  btnModalAlt: document.getElementById("btnModalAlt"),
   btnModalConfirm: document.getElementById("btnModalConfirm"),
 
   infoModal: document.getElementById("infoModal"),
@@ -611,7 +613,12 @@ function openConfirmModal(opts, onConfirm) {
   dom.btnModalConfirm.textContent = cfg.confirmText || "STOP & CONTINUE";
   dom.btnModalCancel.textContent = cfg.cancelText || "KEEP PROCESSING";
   dom.btnModalCancel.style.display = cfg.hideCancel ? "none" : "";
+  if (dom.btnModalAlt) {
+    dom.btnModalAlt.style.display = cfg.altText ? "" : "none";
+    if (cfg.altText) dom.btnModalAlt.textContent = cfg.altText;
+  }
   state.pendingConfirmFn = onConfirm;
+  state.pendingAltFn = cfg.altFn || null;
   dom.confirmModal.classList.add("active");
 }
 
@@ -620,6 +627,7 @@ function openConfirmModal(opts, onConfirm) {
  */
 function closeConfirmModal() {
   state.pendingConfirmFn = null;
+  state.pendingAltFn = null;
   dom.confirmModal.classList.remove("active");
 }
 
@@ -1894,6 +1902,12 @@ dom.btnModalConfirm.addEventListener("click", () => {
   if (typeof fn === "function") fn();
 });
 
+dom.btnModalAlt?.addEventListener("click", () => {
+  const fn = state.pendingAltFn;
+  closeConfirmModal();
+  if (typeof fn === "function") fn();
+});
+
 dom.confirmModal.addEventListener("click", (e) => {
   if (e.target === dom.confirmModal) {
     closeConfirmModal();
@@ -2372,15 +2386,10 @@ async function openImageDialog() {
         return;
       }
       if (Array.isArray(res?.files) && res.files.length > 0) {
-        const files = res.files.map(
-          (f) => new File([base64ToBlob(f.data_b64)], f.name || "image.png")
-        );
-        // Multiple selections route into the batch queue instead of opening tabs.
-        if (files.length > 1) {
-          startBatchFlow(files);
-        } else {
-          files.forEach((f) => ingestImageFile(f));
-        }
+        res.files.forEach((f) => {
+          const blob = base64ToBlob(f.data_b64);
+          ingestImageFile(new File([blob], f.name || "image.png"));
+        });
         return;
       }
       if (res?.data_b64) {
@@ -2454,10 +2463,11 @@ dom.btnBatch?.addEventListener("click", () => requestBatch());
 
 dom.fileInput.addEventListener("change", (e) => {
   const files = Array.from(e.target.files || []);
-  if (files.length === 0) return;
   const expecting = state.expectingBatch;
   state.expectingBatch = false;
-  if (expecting || files.length > 1) {
+  if (files.length === 0) return;
+  // The BATCH button's picker always routes here; a regular Open always opens tabs.
+  if (expecting) {
     startBatchFlow(files);
     return;
   }
@@ -2482,9 +2492,23 @@ window.addEventListener("drop", (e) => {
   const files = Array.from(e.dataTransfer?.files || []);
   if (files.length === 0) return;
 
-  // Dropping multiple files routes into the batch queue (one file = normal tab).
+  // Multi-drop is ambiguous — ask once: tabs or batch.
   if (files.length > 1) {
-    startBatchFlow(files);
+    openConfirmModal(
+      {
+        title: `${files.length} IMAGES DROPPED`,
+        message:
+          "Open them as tabs, or batch-process them all with your current settings?",
+        confirmText: "BATCH",
+        cancelText: "CANCEL",
+        altText: "OPEN AS TABS",
+        altFn: () => {
+          if (state.isProcessing) cancelProcessing();
+          files.forEach((f) => ingestImageFile(f));
+        },
+      },
+      () => startBatchFlow(files)
+    );
     return;
   }
 
