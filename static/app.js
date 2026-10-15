@@ -206,24 +206,73 @@ function renderTabBar() {
   const addBtn = document.createElement("button");
   addBtn.type = "button";
   addBtn.className = "tab-add";
-  addBtn.title = "Open another image";
+  addBtn.title = "New Tab";
   addBtn.textContent = "+";
   addBtn.addEventListener("click", () => {
-    dom.btnOpen.click();
+    if (state.isProcessing) {
+      openConfirmModal(
+        {
+          title: "STOP CURRENT IMAGE?",
+          message: "Opening a new tab will stop the current image processing.",
+          confirmText: "STOP & OPEN TAB",
+          cancelText: "KEEP PROCESSING",
+        },
+        () => {
+          cancelProcessing();
+          createBlankTab();
+        }
+      );
+      return;
+    }
+    createBlankTab();
   });
   dom.tabBar.appendChild(addBtn);
 }
 
 /**
+ * Creates a new blank tab showing the empty dropzone/paste screen and switches to it.
+ */
+function createBlankTab() {
+  saveStateToActiveTab();
+
+  const tabId = `tab-${nextTabSeq++}`;
+  const blankTab = {
+    id: tabId,
+    name: "NEW TAB",
+    sourceFile: null,
+    originalObjectUrl: null,
+    resultBlob: null,
+    resultObjectUrl: null,
+    previewBlob: null,
+    previewObjectUrl: null,
+    naturalWidth: 0,
+    naturalHeight: 0,
+    tier: state.tier,
+    defringe: state.defringe,
+    viewMode: "split",
+    splitPercent: 50,
+    exportFormat: state.exportFormat,
+    exportScale: state.exportScale,
+    exportWidth: 0,
+    exportHeight: 0,
+    activeBackdrop: state.activeBackdrop,
+    elapsedText: "—",
+  };
+
+  state.tabs.push(blankTab);
+  switchToTab(tabId);
+}
+
+/**
  * Requests closing a tab by ID, showing a confirmation dialog if
- * `state.confirmCloseTab` is enabled in Settings.
+ * `state.confirmCloseTab` is enabled in Settings and the tab contains an image.
  * @param {string} tabId
  */
 function requestCloseTab(tabId) {
   const tab = state.tabs.find((t) => t.id === tabId);
   if (!tab) return;
 
-  if (state.confirmCloseTab) {
+  if (state.confirmCloseTab && tab.sourceFile) {
     openConfirmModal(
       {
         title: "CLOSE IMAGE TAB?",
@@ -369,6 +418,11 @@ async function switchToTab(tabId) {
     dom.viewport.style.background = state.activeBackdrop;
   }
 
+  if (!tab.sourceFile) {
+    resetToEmptyWorkspace();
+    return;
+  }
+
   dom.emptyState.style.display = "none";
   dom.stage.classList.add("visible");
   dom.stageSizerImg.src = state.originalObjectUrl;
@@ -394,7 +448,9 @@ async function switchToTab(tabId) {
     dom.btnDownload.classList.add("disabled");
     dom.btnCopy.classList.add("disabled");
     setViewMode("original");
-    runSegmentation();
+    if (tab.elapsedText !== "CANCELLED" && tab.elapsedText !== "ERROR") {
+      runSegmentation();
+    }
   }
 }
 
@@ -749,42 +805,52 @@ function handleSplitDrag(clientX) {
 }
 
 /**
- * Creates a new image tab for a user-supplied File or clipboard Blob,
- * switches to it, and triggers background removal.
+ * Loads a user-supplied File or clipboard Blob into the current blank tab
+ * (if active tab is empty) or creates a new tab for it, then triggers segmentation.
  * @param {File|Blob} file
  */
 function ingestImageFile(file) {
   saveStateToActiveTab();
 
-  const tabId = `tab-${nextTabSeq++}`;
-  const rawName = file.name || `CLIPBOARD_${nextTabSeq - 1}.PNG`;
+  const rawName = file.name || `CLIPBOARD_${nextTabSeq}.PNG`;
   const objUrl = URL.createObjectURL(file);
+  const currentTab = getActiveTab();
 
-  const newTab = {
-    id: tabId,
-    name: rawName,
-    sourceFile: file,
-    originalObjectUrl: objUrl,
-    resultBlob: null,
-    resultObjectUrl: null,
-    previewBlob: null,
-    previewObjectUrl: null,
-    naturalWidth: 0,
-    naturalHeight: 0,
-    tier: state.tier,
-    defringe: state.defringe,
-    viewMode: "split",
-    splitPercent: 50,
-    exportFormat: state.exportFormat,
-    exportScale: state.exportScale,
-    exportWidth: 0,
-    exportHeight: 0,
-    activeBackdrop: state.activeBackdrop,
-    elapsedText: "PROCESSING...",
-  };
-
-  state.tabs.push(newTab);
-  state.activeTabId = tabId;
+  let targetTab;
+  if (currentTab && !currentTab.sourceFile) {
+    // Reuse the currently active blank "NEW TAB"
+    currentTab.name = rawName;
+    currentTab.sourceFile = file;
+    currentTab.originalObjectUrl = objUrl;
+    currentTab.elapsedText = "PROCESSING...";
+    targetTab = currentTab;
+  } else {
+    const tabId = `tab-${nextTabSeq++}`;
+    targetTab = {
+      id: tabId,
+      name: rawName,
+      sourceFile: file,
+      originalObjectUrl: objUrl,
+      resultBlob: null,
+      resultObjectUrl: null,
+      previewBlob: null,
+      previewObjectUrl: null,
+      naturalWidth: 0,
+      naturalHeight: 0,
+      tier: state.tier,
+      defringe: state.defringe,
+      viewMode: "split",
+      splitPercent: 50,
+      exportFormat: state.exportFormat,
+      exportScale: state.exportScale,
+      exportWidth: 0,
+      exportHeight: 0,
+      activeBackdrop: state.activeBackdrop,
+      elapsedText: "PROCESSING...",
+    };
+    state.tabs.push(targetTab);
+    state.activeTabId = targetTab.id;
+  }
 
   state.sourceFile = file;
   state.originalObjectUrl = objUrl;
