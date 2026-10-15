@@ -11,9 +11,21 @@ cd "$(dirname "$0")"
 
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 
+# Launch through the venv-local OpenBGR.app stub on macOS so the Dock icon and
+# app name render as "OpenBGR" (the plain interpreter runs as "Python").
+launch_openbgr() {
+  if [ "$(uname -s)" = "Darwin" ]; then
+    ./.venv/bin/python scripts/make_dev_bundle.py 2>/dev/null
+    if [ -x ".venv/OpenBGR.app/Contents/MacOS/Python" ]; then
+      exec ./.venv/OpenBGR.app/Contents/MacOS/Python app.py
+    fi
+  fi
+  exec ./.venv/bin/python app.py
+}
+
 # Fast path: environment is already installed
 if [ -f ".venv/.installed" ] && [ -x ".venv/bin/python" ]; then
-  exec ./.venv/bin/python app.py
+  launch_openbgr
 fi
 
 echo "--------------------------------------------------------------------"
@@ -63,4 +75,4 @@ if [ ! -f ".venv/.installed" ]; then
   touch .venv/.installed
 fi
 
-exec ./.venv/bin/python app.py
+launch_openbgr
