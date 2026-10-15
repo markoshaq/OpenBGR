@@ -567,7 +567,6 @@ body {
 
 .has-tooltip {
   position: relative;
-  cursor: help;
 }
 
 .tier-dot.has-tooltip {
@@ -592,22 +591,41 @@ body {
   pointer-events: none;
   opacity: 0;
   visibility: hidden;
-  transition: opacity 0.12s ease;
+  transition: opacity 0.12s ease, visibility 0s linear 0.12s;
   z-index: 100;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
 }
 
-/* Keep left-sidebar tooltips inside the sidebar bounds & wrap long text */
+/* Keep left-sidebar tooltips inside the sidebar bounds & wrap long text.
+   Anchor to the element's left edge (safe for full-width rows); tier buttons
+   anchor left / center / right by position so none clip the window edge. */
 .sidebar-left .has-tooltip::after {
   bottom: auto;
   top: calc(100% + 6px);
-  left: auto;
-  right: 0;
+  left: 0;
+  right: auto;
   transform: none;
   white-space: normal;
   width: max-content;
-  max-width: 232px;
+  max-width: 226px;
   text-align: left;
+}
+
+.sidebar-left .tier-btn.has-tooltip::after {
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+}
+
+.sidebar-left .tier-btn.has-tooltip:first-child::after {
+  left: 0;
+  transform: none;
+}
+
+.sidebar-left .tier-btn.has-tooltip:last-child::after {
+  left: auto;
+  right: 0;
+  transform: none;
 }
 
 .topbar .has-tooltip::after {
@@ -621,6 +639,7 @@ body {
 .has-tooltip:hover::after {
   opacity: 1;
   visibility: visible;
+  transition-delay: 0.2s;
 }
 
 .status-legend {
@@ -637,17 +656,6 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-}
-
-.toggle-indicator {
-  width: 8px;
-  height: 8px;
-  background: var(--border-strong);
-}
-
-.toggle-card.active .toggle-indicator {
-  background: #10b981;
-  box-shadow: 0 0 5px rgba(16, 185, 129, 0.7);
 }
 
 /* Matte Swatches Grid */
