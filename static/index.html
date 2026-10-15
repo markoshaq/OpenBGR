@@ -27,10 +27,192 @@
 </head>
 <body>
   <div class="app-shell no-image" id="appShell">
-    <!-- 1. Top Hardware & View Mode Header -->
+    <!-- 1. Top Hardware, Menu Bar & View Mode Header -->
     <header class="topbar">
       <div class="brand">
         <div class="brand-mark">OPENBGR</div>
+        <nav class="menubar" id="menuBar" aria-label="Application Menu">
+          <div class="menu-root" data-menu="file">
+            <button type="button" class="menu-trigger">FILE</button>
+            <div class="menu-dropdown">
+              <button type="button" class="menu-item" data-cmd="newTab">
+                <span class="menu-check"></span>
+                <span class="menu-label">New Tab</span>
+                <span class="menu-kbd" data-shortcut="Mod+T">⌘T</span>
+              </button>
+              <button type="button" class="menu-item" data-cmd="openImage">
+                <span class="menu-check"></span>
+                <span class="menu-label">Open Image…</span>
+                <span class="menu-kbd" data-shortcut="Mod+O">⌘O</span>
+              </button>
+              <div class="menu-sep"></div>
+              <button type="button" class="menu-item" data-cmd="exportImage" data-requires="result">
+                <span class="menu-check"></span>
+                <span class="menu-label">Export Image…</span>
+                <span class="menu-kbd" data-shortcut="Mod+E">⌘E</span>
+              </button>
+              <div class="menu-sep"></div>
+              <button type="button" class="menu-item" data-cmd="closeActiveTab" data-requires="tab">
+                <span class="menu-check"></span>
+                <span class="menu-label">Close Tab</span>
+                <span class="menu-kbd" data-shortcut="Mod+W">⌘W</span>
+              </button>
+              <div class="menu-sep"></div>
+              <button type="button" class="menu-item" data-cmd="preferences">
+                <span class="menu-check"></span>
+                <span class="menu-label">Preferences…</span>
+                <span class="menu-kbd" data-shortcut="Mod+,">⌘,</span>
+              </button>
+              <div class="menu-sep"></div>
+              <button type="button" class="menu-item" data-cmd="quitApp">
+                <span class="menu-check"></span>
+                <span class="menu-label">Quit OpenBGR</span>
+                <span class="menu-kbd" data-shortcut="Mod+Q">⌘Q</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="menu-root" data-menu="edit">
+            <button type="button" class="menu-trigger">EDIT</button>
+            <div class="menu-dropdown">
+              <button type="button" class="menu-item" data-cmd="copyImage" data-requires="result">
+                <span class="menu-check"></span>
+                <span class="menu-label">Copy Cutout to Clipboard</span>
+                <span class="menu-kbd" data-shortcut="Shift+Mod+C">⇧⌘C</span>
+              </button>
+              <button type="button" class="menu-item" data-cmd="pasteImage">
+                <span class="menu-check"></span>
+                <span class="menu-label">Paste Image from Clipboard</span>
+                <span class="menu-kbd" data-shortcut="Mod+V">⌘V</span>
+              </button>
+              <div class="menu-sep"></div>
+              <button type="button" class="menu-item" data-cmd="cancelProcessing" data-requires="processing">
+                <span class="menu-check"></span>
+                <span class="menu-label">Cancel Processing</span>
+                <span class="menu-kbd">ESC</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="menu-root" data-menu="view">
+            <button type="button" class="menu-trigger">VIEW</button>
+            <div class="menu-dropdown">
+              <button type="button" class="menu-item" data-cmd="viewSplit" data-check="view:split" data-requires="result">
+                <span class="menu-check">✓</span>
+                <span class="menu-label">Split Comparison</span>
+                <span class="menu-kbd" data-shortcut="Mod+1">⌘1</span>
+              </button>
+              <button type="button" class="menu-item" data-cmd="viewCutout" data-check="view:cutout" data-requires="result">
+                <span class="menu-check"></span>
+                <span class="menu-label">Cutout Only</span>
+                <span class="menu-kbd" data-shortcut="Mod+2">⌘2</span>
+              </button>
+              <button type="button" class="menu-item" data-cmd="viewOriginal" data-check="view:original" data-requires="result">
+                <span class="menu-check"></span>
+                <span class="menu-label">Original Only</span>
+                <span class="menu-kbd" data-shortcut="Mod+3">⌘3</span>
+              </button>
+              <div class="menu-sep"></div>
+              <button type="button" class="menu-item" data-cmd="zoomIn" data-requires="result">
+                <span class="menu-check"></span>
+                <span class="menu-label">Zoom In</span>
+                <span class="menu-kbd" data-shortcut="Mod++">⌘+</span>
+              </button>
+              <button type="button" class="menu-item" data-cmd="zoomOut" data-requires="result">
+                <span class="menu-check"></span>
+                <span class="menu-label">Zoom Out</span>
+                <span class="menu-kbd" data-shortcut="Mod+-">⌘−</span>
+              </button>
+              <button type="button" class="menu-item" data-cmd="zoomReset" data-requires="result">
+                <span class="menu-check"></span>
+                <span class="menu-label">Actual Size — 100%</span>
+                <span class="menu-kbd" data-shortcut="Mod+0">⌘0</span>
+              </button>
+              <div class="menu-sep"></div>
+              <button type="button" class="menu-item" data-cmd="toggleLoupe" data-check="loupe" data-requires="result">
+                <span class="menu-check"></span>
+                <span class="menu-label">Toggle 4× Loupe</span>
+                <span class="menu-kbd">Z</span>
+              </button>
+              <div class="menu-sep"></div>
+              <button type="button" class="menu-item" data-cmd="toggleTheme" data-check="theme:light">
+                <span class="menu-check"></span>
+                <span class="menu-label">Light Appearance</span>
+                <span class="menu-kbd"></span>
+              </button>
+              <button type="button" class="menu-item" data-cmd="toggleFullscreen">
+                <span class="menu-check"></span>
+                <span class="menu-label">Toggle Full Screen</span>
+                <span class="menu-kbd" data-shortcut="Fullscreen">⌃⌘F</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="menu-root" data-menu="model">
+            <button type="button" class="menu-trigger">MODEL</button>
+            <div class="menu-dropdown">
+              <button type="button" class="menu-item" data-cmd="presetLow" data-check="tier:low">
+                <span class="menu-check"></span>
+                <span class="menu-label">Low-End — Lite 1K (Swin-T)</span>
+                <span class="menu-kbd"></span>
+              </button>
+              <button type="button" class="menu-item" data-cmd="presetMid" data-check="tier:mid">
+                <span class="menu-check">✓</span>
+                <span class="menu-label">Mid-Range — Full 1K (Swin-L)</span>
+                <span class="menu-kbd"></span>
+              </button>
+              <button type="button" class="menu-item" data-cmd="presetHigh" data-check="tier:high">
+                <span class="menu-check"></span>
+                <span class="menu-label">High-End — Ultra 2K (Swin-L HR)</span>
+                <span class="menu-kbd"></span>
+              </button>
+              <div class="menu-sep"></div>
+              <button type="button" class="menu-item" data-cmd="toggleDefringe" data-check="defringe">
+                <span class="menu-check">✓</span>
+                <span class="menu-label">Defringe Edges</span>
+                <span class="menu-kbd"></span>
+              </button>
+              <button type="button" class="menu-item" data-cmd="toggleDespill" data-check="despill">
+                <span class="menu-check">✓</span>
+                <span class="menu-label">Suppress Color Spill</span>
+                <span class="menu-kbd"></span>
+              </button>
+              <button type="button" class="menu-item" data-cmd="toggleMatting" data-check="matting">
+                <span class="menu-check"></span>
+                <span class="menu-label">Glass &amp; Sheer Matting</span>
+                <span class="menu-kbd"></span>
+              </button>
+              <div class="menu-sep"></div>
+              <button type="button" class="menu-item" data-cmd="rerun" data-requires="image">
+                <span class="menu-check"></span>
+                <span class="menu-label">Re-Run Segmentation</span>
+                <span class="menu-kbd" data-shortcut="Mod+R">⌘R</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="menu-root" data-menu="help">
+            <button type="button" class="menu-trigger">HELP</button>
+            <div class="menu-dropdown">
+              <button type="button" class="menu-item" data-cmd="preferences">
+                <span class="menu-check"></span>
+                <span class="menu-label">Preferences &amp; System Info…</span>
+                <span class="menu-kbd" data-shortcut="Mod+,">⌘,</span>
+              </button>
+              <button type="button" class="menu-item" data-cmd="about">
+                <span class="menu-check"></span>
+                <span class="menu-label">About OpenBGR…</span>
+                <span class="menu-kbd"></span>
+              </button>
+              <div class="menu-sep"></div>
+              <button type="button" class="menu-item" data-cmd="openGithub">
+                <span class="menu-check"></span>
+                <span class="menu-label">OpenBGR on GitHub ↗</span>
+                <span class="menu-kbd"></span>
+              </button>
+            </div>
+          </div>
+        </nav>
       </div>
 
       <div class="topbar-center">
@@ -207,7 +389,7 @@
 
         <div class="sidebar-section requires-image">
           <div class="section-header">MATTE BACKDROP</div>
-          <div class="swatches-grid">
+          <div class="swatches-grid" id="matteSwatches">
             <button type="button" class="swatch swatch-checker active" data-bg="checker" title="Transparency Grid"></button>
             <button type="button" class="swatch" data-bg="#ffffff" style="background:#ffffff" title="Pure White"></button>
             <button type="button" class="swatch" data-bg="#000000" style="background:#000000" title="Pure Black"></button>
@@ -410,6 +592,15 @@
             <div class="preset-desc">Ask for confirmation when clicking × on an open image tab.</div>
           </button>
           <div class="pref-row">
+            <span class="pref-label">DEFAULT HARDWARE PRESET</span>
+            <select class="studio-select pref-select" id="prefDefaultTier">
+              <option value="auto">AUTO — Hardware Recommended</option>
+              <option value="low">LOW-END — Lite 1K (Swin-T)</option>
+              <option value="mid">MID-RANGE — Full 1K (Swin-L)</option>
+              <option value="high">HIGH-END — Ultra 2K (Swin-L HR)</option>
+            </select>
+          </div>
+          <div class="pref-row">
             <span class="pref-label">DEFAULT EXPORT FORMAT</span>
             <select class="studio-select pref-select" id="prefDefaultFormat">
               <option value="png">PNG — 32-Bit Lossless RGBA</option>
@@ -468,7 +659,10 @@
           <a href="https://github.com/markoshaq" target="_blank" rel="noopener noreferrer" class="credit-link">
             MADE BY MARKOSHAQ ↗
           </a>
-          <button type="button" class="action-btn primary" id="btnInfoClose">CLOSE</button>
+          <div class="info-footer-actions">
+            <button type="button" class="action-btn" id="btnResetPrefs">RESET DEFAULTS</button>
+            <button type="button" class="action-btn primary" id="btnInfoClose">CLOSE</button>
+          </div>
         </div>
       </div>
     </div>

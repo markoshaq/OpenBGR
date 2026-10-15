@@ -37,6 +37,18 @@ const ACCENTS = {
   violet: ["#a78bfa", "#1e1245"],
 };
 
+function getDefaultPrefs() {
+  return {
+    theme: "dark",
+    accent: "default",
+    density: "comfortable",
+    defaultTier: "auto",
+    defaultFormat: "png",
+    defaultBackdrop: "checker",
+    confirmClose: true,
+  };
+}
+
 /**
  * Loads persisted user preferences from localStorage, migrating the legacy
  * standalone confirm-close key and filling unspecified fields with defaults.
@@ -48,11 +60,7 @@ function loadPrefs() {
   } catch (_) {}
   const legacyConfirm = localStorage.getItem(STORAGE_KEY_CONFIRM_CLOSE);
   return {
-    theme: "dark",
-    accent: "default",
-    density: "comfortable",
-    defaultFormat: "png",
-    defaultBackdrop: "checker",
+    ...getDefaultPrefs(),
     confirmClose: legacyConfirm !== null ? legacyConfirm !== "false" : true,
     ...stored,
   };
@@ -76,7 +84,7 @@ const state = {
   tabs: [],                  // Array of open image tab objects
   activeTabId: null,         // ID of currently selected tab
   confirmCloseTab: prefs.confirmClose,
-  tier: "mid",               // "low" (BiRefNet_lite 1K) | "mid" (BiRefNet Full 1K) | "high" (BiRefNet_HR 2K)
+  tier: prefs.defaultTier !== "auto" ? prefs.defaultTier : "mid", // "low" | "mid" | "high"
   defringe: true,            // Morphological edge color decontamination toggle
   despill: true,             // Rim color spill / background reflection neutralization toggle
   matting: false,            // BiRefNet-matting mode for glass, windows & sheer materials
@@ -115,6 +123,7 @@ const state = {
 /** DOM Element References */
 const dom = {
   appShell: document.getElementById("appShell"),
+  menuBar: document.getElementById("menuBar"),
   tabBar: document.getElementById("tabBar"),
   viewport: document.getElementById("viewport"),
   emptyState: document.getElementById("emptyState"),
@@ -148,12 +157,14 @@ const dom = {
   infoModal: document.getElementById("infoModal"),
   btnInfo: document.getElementById("btnInfo"),
   btnInfoClose: document.getElementById("btnInfoClose"),
+  btnResetPrefs: document.getElementById("btnResetPrefs"),
   btnToggleConfirmClose: document.getElementById("btnToggleConfirmClose"),
   prefThemeDark: document.getElementById("prefThemeDark"),
   prefThemeLight: document.getElementById("prefThemeLight"),
   prefDensityComfortable: document.getElementById("prefDensityComfortable"),
   prefDensityCompact: document.getElementById("prefDensityCompact"),
   accentSwatches: document.getElementById("accentSwatches"),
+  prefDefaultTier: document.getElementById("prefDefaultTier"),
   prefDefaultFormat: document.getElementById("prefDefaultFormat"),
   prefDefaultBackdrop: document.getElementById("prefDefaultBackdrop"),
 
@@ -307,6 +318,10 @@ function createBlankTab() {
   saveStateToActiveTab();
 
   const tabId = `tab-${nextTabSeq++}`;
+  const defaultTier =
+    prefs.defaultTier !== "auto"
+      ? prefs.defaultTier
+      : state.serverStatus?.recommended_tier || state.tier;
   const blankTab = {
     id: tabId,
     name: "NEW TAB",
@@ -318,15 +333,18 @@ function createBlankTab() {
     previewObjectUrl: null,
     naturalWidth: 0,
     naturalHeight: 0,
-    tier: state.tier,
+    tier: defaultTier,
     defringe: state.defringe,
+    despill: state.despill,
+    matting: state.matting,
+    shadowCutoff: 0,
     viewMode: "split",
     splitPercent: 50,
-    exportFormat: state.exportFormat,
-    exportScale: state.exportScale,
+    exportFormat: prefs.defaultFormat,
+    exportScale: 1,
     exportWidth: 0,
     exportHeight: 0,
-    activeBackdrop: state.activeBackdrop,
+    activeBackdrop: prefs.defaultBackdrop,
     elapsedText: "—",
   };
 
@@ -437,6 +455,7 @@ function resetToEmptyWorkspace() {
   dom.btnDownload.classList.add("disabled");
   dom.btnCopy.classList.add("disabled");
   dom.appShell?.classList.add("no-image");
+  syncMenuBarState();
 }
 
 /**
@@ -586,6 +605,7 @@ function cancelProcessing() {
     setViewMode("original");
   }
   saveStateToActiveTab();
+  syncMenuBarState();
 }
 
 /**
@@ -847,8 +867,12 @@ async function syncServerStatus(isInitialLoad = false) {
     const { device_label, precision, recommended_tier } = state.serverStatus;
     dom.hwCompute.textContent = `${device_label} (${precision})`.toUpperCase();
 
-    if (isInitialLoad && recommended_tier) {
-      selectTier(recommended_tier, false);
+    if (isInitialLoad) {
+      const targetTier =
+        prefs.defaultTier && prefs.defaultTier !== "auto"
+          ? prefs.defaultTier
+          : recommended_tier || "mid";
+      selectTier(targetTier, false);
     }
     updateCacheIndicator();
   } catch (_) {
@@ -871,6 +895,7 @@ function selectTier(tierKey, reprocess = true) {
   });
   updateCacheIndicator();
   saveStateToActiveTab();
+  syncMenuBarState();
 
   if (reprocess && state.sourceFile) {
     runSegmentation();
@@ -889,11 +914,52 @@ function setViewMode(mode) {
   document.getElementById("viewOriginal").classList.toggle("active", mode === "original");
   renderStageGeometry();
   saveStateToActiveTab();
+  syncMenuBarState();
+}
+
+/**
+ * Synchronizes checkmarks (✓) and disabled states inside the top-bar
+ * Studio Menu Bar (`#menuBar`) with the current studio state.
+ */
+function syncMenuBarState() {
+  if (!dom.menuBar) return;
+  const hasTab = Boolean(state.activeTabId);
+  const hasImage = Boolean(state.sourceFile);
+  const hasResult = Boolean(state.resultBlob);
+  const isBusy = Boolean(state.isProcessing);
+
+  dom.menuBar.querySelectorAll(".menu-item").forEach((item) => {
+    const req = item.getAttribute("data-requires");
+    let enabled = true;
+    if (req === "tab") enabled = hasTab;
+    else if (req === "image") enabled = hasImage;
+    else if (req === "result") enabled = hasResult && !isBusy;
+    else if (req === "processing") enabled = isBusy;
+    item.classList.toggle("disabled", !enabled);
+
+    const checkKey = item.getAttribute("data-check");
+    const checkSpan = item.querySelector(".menu-check");
+    if (checkKey && checkSpan) {
+      let checked = false;
+      if (checkKey === "view:split") checked = state.viewMode === "split";
+      else if (checkKey === "view:cutout") checked = state.viewMode === "cutout";
+      else if (checkKey === "view:original") checked = state.viewMode === "original";
+      else if (checkKey === "loupe") checked = state.loupeEnabled;
+      else if (checkKey === "theme:light") checked = prefs.theme === "light";
+      else if (checkKey === "tier:low") checked = state.tier === "low";
+      else if (checkKey === "tier:mid") checked = state.tier === "mid";
+      else if (checkKey === "tier:high") checked = state.tier === "high";
+      else if (checkKey === "defringe") checked = state.defringe;
+      else if (checkKey === "despill") checked = state.despill;
+      else if (checkKey === "matting") checked = state.matting;
+      checkSpan.textContent = checked ? "✓" : "";
+    }
+  });
 }
 
 /**
  * Applies the persisted appearance preferences (theme, accent, UI density) to
- * the document root and re-syncs the Preferences modal controls.
+ * the document root, native OS window frame, and Preferences modal controls.
  */
 function applyPreferences() {
   const root = document.documentElement;
@@ -917,19 +983,27 @@ function applyPreferences() {
   document.querySelectorAll("#accentSwatches .swatch").forEach((s) => {
     s.classList.toggle("active", s.getAttribute("data-accent") === prefs.accent);
   });
+  if (dom.prefDefaultTier) dom.prefDefaultTier.value = prefs.defaultTier || "auto";
   if (dom.prefDefaultFormat) dom.prefDefaultFormat.value = prefs.defaultFormat;
   if (dom.prefDefaultBackdrop) dom.prefDefaultBackdrop.value = prefs.defaultBackdrop;
   dom.btnToggleConfirmClose?.classList.toggle("active", prefs.confirmClose);
+
+  // Sync native OS window appearance (DarkAqua / Aqua on macOS)
+  try {
+    window.pywebview?.api?.set_window_theme?.(prefs.theme);
+  } catch (_) {}
+
+  syncMenuBarState();
 }
 
 /**
  * Applies a matte backdrop ("checker" or a hex color) to the viewport,
- * swatch selection state, and live stage preview.
+ * matte swatch selection state, and live stage preview.
  * @param {string} value
  */
 function applyBackdrop(value) {
   state.activeBackdrop = value;
-  document.querySelectorAll(".swatch").forEach((s) => {
+  document.querySelectorAll("#matteSwatches .swatch").forEach((s) => {
     s.classList.toggle("active", s.getAttribute("data-bg") === value);
   });
   if (value === "checker") {
@@ -1005,6 +1079,7 @@ function toggleLoupe(forceState) {
   if (!state.loupeEnabled) {
     dom.loupeCanvas?.classList.remove("visible");
   }
+  syncMenuBarState();
 }
 
 /**
@@ -1135,6 +1210,9 @@ function ingestImageFile(file) {
       naturalHeight: 0,
       tier: state.tier,
       defringe: state.defringe,
+      despill: state.despill,
+      matting: state.matting,
+      shadowCutoff: state.shadowCutoff,
       viewMode: "split",
       splitPercent: 50,
       exportFormat: state.exportFormat,
@@ -1202,6 +1280,7 @@ async function runSegmentation() {
   setError(null);
   dom.busyOverlay.classList.add("active");
   dom.statTime.textContent = "PROCESSING...";
+  syncMenuBarState();
 
   const isCached = tierInfo ? tierInfo.cached : true;
   const modeLabel = state.matting ? "GLASS & SHEER MATTING" : `${state.tier.toUpperCase()} PRESET`;
@@ -1294,6 +1373,7 @@ async function runSegmentation() {
       if (state.resultBlob) {
         dom.appShell?.classList.remove("no-image");
       }
+      syncMenuBarState();
     }
   }
 }
@@ -1380,6 +1460,17 @@ dom.accentSwatches?.querySelectorAll(".swatch").forEach((sw) => {
     applyPreferences();
   });
 });
+dom.prefDefaultTier?.addEventListener("change", (e) => {
+  prefs.defaultTier = e.target.value;
+  savePrefs();
+  if (!state.sourceFile) {
+    const targetTier =
+      prefs.defaultTier !== "auto"
+        ? prefs.defaultTier
+        : state.serverStatus?.recommended_tier || "mid";
+    selectTier(targetTier, false);
+  }
+});
 dom.prefDefaultFormat?.addEventListener("change", (e) => {
   prefs.defaultFormat = e.target.value;
   savePrefs();
@@ -1397,10 +1488,33 @@ dom.prefDefaultBackdrop?.addEventListener("change", (e) => {
     applyBackdrop(prefs.defaultBackdrop);
   }
 });
+dom.btnResetPrefs?.addEventListener("click", () => {
+  Object.assign(prefs, getDefaultPrefs());
+  state.confirmCloseTab = prefs.confirmClose;
+  savePrefs();
+  applyPreferences();
+  if (!state.resultBlob) {
+    state.exportFormat = prefs.defaultFormat;
+    dom.exportFormatSelect.value = state.exportFormat;
+    applyBackdrop(prefs.defaultBackdrop);
+    const targetTier = state.serverStatus?.recommended_tier || "mid";
+    selectTier(targetTier, false);
+    updateExportTelemetry();
+  }
+});
+
+// Close any open top-bar dropdown menu
+function closeAllMenus() {
+  dom.menuBar?.querySelectorAll(".menu-root.open").forEach((m) => {
+    m.classList.remove("open");
+  });
+}
 
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
-    if (dom.infoModal.classList.contains("active")) {
+    if (dom.menuBar?.querySelector(".menu-root.open")) {
+      closeAllMenus();
+    } else if (dom.infoModal.classList.contains("active")) {
       dom.infoModal.classList.remove("active");
     } else if (dom.confirmModal.classList.contains("active")) {
       closeConfirmModal();
@@ -1412,6 +1526,12 @@ window.addEventListener("keydown", (e) => {
     return;
   }
 
+  if (e.key === "F11") {
+    e.preventDefault();
+    window.openBGR.toggleFullscreen();
+    return;
+  }
+
   // Ignore shortcuts when typing in an input field
   if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "SELECT")) {
     return;
@@ -1420,10 +1540,13 @@ window.addEventListener("keydown", (e) => {
   // Native-menu parity shortcuts (Cmd on macOS, Ctrl on Windows/Linux)
   if (e.metaKey || e.ctrlKey) {
     const key = e.key.toLowerCase();
-    if (key === "o") {
+    if (key === "t") {
+      e.preventDefault();
+      window.openBGR.newTab();
+    } else if (key === "o") {
       e.preventDefault();
       window.openBGR.openImage();
-    } else if (key === "e") {
+    } else if (key === "e" || key === "s") {
       e.preventDefault();
       window.openBGR.exportImage();
     } else if (key === "w") {
@@ -1432,6 +1555,18 @@ window.addEventListener("keydown", (e) => {
     } else if (key === ",") {
       e.preventDefault();
       window.openBGR.openSettings("preferences");
+    } else if (key === "r") {
+      e.preventDefault();
+      window.openBGR.rerunSegmentation();
+    } else if (key === "1") {
+      e.preventDefault();
+      if (state.resultBlob) setViewMode("split");
+    } else if (key === "2") {
+      e.preventDefault();
+      if (state.resultBlob) setViewMode("cutout");
+    } else if (key === "3") {
+      e.preventDefault();
+      if (state.resultBlob) setViewMode("original");
     } else if (key === "0") {
       e.preventDefault();
       setZoom(1);
@@ -1444,6 +1579,9 @@ window.addEventListener("keydown", (e) => {
     } else if (key === "c" && e.shiftKey) {
       e.preventDefault();
       window.openBGR.copyImage();
+    } else if (key === "q") {
+      e.preventDefault();
+      window.openBGR.quitApp();
     }
     return;
   }
@@ -1476,6 +1614,7 @@ dom.btnDefringe.addEventListener("click", () => {
   state.defringe = !state.defringe;
   dom.btnDefringe.classList.toggle("active", state.defringe);
   saveStateToActiveTab();
+  syncMenuBarState();
   if (state.sourceFile) runSegmentation();
 });
 
@@ -1483,6 +1622,7 @@ dom.btnDespill?.addEventListener("click", () => {
   state.despill = !state.despill;
   dom.btnDespill.classList.toggle("active", state.despill);
   saveStateToActiveTab();
+  syncMenuBarState();
   if (state.sourceFile) runSegmentation();
 });
 
@@ -1490,6 +1630,7 @@ dom.btnMatting?.addEventListener("click", () => {
   state.matting = !state.matting;
   dom.btnMatting.classList.toggle("active", state.matting);
   saveStateToActiveTab();
+  syncMenuBarState();
   if (state.sourceFile) runSegmentation();
 });
 
@@ -1695,6 +1836,13 @@ async function openImageDialog() {
         setError(res.error);
         return;
       }
+      if (Array.isArray(res?.files) && res.files.length > 0) {
+        res.files.forEach((f) => {
+          const blob = base64ToBlob(f.data_b64);
+          ingestImageFile(new File([blob], f.name || "image.png"));
+        });
+        return;
+      }
       if (res?.data_b64) {
         const blob = base64ToBlob(res.data_b64);
         ingestImageFile(new File([blob], res.name || "image.png"));
@@ -1730,12 +1878,12 @@ dom.emptyState.addEventListener("click", () => requestOpenImage());
 dom.btnOpen.addEventListener("click", () => requestOpenImage());
 
 dom.fileInput.addEventListener("change", (e) => {
-  const file = e.target.files?.[0];
-  if (!file) return;
+  const files = Array.from(e.target.files || []);
+  if (files.length === 0) return;
   if (state.isProcessing) {
     cancelProcessing();
   }
-  ingestImageFile(file);
+  files.forEach((f) => ingestImageFile(f));
 });
 
 window.addEventListener("dragover", (e) => {
@@ -1750,23 +1898,23 @@ window.addEventListener("dragleave", () => {
 window.addEventListener("drop", (e) => {
   e.preventDefault();
   dom.viewport.classList.remove("dragover");
-  const file = e.dataTransfer?.files?.[0];
-  if (!file) return;
+  const files = Array.from(e.dataTransfer?.files || []);
+  if (files.length === 0) return;
 
   if (state.isProcessing) {
     openConfirmModal(
       "This will stop the current image processing. Do you want to load the dropped image?",
       () => {
         cancelProcessing();
-        ingestImageFile(file);
+        files.forEach((f) => ingestImageFile(f));
       }
     );
     return;
   }
-  ingestImageFile(file);
+  files.forEach((f) => ingestImageFile(f));
 });
 
-window.addEventListener("paste", (e) => {
+window.addEventListener("paste", async (e) => {
   const items = e.clipboardData?.items || [];
   for (const item of items) {
     if (item.type.startsWith("image/")) {
@@ -1783,8 +1931,29 @@ window.addEventListener("paste", (e) => {
       } else {
         ingestImageFile(blob);
       }
-      break;
+      return;
     }
+  }
+  // Fallback for files copied in Finder / File Explorer when running in native desktop mode
+  if (window.pywebview?.api?.read_clipboard_image) {
+    try {
+      const res = await window.pywebview.api.read_clipboard_image();
+      if (res?.has_image && res.data_b64) {
+        const blob = base64ToBlob(res.data_b64);
+        const file = new File([blob], res.name || "CLIPBOARD.PNG", { type: "image/png" });
+        if (state.isProcessing) {
+          openConfirmModal(
+            "This will stop the current image processing. Do you want to load the pasted image?",
+            () => {
+              cancelProcessing();
+              ingestImageFile(file);
+            }
+          );
+        } else {
+          ingestImageFile(file);
+        }
+      }
+    } catch (_) {}
   }
 });
 
@@ -1842,25 +2011,39 @@ dom.btnDownload.addEventListener("click", async () => {
 
 dom.btnCopy.addEventListener("click", async () => {
   if (!state.resultBlob) return;
-  try {
-    const copyFormat = state.exportFormat === "mask" ? "mask" : "png";
-    const pngBlob = await buildExportBlob(copyFormat);
-    await navigator.clipboard.write([
-      new ClipboardItem({ "image/png": pngBlob }),
-    ]);
+  const markCopied = () => {
     const originalLabel = dom.btnCopy.textContent;
     dom.btnCopy.textContent = "COPIED";
     setTimeout(() => {
       dom.btnCopy.textContent = originalLabel;
     }, 1400);
+  };
+
+  try {
+    const copyFormat = state.exportFormat === "mask" ? "mask" : "png";
+    const pngBlob = await buildExportBlob(copyFormat);
+
+    // Prefer native OS clipboard bridge when running in pywebview desktop mode
+    if (window.pywebview?.api?.copy_image) {
+      const b64 = await blobToBase64(pngBlob);
+      const res = await window.pywebview.api.copy_image(b64);
+      if (res?.copied) {
+        markCopied();
+        return;
+      }
+    }
+
+    await navigator.clipboard.write([
+      new ClipboardItem({ "image/png": pngBlob }),
+    ]);
+    markCopied();
   } catch (_) {
     setError("Clipboard PNG write is not supported in this browser context.");
   }
 });
 
 /**
- * Reads an image from the OS clipboard via `navigator.clipboard.read()`
- * (used by the native Edit > Paste Image menu item).
+ * Reads an image from the OS clipboard (native OS bridge first, then Web Clipboard API).
  */
 async function pasteImageFromClipboard() {
   const finish = (blob) => {
@@ -1876,6 +2059,18 @@ async function pasteImageFromClipboard() {
       ingestImageFile(blob);
     }
   };
+
+  if (window.pywebview?.api?.read_clipboard_image) {
+    try {
+      const res = await window.pywebview.api.read_clipboard_image();
+      if (res?.has_image && res.data_b64) {
+        const blob = base64ToBlob(res.data_b64);
+        finish(new File([blob], res.name || "CLIPBOARD.PNG", { type: "image/png" }));
+        return;
+      }
+    } catch (_) {}
+  }
+
   try {
     const items = await navigator.clipboard.read();
     for (const item of items) {
@@ -1887,15 +2082,54 @@ async function pasteImageFromClipboard() {
     }
     setError("Clipboard does not contain an image.");
   } catch (_) {
-    setError("Clipboard read is not permitted in this context.");
+    setError("Clipboard does not contain an image (or press Cmd/Ctrl+V).");
   }
 }
 
 /**
- * Command bridge invoked by the native OS menu bar (pywebview) and by
- * keyboard shortcuts. Mirrors the native menu structure 1:1.
+ * Opens an external URL in the user's system browser.
+ * @param {string} url
+ */
+function openExternalUrl(url) {
+  if (window.pywebview?.api?.open_external) {
+    window.pywebview.api.open_external(url);
+  } else {
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+}
+
+document.querySelectorAll('a[target="_blank"]').forEach((link) => {
+  link.addEventListener("click", (e) => {
+    if (window.pywebview?.api?.open_external) {
+      e.preventDefault();
+      openExternalUrl(link.href);
+    }
+  });
+});
+
+/**
+ * Command bridge invoked by the native OS menu bar (pywebview), the in-app
+ * Studio Menu Bar (`#menuBar`), and keyboard shortcuts.
  */
 window.openBGR = {
+  newTab: () => {
+    if (state.isProcessing) {
+      openConfirmModal(
+        {
+          title: "STOP CURRENT IMAGE?",
+          message: "Opening a new tab will stop the current image processing.",
+          confirmText: "STOP & OPEN TAB",
+          cancelText: "KEEP PROCESSING",
+        },
+        () => {
+          cancelProcessing();
+          createBlankTab();
+        }
+      );
+      return;
+    }
+    createBlankTab();
+  },
   openImage: () => requestOpenImage(),
   exportImage: () => {
     if (!dom.btnDownload.classList.contains("disabled")) dom.btnDownload.click();
@@ -1908,13 +2142,50 @@ window.openBGR = {
   },
   pasteImage: () => pasteImageFromClipboard(),
   setView: (mode) => {
-    if (["split", "cutout", "original"].includes(mode)) setViewMode(mode);
+    if (state.resultBlob && ["split", "cutout", "original"].includes(mode)) {
+      setViewMode(mode);
+    }
   },
-  zoomIn: () => setZoom(state.zoom + 0.25),
-  zoomOut: () => setZoom(state.zoom - 0.25),
-  zoomReset: () => setZoom(1),
-  toggleLoupe: () => toggleLoupe(),
-  cancelProcessing: () => cancelProcessing(),
+  zoomIn: () => {
+    if (state.resultBlob) setZoom(state.zoom + 0.25);
+  },
+  zoomOut: () => {
+    if (state.resultBlob) setZoom(state.zoom - 0.25);
+  },
+  zoomReset: () => {
+    if (state.resultBlob) setZoom(1);
+  },
+  toggleLoupe: () => {
+    if (state.resultBlob) toggleLoupe();
+  },
+  toggleTheme: () => {
+    prefs.theme = prefs.theme === "light" ? "dark" : "light";
+    savePrefs();
+    applyPreferences();
+  },
+  toggleFullscreen: () => {
+    if (window.pywebview?.api?.toggle_fullscreen) {
+      window.pywebview.api.toggle_fullscreen();
+    } else if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen?.().catch(() => {});
+    } else {
+      document.exitFullscreen?.().catch(() => {});
+    }
+  },
+  selectPreset: (tierKey) => {
+    if (["low", "mid", "high"].includes(tierKey) && tierKey !== state.tier) {
+      selectTier(tierKey, true);
+    }
+  },
+  toggleDefringe: () => dom.btnDefringe.click(),
+  toggleDespill: () => dom.btnDespill?.click(),
+  toggleMatting: () => dom.btnMatting?.click(),
+  rerunSegmentation: () => {
+    if (state.sourceFile) runSegmentation();
+  },
+  cancelProcessing: () => {
+    if (state.isProcessing) cancelProcessing();
+  },
   openSettings: (section) => {
     dom.infoModal.classList.add("active");
     if (section) {
@@ -1923,7 +2194,97 @@ window.openBGR = {
         ?.scrollIntoView({ block: "start" });
     }
   },
+  openGithub: () => openExternalUrl("https://github.com/markoshaq/OpenBGR"),
+  quitApp: () => {
+    if (window.pywebview?.api?.quit) {
+      window.pywebview.api.quit();
+    } else {
+      window.close();
+    }
+  },
 };
+
+// 11. In-App Studio Menu Bar (`#menuBar`) Interaction & Platform Shortcut Labels
+(function initStudioMenuBar() {
+  if (!dom.menuBar) return;
+
+  // Format shortcut labels for non-macOS platforms (Ctrl instead of ⌘)
+  const isMac = /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent);
+  if (!isMac) {
+    dom.menuBar.querySelectorAll(".menu-kbd[data-shortcut]").forEach((el) => {
+      const spec = el.getAttribute("data-shortcut") || "";
+      if (spec === "Fullscreen") {
+        el.textContent = "F11";
+      } else {
+        el.textContent = spec.replace("Shift+Mod+", "Ctrl+Shift+").replace("Mod+", "Ctrl+");
+      }
+    });
+  }
+
+  const roots = Array.from(dom.menuBar.querySelectorAll(".menu-root"));
+  roots.forEach((root) => {
+    const trigger = root.querySelector(".menu-trigger");
+    trigger?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const wasOpen = root.classList.contains("open");
+      closeAllMenus();
+      if (!wasOpen) {
+        syncMenuBarState();
+        root.classList.add("open");
+      }
+    });
+    trigger?.addEventListener("mouseenter", () => {
+      const anyOpen = dom.menuBar.querySelector(".menu-root.open");
+      if (anyOpen && anyOpen !== root) {
+        closeAllMenus();
+        syncMenuBarState();
+        root.classList.add("open");
+      }
+    });
+  });
+
+  dom.menuBar.querySelectorAll(".menu-item").forEach((item) => {
+    item.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (item.classList.contains("disabled")) return;
+      const cmd = item.getAttribute("data-cmd");
+      closeAllMenus();
+
+      const dispatch = {
+        newTab: () => window.openBGR.newTab(),
+        openImage: () => window.openBGR.openImage(),
+        exportImage: () => window.openBGR.exportImage(),
+        closeActiveTab: () => window.openBGR.closeActiveTab(),
+        preferences: () => window.openBGR.openSettings("preferences"),
+        about: () => window.openBGR.openSettings("about"),
+        quitApp: () => window.openBGR.quitApp(),
+        copyImage: () => window.openBGR.copyImage(),
+        pasteImage: () => window.openBGR.pasteImage(),
+        cancelProcessing: () => window.openBGR.cancelProcessing(),
+        viewSplit: () => window.openBGR.setView("split"),
+        viewCutout: () => window.openBGR.setView("cutout"),
+        viewOriginal: () => window.openBGR.setView("original"),
+        zoomIn: () => window.openBGR.zoomIn(),
+        zoomOut: () => window.openBGR.zoomOut(),
+        zoomReset: () => window.openBGR.zoomReset(),
+        toggleLoupe: () => window.openBGR.toggleLoupe(),
+        toggleTheme: () => window.openBGR.toggleTheme(),
+        toggleFullscreen: () => window.openBGR.toggleFullscreen(),
+        presetLow: () => window.openBGR.selectPreset("low"),
+        presetMid: () => window.openBGR.selectPreset("mid"),
+        presetHigh: () => window.openBGR.selectPreset("high"),
+        toggleDefringe: () => window.openBGR.toggleDefringe(),
+        toggleDespill: () => window.openBGR.toggleDespill(),
+        toggleMatting: () => window.openBGR.toggleMatting(),
+        rerun: () => window.openBGR.rerunSegmentation(),
+        openGithub: () => window.openBGR.openGithub(),
+      };
+      dispatch[cmd]?.();
+    });
+  });
+
+  window.addEventListener("click", () => closeAllMenus());
+})();
 
 // Initialize persisted preferences, default backdrop, format select & server status
 applyPreferences();

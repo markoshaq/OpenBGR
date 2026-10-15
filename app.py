@@ -789,7 +789,8 @@ class DesktopApi:
     """
     JavaScript-to-Python bridge exposed as `window.pywebview.api` when running
     inside the native pywebview desktop window. Provides native OS file dialogs
-    (Open / Save As) and a clean programmatic Quit for the native menu bar.
+    (Open / Save As), native OS clipboard image copy/paste, window fullscreen
+    and theme synchronization, external browser links, and clean Quit.
     """
 
     # Safety cap for the base64 bridge payload when reading picked images (~64 MP photos are fine).
@@ -800,8 +801,8 @@ class DesktopApi:
 
     def open_image_dialog(self) -> dict[str, Any]:
         """
-        Opens the native OS "Open Image" dialog, reads the selected file, and
-        returns it base64-encoded so the frontend can ingest it as a Blob.
+        Opens the native OS "Open Image" dialog, reads the selected file(s), and
+        returns them base64-encoded so the frontend can ingest them into tabs.
         """
         if self.window is None:
             return {"cancelled": True}
@@ -810,26 +811,41 @@ class DesktopApi:
 
             result = self.window.create_file_dialog(
                 webview.OPEN_DIALOG,
-                allow_multiple=False,
+                allow_multiple=True,
                 file_types=(
-                    "Image Files (*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif;*.tif;*.tiff;*.avif)",
+                    "Image Files (*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif;*.tif;*.tiff)",
                     "All files (*.*)",
                 ),
             )
             if not result:
                 return {"cancelled": True}
 
-            path_str = result[0] if isinstance(result, (list, tuple)) else str(result)
-            file_path = Path(path_str)
-            data = file_path.read_bytes()
-            if len(data) > self.OPEN_DIALOG_MAX_BYTES:
-                return {
-                    "cancelled": True,
-                    "error": "Selected image exceeds the 48 MB native-dialog bridge limit.",
-                }
+            paths = list(result) if isinstance(result, (list, tuple)) else [str(result)]
+            files_out: list[dict[str, str]] = []
+            for p_str in paths:
+                file_path = Path(p_str)
+                if not file_path.is_file():
+                    continue
+                data = file_path.read_bytes()
+                if len(data) > self.OPEN_DIALOG_MAX_BYTES:
+                    return {
+                        "cancelled": True,
+                        "error": f"'{file_path.name}' exceeds the 48 MB native-dialog limit.",
+                    }
+                files_out.append(
+                    {
+                        "name": file_path.name,
+                        "data_b64": base64.b64encode(data).decode("ascii"),
+                    }
+                )
+
+            if not files_out:
+                return {"cancelled": True}
+
             return {
-                "name": file_path.name,
-                "data_b64": base64.b64encode(data).decode("ascii"),
+                "files": files_out,
+                "name": files_out[0]["name"],
+                "data_b64": files_out[0]["data_b64"],
             }
         except Exception as exc:
             return {"cancelled": True, "error": str(exc)}
@@ -855,11 +871,182 @@ class DesktopApi:
         except Exception as exc:
             return {"saved": False, "error": str(exc)}
 
+    def copy_image(self, data_base64: str) -> dict[str, Any]:
+        """
+        Writes a base64-encoded 32-bit RGBA PNG directly to the native OS clipboard
+        across macOS (NSPasteboard), Windows (.NET Clipboard), and Linux (wl-copy/xclip).
+        """
+        try:
+            raw_bytes = base64.b64decode(data_base64)
+            sys_name = platform.system()
+
+            if sys_name == "Darwin":
+                import AppKit  # type: ignore
+                import Foundation  # type: ignore
+
+                pb = AppKit.NSPasteboard.generalPasteboard()
+                pb.clearContents()
+                ns_data = Foundation.NSData.dataWithBytes_length_(raw_bytes, len(raw_bytes))
+                ok = pb.setData_forType_(ns_data, AppKit.NSPasteboardTypePNG)
+                return {"copied": bool(ok)}
+
+            if sys_name == "Windows":
+                import clr  # type: ignore
+
+                clr.AddReference("System.Windows.Forms")
+                clr.AddReference("System.Drawing")
+                import System.Drawing as Drawing  # type: ignore
+                import System.IO as SysIO  # type: ignore
+                import System.Threading as SysThreading  # type: ignore
+                import System.Windows.Forms as WinForms  # type: ignore
+
+                err_holder: list[str] = []
+
+                def _set_win_clip() -> None:
+                    try:
+                        ms = SysIO.MemoryStream(raw_bytes)
+                        bmp = Drawing.Bitmap(ms)
+                        data_obj = WinForms.DataObject()
+                        data_obj.SetData("PNG", False, ms)
+                        data_obj.SetImage(bmp)
+                        WinForms.Clipboard.SetDataObject(data_obj, True)
+                    except Exception as e:
+                        err_holder.append(str(e))
+
+                t = SysThreading.Thread(SysThreading.ThreadStart(_set_win_clip))
+                t.SetApartmentState(SysThreading.ApartmentState.STA)
+                t.Start()
+                t.Join(3000)
+                if err_holder:
+                    return {"copied": False, "error": err_holder[0]}
+                return {"copied": True}
+
+            # Linux (Wayland wl-copy or X11 xclip)
+            for cmd in (
+                ["wl-copy", "--type", "image/png"],
+                ["xclip", "-selection", "clipboard", "-t", "image/png", "-i"],
+            ):
+                if shutil.which(cmd[0]):
+                    proc = subprocess.run(cmd, input=raw_bytes, check=False, timeout=4)
+                    if proc.returncode == 0:
+                        return {"copied": True}
+
+            return {"copied": False, "error": "No native clipboard utility found."}
+        except Exception as exc:
+            return {"copied": False, "error": str(exc)}
+
+    def read_clipboard_image(self) -> dict[str, Any]:
+        """
+        Reads an image (or an image file copied in Finder / File Explorer) from
+        the native OS clipboard and returns it as base64 PNG bytes.
+        """
+        try:
+            from PIL import ImageGrab
+
+            grabbed = ImageGrab.grabclipboard()
+            if isinstance(grabbed, Image.Image):
+                buf = io.BytesIO()
+                try:
+                    grabbed.save(buf, format="PNG")
+                    return {
+                        "has_image": True,
+                        "name": "CLIPBOARD.PNG",
+                        "data_b64": base64.b64encode(buf.getvalue()).decode("ascii"),
+                    }
+                finally:
+                    buf.close()
+                    grabbed.close()
+
+            if isinstance(grabbed, (list, tuple)):
+                for item in grabbed:
+                    p = Path(str(item))
+                    if p.is_file() and p.suffix.lower() in {
+                        ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"
+                    }:
+                        data = p.read_bytes()
+                        if len(data) <= self.OPEN_DIALOG_MAX_BYTES:
+                            return {
+                                "has_image": True,
+                                "name": p.name,
+                                "data_b64": base64.b64encode(data).decode("ascii"),
+                            }
+        except Exception:
+            pass
+
+        # Linux fallback via wl-paste or xclip
+        if platform.system() == "Linux":
+            for cmd in (
+                ["wl-paste", "--type", "image/png"],
+                ["xclip", "-selection", "clipboard", "-t", "image/png", "-o"],
+            ):
+                if shutil.which(cmd[0]):
+                    try:
+                        proc = subprocess.run(
+                            cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=3
+                        )
+                        if proc.returncode == 0 and proc.stdout:
+                            return {
+                                "has_image": True,
+                                "name": "CLIPBOARD.PNG",
+                                "data_b64": base64.b64encode(proc.stdout).decode("ascii"),
+                            }
+                    except Exception:
+                        pass
+
+        return {"has_image": False}
+
+    def toggle_fullscreen(self) -> dict[str, Any]:
+        """Toggles native OS fullscreen mode on the desktop window."""
+        try:
+            if self.window is not None:
+                self.window.toggle_fullscreen()
+                return {"toggled": True}
+        except Exception as exc:
+            return {"toggled": False, "error": str(exc)}
+        return {"toggled": False}
+
+    def open_external(self, url: str) -> dict[str, Any]:
+        """Opens an external HTTP(S) link in the user's default system browser."""
+        if isinstance(url, str) and url.startswith(("https://", "http://")):
+            webbrowser.open(url)
+            return {"opened": True}
+        return {"opened": False}
+
+    def set_window_theme(self, theme: str) -> dict[str, Any]:
+        """Synchronizes the native OS window frame appearance with Dark or Light mode."""
+        if platform.system() == "Darwin" and self.window is not None:
+            try:
+                import AppKit  # type: ignore
+                from PyObjCTools import AppHelper  # type: ignore
+
+                def _apply() -> None:
+                    try:
+                        ns_win = getattr(self.window, "native", None)
+                        if ns_win is None:
+                            return
+                        appearance_name = (
+                            AppKit.NSAppearanceNameAqua
+                            if theme == "light"
+                            else AppKit.NSAppearanceNameDarkAqua
+                        )
+                        appearance = AppKit.NSAppearance.appearanceNamed_(appearance_name)
+                        if appearance is not None:
+                            ns_win.setAppearance_(appearance)
+                    except Exception:
+                        pass
+
+                AppHelper.callAfter(_apply)
+                return {"updated": True}
+            except Exception:
+                pass
+        return {"updated": False}
+
     def quit(self) -> dict[str, Any]:
         """
-        Destroys the native window, which unblocks `webview.start()` on the main
-        thread so the shutdown path (cancel + unload + os._exit) runs cleanly.
+        Cancels any active inference job, unloads GPU memory, and destroys the
+        native window so `webview.start()` exits cleanly.
         """
+        MANAGER.request_cancel()
         try:
             if self.window is not None:
                 self.window.destroy()
@@ -869,12 +1056,42 @@ class DesktopApi:
 
 
 # ---------------------------------------------------------------------------
-# Native Window State Persistence & Menu Bar
+# Native Window State Persistence, Icon & Menu Bar
 # ---------------------------------------------------------------------------
 
 # Per-user desktop preferences dir; survives app updates and keeps the repo clean.
 APP_CONFIG_DIR = Path.home() / ".openbgr"
 WINDOW_STATE_PATH = APP_CONFIG_DIR / "window.json"
+APP_ICON_PATH = APP_CONFIG_DIR / "icon.png"
+
+
+def ensure_app_icon() -> Optional[str]:
+    """
+    Generates a crisp 256x256 monochrome OpenBGR studio icon in `~/.openbgr/icon.png`
+    so the native window, Dock, and task switcher display the OpenBGR mark.
+    """
+    try:
+        if not APP_ICON_PATH.exists():
+            from PIL import ImageDraw
+
+            APP_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            img = Image.new("RGBA", (256, 256), (9, 9, 11, 255))
+            draw = ImageDraw.Draw(img)
+            draw.rectangle((16, 16, 240, 240), outline=(250, 250, 250, 255), width=8)
+            draw.rectangle((24, 24, 128, 232), fill=(250, 250, 250, 255))
+            tile = 26
+            for y in range(24, 232, tile):
+                for x in range(128, 232, tile):
+                    is_light = ((x - 128) // tile + (y - 24) // tile) % 2 == 0
+                    color = (39, 39, 42, 255) if is_light else (17, 17, 19, 255)
+                    draw.rectangle(
+                        (x, y, min(x + tile, 232), min(y + tile, 232)), fill=color
+                    )
+            img.save(APP_ICON_PATH, format="PNG")
+            img.close()
+        return str(APP_ICON_PATH)
+    except Exception:
+        return None
 
 
 def load_window_state() -> dict[str, int]:
@@ -932,19 +1149,16 @@ def attach_window_state_persistence(window: Any) -> None:
 
 def set_macos_app_name(name: str) -> None:
     """
-    Renames the macOS menu-bar application name from "Python" to `name`.
-
-    The Cocoa menu bar reads `CFBundleName` from the running process's main
-    bundle before `NSApplication` finishes launching. Mutating the bundle's info
-    dictionary before `webview.start()` (which bootstraps NSApp) makes the
-    menu bar show "OpenBGR" instead of "Python".
+    Renames the macOS menu-bar application name from "Python" to `name` and
+    updates the bundle metadata before NSApplication finishes launching.
     """
     if platform.system() != "Darwin":
         return
     try:
-        from Foundation import NSBundle  # type: ignore
+        import Foundation  # type: ignore
 
-        bundle = NSBundle.mainBundle()
+        Foundation.NSProcessInfo.processInfo().setProcessName_(name)
+        bundle = Foundation.NSBundle.mainBundle()
         for info_dict in (
             bundle.infoDictionary(),
             bundle.localizedInfoDictionary(),
@@ -952,105 +1166,237 @@ def set_macos_app_name(name: str) -> None:
             if info_dict is not None:
                 info_dict["CFBundleName"] = name
                 info_dict["CFBundleDisplayName"] = name
+                info_dict["CFBundleShortVersionString"] = "1.0.0"
+                info_dict["CFBundleVersion"] = "1.0.0"
+                info_dict["CFBundleGetInfoString"] = f"{name} 1.0.0"
+                info_dict["NSHumanReadableCopyright"] = (
+                    f"{name} — Local AI Background Removal Studio"
+                )
     except Exception:
         pass
 
 
 def build_native_menus(window: Any) -> list[Any]:
     """
-    Builds the native OS menu bar for the desktop window.
+    Builds the native OS menu bar for macOS and Linux.
 
-    macOS gets a proper "OpenBGR" application menu (About / Preferences / Quit)
-    plus File / Edit / View. Windows and Linux get File (with Preferences and
-    Quit), Edit, View, and Help. Menu actions evaluate small JS calls into the
-    frontend's `window.openBGR` command bridge.
+    On macOS, `Menu("__app__", ...)` injects items directly into the primary
+    "OpenBGR" application menu (between About and Services), while setting
+    `webview.settings["SHOW_DEFAULT_MENUS"] = False` prevents pywebview from
+    adding duplicate Edit and View menus.
+
+    Note: MenuAction titles intentionally use Unicode ellipsis (`…`) and em-dashes
+    (`—`) instead of ASCII periods (`.`) or parentheses (`()`), because Linux GTK's
+    `Gio.SimpleAction` detailed-action parser treats `.` and `(...)` as GVariant
+    action parameters and disables items that contain them.
     """
-    import webview
     from webview.menu import Menu, MenuAction, MenuSeparator
 
-    def cmd(js_code: str):
+    def call(fn: str):
         def _run() -> None:
             try:
-                window.evaluate_js(js_code)
+                window.evaluate_js(f"window.openBGR && window.openBGR.{fn}")
             except Exception:
                 pass
 
         return _run
 
+    def toggle_fs() -> None:
+        try:
+            window.toggle_fullscreen()
+        except Exception:
+            pass
+
     def quit_app() -> None:
+        MANAGER.request_cancel()
         try:
             window.destroy()
         except Exception:
             pass
 
-    def call(fn: str):
-        return cmd(f"window.openBGR && window.openBGR.{fn}")
-
-    view_menu = Menu(
-        "View",
+    app_menu = Menu(
+        "__app__",
         [
-            MenuAction("Split", call("setView('split')")),
-            MenuAction("Cutout", call("setView('cutout')")),
-            MenuAction("Original", call("setView('original')")),
-            MenuSeparator(),
-            MenuAction("Zoom In", call("zoomIn()")),
-            MenuAction("Zoom Out", call("zoomOut()")),
-            MenuAction("Actual Size", call("zoomReset()")),
-            MenuSeparator(),
-            MenuAction("Toggle Loupe 4x", call("toggleLoupe()")),
+            MenuAction("Preferences…", call("openSettings('preferences')")),
         ],
     )
+
+    file_items: list[Any] = [
+        MenuAction("New Tab", call("newTab()")),
+        MenuAction("Open Image…", call("openImage()")),
+        MenuSeparator(),
+        MenuAction("Export Image…", call("exportImage()")),
+        MenuSeparator(),
+        MenuAction("Close Tab", call("closeActiveTab()")),
+    ]
+    if platform.system() != "Darwin":
+        file_items.extend(
+            [
+                MenuSeparator(),
+                MenuAction("Preferences…", call("openSettings('preferences')")),
+                MenuSeparator(),
+                MenuAction("Quit OpenBGR", quit_app),
+            ]
+        )
+    file_menu = Menu("File", file_items)
 
     edit_menu = Menu(
         "Edit",
         [
-            MenuAction("Copy Image", call("copyImage()")),
+            MenuAction("Copy Cutout", call("copyImage()")),
             MenuAction("Paste Image", call("pasteImage()")),
             MenuSeparator(),
             MenuAction("Cancel Processing", call("cancelProcessing()")),
         ],
     )
 
-    if platform.system() == "Darwin":
-        app_menu = Menu(
-            "OpenBGR",
-            [
-                MenuAction("About OpenBGR", call("openSettings('about')")),
-                MenuSeparator(),
-                MenuAction("Preferences...", call("openSettings('preferences')")),
-                MenuSeparator(),
-                MenuAction("Quit OpenBGR", quit_app),
-            ],
-        )
-        file_menu = Menu(
-            "File",
-            [
-                MenuAction("Open Image...", call("openImage()")),
-                MenuAction("Export...", call("exportImage()")),
-                MenuSeparator(),
-                MenuAction("Close Tab", call("closeActiveTab()")),
-            ],
-        )
-        return [app_menu, file_menu, edit_menu, view_menu]
-
-    file_menu = Menu(
-        "File",
+    view_menu = Menu(
+        "View",
         [
-            MenuAction("Open Image...", call("openImage()")),
-            MenuAction("Export...", call("exportImage()")),
+            MenuAction("Split Comparison", call("setView('split')")),
+            MenuAction("Cutout Only", call("setView('cutout')")),
+            MenuAction("Original Only", call("setView('original')")),
             MenuSeparator(),
-            MenuAction("Close Tab", call("closeActiveTab()")),
+            MenuAction("Zoom In", call("zoomIn()")),
+            MenuAction("Zoom Out", call("zoomOut()")),
+            MenuAction("Actual Size — 100%", call("zoomReset()")),
             MenuSeparator(),
-            MenuAction("Preferences...", call("openSettings('preferences')")),
+            MenuAction("Toggle Loupe 4x", call("toggleLoupe()")),
             MenuSeparator(),
-            MenuAction("Quit", quit_app),
+            MenuAction("Toggle Full Screen", toggle_fs),
         ],
     )
+
+    model_menu = Menu(
+        "Model",
+        [
+            MenuAction("Low-End — Lite 1K", call("selectPreset('low')")),
+            MenuAction("Mid-Range — Full 1K", call("selectPreset('mid')")),
+            MenuAction("High-End — Ultra 2K", call("selectPreset('high')")),
+            MenuSeparator(),
+            MenuAction("Toggle Defringe Edges", call("toggleDefringe()")),
+            MenuAction("Toggle Suppress Color Spill", call("toggleDespill()")),
+            MenuAction("Toggle Glass and Sheer Matting", call("toggleMatting()")),
+            MenuSeparator(),
+            MenuAction("Re-Run Segmentation", call("rerunSegmentation()")),
+        ],
+    )
+
     help_menu = Menu(
         "Help",
-        [MenuAction("About OpenBGR", call("openSettings('about')"))],
+        [
+            MenuAction("Preferences and System Info…", call("openSettings('preferences')")),
+            MenuAction("About OpenBGR…", call("openSettings('about')")),
+            MenuSeparator(),
+            MenuAction(
+                "OpenBGR on GitHub",
+                lambda: webbrowser.open("https://github.com/markoshaq/OpenBGR"),
+            ),
+        ],
     )
-    return [file_menu, edit_menu, view_menu, help_menu]
+
+    return [app_menu, file_menu, edit_menu, view_menu, model_menu, help_menu]
+
+
+def configure_macos_native_window_and_menus(window: Any) -> None:
+    """
+    Enhances the macOS Cocoa NSMenu and NSWindow once the window is shown:
+    1. Attaches native Cocoa keyboard shortcuts (`keyEquivalent`) to menu items
+       so macOS displays `⌘O`, `⌘E`, `⌘W`, `⌘,`, `⌘1`/`⌘2`/`⌘3`, `⌘+`/`⌘-`/`⌘0`,
+       and `⌃⌘F` in the menu bar — and intercepts `⌘W` to close the active tab
+       instead of closing the entire window.
+    2. Wires the top "About OpenBGR" item in the macOS application menu to open
+       the in-app About / System Info dialog.
+    3. Sets the NSWindow appearance to DarkAqua by default.
+    """
+    if platform.system() != "Darwin":
+        return
+
+    def _enhance() -> None:
+        try:
+            import AppKit  # type: ignore
+            from PyObjCTools import AppHelper  # type: ignore
+            import webview.platforms.cocoa as cocoa_mod  # type: ignore
+
+            def _on_main() -> None:
+                try:
+                    ns_win = getattr(window, "native", None)
+                    if ns_win is not None:
+                        dark = AppKit.NSAppearance.appearanceNamed_(
+                            AppKit.NSAppearanceNameDarkAqua
+                        )
+                        if dark is not None:
+                            ns_win.setAppearance_(dark)
+
+                    main_menu = AppKit.NSApplication.sharedApplication().mainMenu()
+                    if main_menu is None:
+                        return
+
+                    cmd_mask = AppKit.NSEventModifierFlagCommand
+                    shift_cmd = cmd_mask | AppKit.NSEventModifierFlagShift
+                    ctrl_cmd = cmd_mask | AppKit.NSEventModifierFlagControl
+
+                    shortcuts: dict[str, tuple[str, int]] = {
+                        "Preferences…": (",", cmd_mask),
+                        "New Tab": ("t", cmd_mask),
+                        "Open Image…": ("o", cmd_mask),
+                        "Export Image…": ("e", cmd_mask),
+                        "Close Tab": ("w", cmd_mask),
+                        "Copy Cutout": ("c", shift_cmd),
+                        "Paste Image": ("v", cmd_mask),
+                        "Split Comparison": ("1", cmd_mask),
+                        "Cutout Only": ("2", cmd_mask),
+                        "Original Only": ("3", cmd_mask),
+                        "Zoom In": ("+", cmd_mask),
+                        "Zoom Out": ("-", cmd_mask),
+                        "Actual Size — 100%": ("0", cmd_mask),
+                        "Re-Run Segmentation": ("r", cmd_mask),
+                        "Toggle Full Screen": ("f", ctrl_cmd),
+                    }
+
+                    # Wire "About OpenBGR" in the app menu (index 0) to our in-app About modal
+                    app_menu_item = main_menu.itemAtIndex_(0)
+                    if app_menu_item and app_menu_item.submenu():
+                        app_sub = app_menu_item.submenu()
+                        if app_sub.numberOfItems() > 0:
+                            about_item = app_sub.itemAtIndex_(0)
+                            about_id = "openbgr.about"
+                            cocoa_mod.menu_handler.register_action(
+                                about_id,
+                                lambda: window.evaluate_js(
+                                    "window.openBGR && window.openBGR.openSettings('about')"
+                                ),
+                            )
+                            about_item.setTitle_("About OpenBGR")
+                            about_item.setAction_("handleMenuAction:")
+                            about_item.setTarget_(cocoa_mod.menu_handler)
+                            about_item.setRepresentedObject_(about_id)
+
+                    for i in range(main_menu.numberOfItems()):
+                        top_item = main_menu.itemAtIndex_(i)
+                        sub = top_item.submenu() if top_item else None
+                        if sub is None:
+                            continue
+                        for j in range(sub.numberOfItems()):
+                            mi = sub.itemAtIndex_(j)
+                            if mi is None:
+                                continue
+                            title = str(mi.title() or "")
+                            if title in shortcuts:
+                                key_eq, mask = shortcuts[title]
+                                mi.setKeyEquivalent_(key_eq)
+                                mi.setKeyEquivalentModifierMask_(mask)
+                except Exception:
+                    pass
+
+            AppHelper.callAfter(_on_main)
+        except Exception:
+            pass
+
+    try:
+        window.events.shown += lambda *a, **k: _enhance()
+    except Exception:
+        pass
 
 
 def wait_for_server(host: str, port: int, timeout_s: float = 15.0) -> bool:
@@ -1137,16 +1483,18 @@ if __name__ == "__main__":
         wait_for_server(host, port)
 
         try:
+            set_macos_app_name("OpenBGR")
             import webview
 
-            set_macos_app_name("OpenBGR")
+            webview.settings["SHOW_DEFAULT_MENUS"] = False
             api_bridge = DesktopApi()
+            icon_path = ensure_app_icon()
 
             window_kwargs: dict[str, Any] = {}
             saved_geometry = load_window_state()
             if saved_geometry.get("width") and saved_geometry.get("height"):
-                window_kwargs["width"] = saved_geometry["width"]
-                window_kwargs["height"] = saved_geometry["height"]
+                window_kwargs["width"] = max(980, saved_geometry["width"])
+                window_kwargs["height"] = max(640, saved_geometry["height"])
                 if saved_geometry.get("x") is not None:
                     window_kwargs["x"] = saved_geometry["x"]
                 if saved_geometry.get("y") is not None:
@@ -1154,9 +1502,6 @@ if __name__ == "__main__":
             else:
                 window_kwargs["width"] = 1380
                 window_kwargs["height"] = 860
-            if platform.system() == "Darwin":
-                # Native vibrancy gives the titlebar the translucent macOS material.
-                window_kwargs["vibrancy"] = True
 
             window = webview.create_window(
                 title="OpenBGR",
@@ -1168,17 +1513,26 @@ if __name__ == "__main__":
             )
             api_bridge.window = window
             attach_window_state_persistence(window)
+            configure_macos_native_window_and_menus(window)
 
-            try:
-                native_menus = build_native_menus(window)
-            except Exception as menu_exc:
-                print(f"[Desktop] Native menu bar unavailable ({menu_exc}).")
-                native_menus = None
+            # On macOS and Linux, attach the native OS menu bar; on Windows,
+            # WinForms MenuStrip clashes with WebView2 DockStyle.Fill, so Windows
+            # uses the themed in-app Studio Menu Bar in the top header.
+            native_menus = None
+            if platform.system() != "Windows":
+                try:
+                    native_menus = build_native_menus(window)
+                except Exception as menu_exc:
+                    print(f"[Desktop] Native menu bar unavailable ({menu_exc}).")
+                    native_menus = None
 
+            start_kwargs: dict[str, Any] = {}
             if native_menus:
-                webview.start(menu=native_menus)
-            else:
-                webview.start()
+                start_kwargs["menu"] = native_menus
+            if icon_path:
+                start_kwargs["icon"] = icon_path
+
+            webview.start(**start_kwargs)
             # When the native desktop window is closed by the user, release
             # device memory and terminate the process tree immediately so no
             # background server or worker threads remain running.
