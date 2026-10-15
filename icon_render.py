@@ -60,8 +60,9 @@ def render_icon(size: int = 1024) -> Image.Image:
     layer = Image.new("RGBA", (s, s), (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
     d.rectangle((left, top, mid, bottom), fill=(250, 250, 250, 255))
-    rows = cols = 8
-    tile_w, tile_h = half / cols, art / rows
+    cols = 8
+    tile_w = tile_h = half / cols
+    rows = math.ceil(art / tile_h)
     for r in range(rows):
         for c in range(cols):
             color = (39, 39, 42, 255) if (r + c) % 2 == 0 else (16, 16, 18, 255)

@@ -345,7 +345,6 @@
           <div class="section-header">SOURCE IMAGE</div>
           <button type="button" class="action-btn full-width" id="btnOpen">OPEN IMAGE FILE</button>
           <button type="button" class="action-btn primary full-width disabled" id="btnProcess">PROCESS IMAGE</button>
-          <button type="button" class="action-btn full-width" id="btnBatch">BATCH PROCESS IMAGES</button>
           <input type="file" id="fileInput" accept="image/*" multiple />
         </div>
 
@@ -410,6 +409,25 @@
             <div class="stage-label right" id="lblRight">PNG • 100%</div>
             <div class="split-line" id="splitLine" style="left: 50%;">
               <div class="split-handle">↔</div>
+            </div>
+          </div>
+
+          <!-- Batch Queue Panel (shown when a batch tab is active) -->
+          <div class="batch-panel" id="batchPanel">
+            <div class="batch-panel-head">
+              <div>
+                <div class="batch-panel-title">BATCH QUEUE</div>
+                <div class="batch-panel-sub" id="batchSub">0 images</div>
+              </div>
+              <div class="batch-panel-actions">
+                <button type="button" class="action-btn" id="btnBatchAdd">ADD IMAGES</button>
+                <button type="button" class="action-btn primary" id="btnBatchRun">RUN BATCH</button>
+              </div>
+            </div>
+            <div class="batch-list" id="batchList"></div>
+            <div class="batch-panel-foot" id="batchFoot">
+              <span id="batchFootText">Drop more images onto this window to add them.</span>
+              <button type="button" class="batch-foot-btn" id="btnBatchOutDir" style="display:none">CHANGE FOLDER</button>
             </div>
           </div>
 
@@ -527,6 +545,9 @@
         </div>
       </div>
     </div>
+
+    <!-- Tab Bar Context Menu (right-click / merge gestures) -->
+    <div class="tab-context-menu" id="tabContextMenu" style="display:none"></div>
 
     <!-- Preferences & System Info Modal (sidebar navigation layout) -->
     <div class="modal-backdrop" id="infoModal">

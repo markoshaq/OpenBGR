@@ -137,13 +137,14 @@ const state = {
   expectingBatch: false,     // Next fileInput selection routes into the batch queue
   batch: {                   // Client-side FIFO queue state for batch processing
     running: false,
+    tabId: null,             // Batch tab currently executing
     total: 0,
     index: 0,
     failed: 0,
     cancelled: false,
-    outputDir: null,         // Chosen output folder (native desktop mode)
     results: [],             // [{name, blob}] collected for browser ZIP export
   },
+  dragTabId: null,           // Tab being dragged for folder-style batch merge
 };
 
 /** DOM Element References */
@@ -198,7 +199,14 @@ const dom = {
   fileInput: document.getElementById("fileInput"),
   btnOpen: document.getElementById("btnOpen"),
   btnProcess: document.getElementById("btnProcess"),
-  btnBatch: document.getElementById("btnBatch"),
+  batchPanel: document.getElementById("batchPanel"),
+  batchList: document.getElementById("batchList"),
+  batchSub: document.getElementById("batchSub"),
+  batchFootText: document.getElementById("batchFootText"),
+  btnBatchAdd: document.getElementById("btnBatchAdd"),
+  btnBatchRun: document.getElementById("btnBatchRun"),
+  btnBatchOutDir: document.getElementById("btnBatchOutDir"),
+  tabContextMenu: document.getElementById("tabContextMenu"),
   btnCopy: document.getElementById("btnCopy"),
   btnDownload: document.getElementById("btnDownload"),
   btnDefringe: document.getElementById("btnDefringe"),
@@ -276,13 +284,15 @@ function renderTabBar() {
 
   state.tabs.forEach((tab) => {
     const tabEl = document.createElement("div");
-    tabEl.className = `tab-item${tab.id === state.activeTabId ? " active" : ""}`;
+    tabEl.className = `tab-item${tab.id === state.activeTabId ? " active" : ""}${tab.kind === "batch" ? " batch-tab" : ""}`;
     tabEl.setAttribute("data-tab-id", tab.id);
     tabEl.title = tab.name;
+    tabEl.draggable = true;
 
     const titleSpan = document.createElement("span");
     titleSpan.className = "tab-title";
-    titleSpan.textContent = tab.name;
+    titleSpan.textContent =
+      tab.kind === "batch" ? `BATCH (${tab.batchFiles.length})` : tab.name;
 
     const closeBtn = document.createElement("button");
     closeBtn.type = "button";
@@ -292,6 +302,45 @@ function renderTabBar() {
     closeBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       requestCloseTab(tab.id);
+    });
+
+    // Folder-style merge: drag one tab onto another to combine them into a batch.
+    tabEl.addEventListener("dragstart", (e) => {
+      state.dragTabId = tab.id;
+      e.dataTransfer.effectAllowed = "move";
+      try {
+        e.dataTransfer.setData("text/plain", tab.id);
+      } catch (_) {}
+    });
+    tabEl.addEventListener("dragend", () => {
+      state.dragTabId = null;
+      dom.tabBar
+        .querySelectorAll(".drop-target")
+        .forEach((el) => el.classList.remove("drop-target"));
+    });
+    tabEl.addEventListener("dragover", (e) => {
+      if (!state.dragTabId || state.dragTabId === tab.id) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = "move";
+      tabEl.classList.add("drop-target");
+    });
+    tabEl.addEventListener("dragleave", () => {
+      tabEl.classList.remove("drop-target");
+    });
+    tabEl.addEventListener("drop", (e) => {
+      if (!state.dragTabId) return;
+      e.preventDefault();
+      e.stopPropagation();
+      tabEl.classList.remove("drop-target");
+      const srcId = state.dragTabId;
+      state.dragTabId = null;
+      if (srcId !== tab.id) mergeTabsIntoBatch(srcId, tab.id);
+    });
+
+    tabEl.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      showTabContextMenu(tab, e.clientX, e.clientY);
     });
 
     tabEl.addEventListener("click", () => {
@@ -438,11 +487,23 @@ function closeTabImmediate(tabId) {
     URL.revokeObjectURL(tab.previewObjectUrl);
   }
 
+  // Cancelling the running batch when its tab is closed
+  if (tab.kind === "batch" && state.batch.running && state.batch.tabId === tabId) {
+    state.batch.cancelled = true;
+    if (state.abortController) {
+      state.abortController.abort();
+      state.abortController = null;
+    }
+    state.isProcessing = false;
+    dom.busyOverlay.classList.remove("active");
+  }
+
   state.tabs.splice(idx, 1);
 
-  // Collapse to the pristine empty workspace whenever no image-bearing tab
-  // remains — leftover blank "NEW TAB" stubs shouldn't keep the tab bar alive.
-  if (!state.tabs.some((t) => t.sourceFile)) {
+  // Collapse to the pristine empty workspace whenever no content-bearing tab
+  // (image or batch) remains — leftover blank "NEW TAB" stubs shouldn't keep
+  // the tab bar alive.
+  if (!state.tabs.some((t) => t.sourceFile || t.kind === "batch")) {
     state.tabs = [];
     state.activeTabId = null;
     resetToEmptyWorkspace();
@@ -482,6 +543,7 @@ function resetToEmptyWorkspace() {
 
   dom.stage.classList.remove("visible");
   dom.emptyState.style.display = "";
+  dom.batchPanel?.classList.remove("active");
 
   dom.exportWidthInput.value = "";
   dom.exportHeightInput.value = "";
@@ -548,6 +610,21 @@ async function switchToTab(tabId) {
   dom.exportFormatSelect.value = state.exportFormat;
 
   applyBackdrop(state.activeBackdrop);
+
+  // Batch tabs show the queue panel instead of the single-image stage.
+  if (tab.kind === "batch") {
+    renderBatchPanel(tab);
+    dom.appShell?.classList.add("no-image");
+    dom.appShell?.classList.add("no-result");
+    dom.btnDownload.classList.add("disabled");
+    dom.btnCopy.classList.add("disabled");
+    dom.statFile.textContent = `BATCH · ${tab.batchFiles.length} FILE${tab.batchFiles.length === 1 ? "" : "S"}`;
+    dom.statDim.textContent = "—";
+    dom.statTime.textContent = tab.elapsedText || "—";
+    syncMenuBarState();
+    return;
+  }
+  dom.batchPanel?.classList.remove("active");
 
   if (!tab.sourceFile) {
     resetToEmptyWorkspace();
@@ -667,99 +744,442 @@ function cancelProcessing() {
 const BATCH_EXT = { png: "png", webp: "webp", jpg: "jpg", mask: "png" };
 
 /**
- * Entry point for batch: confirms the count, then runs the queue.
+ * Chooser shown when multiple files arrive through a generic open gesture
+ * (file dialog, multi-select, drag-and-drop): tabs or a single batch tab.
  * @param {Array<File>} files
+ * @param {string} noun  "SELECTED" | "DROPPED"
  */
-function startBatchFlow(files) {
+function openMultiFileChooser(files, noun) {
   const list = Array.from(files || []).filter((f) => f);
-  if (list.length === 0 || state.batch.running) return;
-
-  if (state.isProcessing) {
-    openConfirmModal(
-      `This will stop the current image processing. Start a batch of ${list.length} image${list.length > 1 ? "s" : ""}?`,
-      () => {
-        cancelProcessing();
-        confirmBatch(list);
-      }
-    );
-    return;
-  }
-  confirmBatch(list);
-}
-
-/**
- * Shows the batch confirmation summary (current settings apply to every file).
- * @param {Array<File>} files
- */
-function confirmBatch(files) {
-  const tierLabel = { low: "LOW · LITE 1K", mid: "MID · FULL 1K", high: "HIGH · ULTRA 2K" }[
-    state.tier
-  ] || state.tier;
-  const opts = [
-    state.matting ? "MATTING" : tierLabel,
-    state.defringe ? "DEFRINGE" : null,
-    state.despill ? "DESPILL" : null,
-    state.shadowCutoff > 0 ? `CUTOFF ${state.shadowCutoff}%` : null,
-    (state.exportFormat || "png").toUpperCase(),
-  ]
-    .filter(Boolean)
-    .join(" · ");
-
+  if (!list.length) return;
   openConfirmModal(
     {
-      title: `BATCH PROCESS ${files.length} IMAGE${files.length > 1 ? "S" : ""}?`,
-      message: `Every file is processed locally with your current settings and exported as "_cutout" copies — no tabs are opened.\n\n${opts}`,
-      confirmText: "START BATCH",
+      title: `${list.length} IMAGES ${noun}`,
+      message:
+        "Open them as separate tabs, or create one batch tab that processes them all with a single set of settings?",
+      confirmText: "CREATE BATCH",
       cancelText: "CANCEL",
+      altText: "OPEN AS TABS",
+      altFn: () => {
+        if (state.isProcessing) cancelProcessing();
+        list.forEach((f) => ingestImageFile(f));
+      },
     },
-    () => runBatch(files)
+    () => {
+      if (state.isProcessing) cancelProcessing();
+      createBatchTab(list);
+    }
   );
 }
 
 /**
- * Runs the FIFO queue: POST each file, render the export blob, then either
- * write it into the chosen folder via POST /api/save (native) or collect it
- * for a single ZIP download (browser).
+ * Opens a multi-file picker and invokes `cb` with the chosen File[].
+ * Used by the batch entry points (⌘B, File menu, ADD IMAGES).
+ * @param {(files: File[]) => void} cb
+ */
+async function pickImageFiles(cb) {
+  if (window.pywebview?.api?.open_image_dialog) {
+    try {
+      const res = await window.pywebview.api.open_image_dialog();
+      if (res?.error) {
+        setError(res.error);
+        return;
+      }
+      if (Array.isArray(res?.files) && res.files.length > 0) {
+        cb(
+          res.files.map(
+            (f) => new File([base64ToBlob(f.data_b64)], f.name || "image.png")
+          )
+        );
+      } else if (res?.data_b64) {
+        cb([new File([base64ToBlob(res.data_b64)], res.name || "image.png")]);
+      }
+      return;
+    } catch (_) {
+      // Fall through to the HTML file input if the bridge call fails
+    }
+  }
+  state.expectingBatch = true;
+  triggerOpenFileDialog();
+}
+
+/**
+ * Creates a batch tab containing `files`. A batch tab carries the same
+ * per-tab settings (tier, refinements, export options) which apply to every
+ * image in its queue.
  * @param {Array<File>} files
  */
-async function runBatch(files) {
-  const batch = state.batch;
+function createBatchTab(files) {
+  const list = Array.from(files || []).filter((f) => f);
+  if (!list.length) return;
+  saveStateToActiveTab();
 
-  // Choose the destination folder up-front in native mode.
-  let outputDir = null;
-  if (window.pywebview?.api?.choose_output_dir) {
+  const tabId = `tab-${nextTabSeq++}`;
+  const defaultTier =
+    prefs.defaultTier !== "auto"
+      ? prefs.defaultTier
+      : state.serverStatus?.recommended_tier || state.tier;
+  const tab = {
+    id: tabId,
+    kind: "batch",
+    name: "BATCH",
+    sourceFile: null,
+    originalObjectUrl: null,
+    resultBlob: null,
+    resultObjectUrl: null,
+    previewBlob: null,
+    previewObjectUrl: null,
+    naturalWidth: 0,
+    naturalHeight: 0,
+    tier: defaultTier,
+    defringe: state.defringe,
+    despill: state.despill,
+    matting: state.matting,
+    shadowCutoff: state.shadowCutoff,
+    viewMode: "split",
+    splitPercent: 50,
+    exportFormat: state.exportFormat,
+    exportScale: state.exportScale,
+    exportWidth: 0,
+    exportHeight: 0,
+    activeBackdrop: state.activeBackdrop,
+    elapsedText: "—",
+    batchFiles: list.map((f) => ({
+      file: f,
+      name: f.name || "image",
+      size: f.size || 0,
+      status: "queued",
+    })),
+    batchOutputDir: null,
+  };
+  state.tabs.push(tab);
+  switchToTab(tabId);
+}
+
+/** Appends files to an existing batch tab and re-renders it if visible. */
+function addFilesToBatchTab(tab, files) {
+  Array.from(files || [])
+    .filter((f) => f)
+    .forEach((f) =>
+      tab.batchFiles.push({
+        file: f,
+        name: f.name || "image",
+        size: f.size || 0,
+        status: "queued",
+      })
+    );
+  if (tab.id === state.activeTabId) renderBatchPanel(tab);
+  renderTabBar();
+}
+
+/** Compact byte-size label for batch rows. */
+function formatBytes(n) {
+  if (!n) return "—";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * Renders the batch queue panel for a batch tab: file list with per-item
+ * status dots, ADD IMAGES / RUN BATCH actions, and the output-folder footer.
+ */
+function renderBatchPanel(tab) {
+  if (!dom.batchPanel || tab.kind !== "batch") return;
+  dom.batchPanel.classList.add("active");
+  dom.stage.classList.remove("visible");
+  dom.emptyState.style.display = "none";
+
+  const n = tab.batchFiles.length;
+  dom.batchSub.textContent = `${n} IMAGE${n === 1 ? "" : "S"} · ONE SETTING FOR ALL`;
+
+  if (tab.batchOutputDir) {
+    dom.batchFootText.textContent = `OUTPUT → ${tab.batchOutputDir}`;
+    dom.btnBatchOutDir.style.display = "";
+  } else {
+    dom.batchFootText.textContent = "Drop more images onto this window to add them.";
+    dom.btnBatchOutDir.style.display = "none";
+  }
+
+  dom.batchList.innerHTML = "";
+  if (n === 0) {
+    const hint = document.createElement("div");
+    hint.className = "batch-empty-hint";
+    hint.textContent = "EMPTY BATCH — DROP IMAGES OR USE ADD IMAGES";
+    dom.batchList.appendChild(hint);
+  }
+  tab.batchFiles.forEach((entry, i) => {
+    const row = document.createElement("div");
+    row.className = "batch-row";
+    row.setAttribute("data-idx", String(i));
+
+    const dot = document.createElement("span");
+    dot.className = `batch-dot st-${entry.status}`;
+    const name = document.createElement("span");
+    name.className = "batch-row-name";
+    name.textContent = entry.name;
+    name.title = entry.name;
+    const size = document.createElement("span");
+    size.className = "batch-row-size";
+    size.textContent = formatBytes(entry.size);
+    const st = document.createElement("span");
+    st.className = `batch-row-status st-${entry.status}`;
+    st.textContent = entry.status.toUpperCase();
+    const rm = document.createElement("button");
+    rm.type = "button";
+    rm.className = "batch-row-remove";
+    rm.textContent = "×";
+    rm.title = "Remove from batch";
+    rm.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (state.batch.running) return;
+      tab.batchFiles.splice(i, 1);
+      if (tab.batchFiles.length === 0) {
+        closeTabImmediate(tab.id);
+      } else {
+        renderBatchPanel(tab);
+        renderTabBar();
+      }
+    });
+    row.append(dot, name, size, st, rm);
+    dom.batchList.appendChild(row);
+  });
+
+  if (dom.btnBatchRun) {
+    const runningThis = state.batch.running && state.batch.tabId === tab.id;
+    dom.btnBatchRun.classList.toggle("disabled", n === 0 || (state.isProcessing && !runningThis));
+    dom.btnBatchRun.textContent = runningThis ? "RUNNING…" : "RUN BATCH";
+  }
+}
+
+/** Updates a single batch row's dot + status label in place (cheap repaint). */
+function updateBatchRowStatus(tab, i) {
+  if (tab.id !== state.activeTabId || !dom.batchList) return;
+  const row = dom.batchList.querySelector(`.batch-row[data-idx="${i}"]`);
+  if (!row) return;
+  const entry = tab.batchFiles[i];
+  const dot = row.querySelector(".batch-dot");
+  const st = row.querySelector(".batch-row-status");
+  if (dot) dot.className = `batch-dot st-${entry.status}`;
+  if (st) {
+    st.className = `batch-row-status st-${entry.status}`;
+    st.textContent = entry.status.toUpperCase();
+  }
+}
+
+/**
+ * Converts an image tab in place into a batch tab (its image becomes the
+ * first queue entry; the single-image result/URLs are released).
+ */
+function convertTabToBatch(tab) {
+  const entries = [];
+  if (tab.kind === "batch") {
+    entries.push(...tab.batchFiles);
+  } else if (tab.sourceFile) {
+    entries.push({
+      file: tab.sourceFile,
+      name: tab.name,
+      size: tab.sourceFile.size || 0,
+      status: "queued",
+    });
+  }
+  if (tab.originalObjectUrl) URL.revokeObjectURL(tab.originalObjectUrl);
+  if (tab.resultObjectUrl) URL.revokeObjectURL(tab.resultObjectUrl);
+  if (tab.previewObjectUrl && tab.previewObjectUrl !== tab.resultObjectUrl) {
+    URL.revokeObjectURL(tab.previewObjectUrl);
+  }
+  tab.kind = "batch";
+  tab.name = "BATCH";
+  tab.sourceFile = null;
+  tab.originalObjectUrl = null;
+  tab.resultBlob = null;
+  tab.resultObjectUrl = null;
+  tab.previewBlob = null;
+  tab.previewObjectUrl = null;
+  tab.naturalWidth = 0;
+  tab.naturalHeight = 0;
+  tab.batchFiles = entries;
+  if (tab.batchOutputDir === undefined) tab.batchOutputDir = null;
+}
+
+/**
+ * Folder-style merge: drops tab `srcId` onto tab `dstId`, folding all of src's
+ * images into dst (which becomes a batch tab if it isn't already).
+ */
+function mergeTabsIntoBatch(srcId, dstId) {
+  if (srcId === dstId) return;
+  const src = state.tabs.find((t) => t.id === srcId);
+  const dst = state.tabs.find((t) => t.id === dstId);
+  if (!src || !dst) return;
+
+  const srcEntries =
+    src.kind === "batch"
+      ? src.batchFiles
+      : src.sourceFile
+        ? [{
+            file: src.sourceFile,
+            name: src.name,
+            size: src.sourceFile.size || 0,
+            status: "queued",
+          }]
+        : [];
+  if (!srcEntries.length) return; // Blank tabs can't join a batch.
+
+  if (dst.kind !== "batch") convertTabToBatch(dst);
+  dst.batchFiles.push(...srcEntries);
+
+  // Dissolve the dragged tab (folder semantics), releasing its object URLs.
+  const idx = state.tabs.indexOf(src);
+  if (idx !== -1) {
+    if (src.kind !== "batch") {
+      if (src.originalObjectUrl) URL.revokeObjectURL(src.originalObjectUrl);
+      if (src.resultObjectUrl) URL.revokeObjectURL(src.resultObjectUrl);
+      if (src.previewObjectUrl && src.previewObjectUrl !== src.resultObjectUrl) {
+        URL.revokeObjectURL(src.previewObjectUrl);
+      }
+    }
+    const srcWasActive = src.id === state.activeTabId;
+    state.tabs.splice(idx, 1);
+    if (srcWasActive) state.activeTabId = null;
+  }
+
+  switchToTab(dst.id);
+}
+
+/**
+ * Right-click context menu on a tab: convert to batch, merge into an existing
+ * batch, or close.
+ */
+function showTabContextMenu(tab, x, y) {
+  const menu = dom.tabContextMenu;
+  if (!menu) return;
+  menu.innerHTML = "";
+
+  const addItem = (label, fn, disabled = false) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = `ctx-item${disabled ? " ctx-disabled" : ""}`;
+    b.textContent = label;
+    if (!disabled) {
+      b.addEventListener("click", () => {
+        hideTabContextMenu();
+        fn();
+      });
+    }
+    menu.appendChild(b);
+  };
+  const addSep = () => {
+    const s = document.createElement("div");
+    s.className = "ctx-sep";
+    menu.appendChild(s);
+  };
+  const addHead = (label) => {
+    const h = document.createElement("div");
+    h.className = "ctx-head";
+    h.textContent = label;
+    menu.appendChild(h);
+  };
+
+  const hasFiles = tab.kind === "batch" || Boolean(tab.sourceFile);
+
+  if (tab.kind !== "batch" && hasFiles) {
+    addItem("SEND TO NEW BATCH", () => {
+      convertTabToBatch(tab);
+      if (tab.id === state.activeTabId) {
+        state.activeTabId = null;
+        switchToTab(tab.id);
+      }
+      renderTabBar();
+    });
+  }
+  const others = state.tabs.filter((t) => t.kind === "batch" && t.id !== tab.id);
+  if (hasFiles && others.length) {
+    if (menu.children.length) addSep();
+    addHead("ADD TO BATCH");
+    others.forEach((b) => {
+      addItem(`${b.name} (${b.batchFiles.length})`, () =>
+        mergeTabsIntoBatch(tab.id, b.id)
+      );
+    });
+  }
+  if (tab.kind === "batch") {
+    addItem("RUN BATCH", () => runBatch(tab));
+    addItem("ADD IMAGES…", () => {
+      pickImageFiles((files) => addFilesToBatchTab(tab, files));
+    });
+  }
+  if (menu.children.length) addSep();
+  addItem("CLOSE TAB", () => requestCloseTab(tab.id));
+
+  menu.style.display = "block";
+  const rect = menu.getBoundingClientRect();
+  menu.style.left = `${Math.min(x, window.innerWidth - rect.width - 8)}px`;
+  menu.style.top = `${Math.min(y, window.innerHeight - rect.height - 8)}px`;
+}
+
+function hideTabContextMenu() {
+  if (dom.tabContextMenu) dom.tabContextMenu.style.display = "none";
+}
+
+window.addEventListener("click", (e) => {
+  if (dom.tabContextMenu && !dom.tabContextMenu.contains(e.target)) {
+    hideTabContextMenu();
+  }
+});
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") hideTabContextMenu();
+});
+
+/**
+ * Runs the batch tab's queue: POST each file through /api/remove-bg, export it
+ * with the tab's snapshot settings, then write to the chosen folder (native)
+ * or collect results into a single ZIP download (browser).
+ * @param {object} tab  A `kind: "batch"` tab
+ */
+async function runBatch(tab) {
+  const batch = state.batch;
+  if (!tab || tab.kind !== "batch" || batch.running || !tab.batchFiles.length) {
+    return;
+  }
+
+  // Resolve the destination: remembered on the tab, else picked once (native).
+  let outputDir = tab.batchOutputDir || null;
+  if (!outputDir && window.pywebview?.api?.choose_output_dir) {
     try {
       const res = await window.pywebview.api.choose_output_dir();
       if (res?.error) {
         setError(res.error);
         return;
       }
-      if (!res?.path) return; // Folder pick cancelled — abort the batch quietly.
+      if (!res?.path) return; // Folder pick cancelled — abort quietly.
       outputDir = res.path;
+      tab.batchOutputDir = outputDir;
     } catch (_) {
       // Bridge failure → fall back to the browser ZIP path below.
     }
   }
 
-  // Snapshot settings so mid-batch UI tweaks cannot alter queued jobs.
+  // Snapshot the batch tab's settings — they apply to every queued file.
   const snap = {
-    tier: state.tier,
-    defringe: state.defringe,
-    despill: state.despill,
-    matting: state.matting,
-    format: state.exportFormat,
-    scale: state.exportScale,
-    backdrop: state.activeBackdrop,
-    shadowCutoff: state.shadowCutoff,
+    tier: tab.tier ?? state.tier,
+    defringe: tab.defringe ?? state.defringe,
+    despill: tab.despill ?? state.despill,
+    matting: tab.matting ?? state.matting,
+    format: tab.exportFormat ?? state.exportFormat,
+    scale: tab.exportScale ?? state.exportScale,
+    backdrop: tab.activeBackdrop ?? state.activeBackdrop,
+    shadowCutoff: tab.shadowCutoff ?? state.shadowCutoff,
   };
 
   batch.running = true;
-  batch.total = files.length;
+  batch.tabId = tab.id;
+  batch.total = tab.batchFiles.length;
   batch.index = 0;
   batch.failed = 0;
   batch.cancelled = false;
-  batch.outputDir = outputDir;
   batch.results = [];
+
+  tab.batchFiles.forEach((e) => (e.status = "queued"));
 
   state.isProcessing = true; // Locks the studio UI through the existing guards.
   setError(null);
@@ -768,6 +1188,7 @@ async function runBatch(files) {
     ? state.serverStatus?.matting
     : state.serverStatus?.tiers?.[snap.tier];
   const isCached = tierInfo ? tierInfo.cached !== false : true;
+  if (tab.id === state.activeTabId) renderBatchPanel(tab);
   syncMenuBarState();
 
   const controller = new AbortController();
@@ -777,19 +1198,21 @@ async function runBatch(files) {
   for (let i = 0; i < batch.total; i++) {
     if (batch.cancelled) break;
     batch.index = i;
-    const file = files[i];
+    const entry = tab.batchFiles[i];
     const label = `${i + 1}/${batch.total}`;
+    entry.status = "processing";
+    updateBatchRowStatus(tab, i);
     dom.busyTitle.textContent = `BATCH ${label}`;
-    dom.busySub.textContent = `${file.name.toUpperCase()} — ${
+    dom.busySub.textContent = `${entry.name.toUpperCase()} — ${
       isCached
         ? "executing local BiRefNet segmentation at full native resolution"
         : "fetching model weights from Hugging Face Hub (first run only)"
     }`;
-    dom.statTime.textContent = label;
+    if (tab.id === state.activeTabId) dom.statTime.textContent = label;
 
     try {
       const fd = new FormData();
-      fd.append("file", file);
+      fd.append("file", entry.file);
       fd.append("tier", snap.tier);
       fd.append("defringe", snap.defringe ? "true" : "false");
       fd.append("despill", snap.despill ? "true" : "false");
@@ -810,36 +1233,50 @@ async function runBatch(files) {
       }
 
       const blob = await response.blob();
-      if (batch.cancelled || controller.signal.aborted) break;
+      if (batch.cancelled || controller.signal.aborted) {
+        entry.status = "queued";
+        updateBatchRowStatus(tab, i);
+        break;
+      }
 
       const outBlob = await buildBatchExportBlob(blob, snap);
       const ext = BATCH_EXT[snap.format] || "png";
-      const stem = (file.name || "image").replace(/\.[^.]+$/, "") || "image";
+      const stem = (entry.name || "image").replace(/\.[^.]+$/, "") || "image";
       const outName = `${stem}_cutout.${ext}`;
 
-      if (batch.outputDir) {
-        const ok = await saveBatchFile(batch.outputDir, outName, outBlob);
+      if (outputDir) {
+        const ok = await saveBatchFile(outputDir, outName, outBlob);
         if (!ok) {
+          entry.status = "failed";
           batch.failed++;
+          updateBatchRowStatus(tab, i);
           continue;
         }
       } else {
         batch.results.push({ name: outName, blob: outBlob });
       }
+      entry.status = "done";
       completed++;
+      updateBatchRowStatus(tab, i);
     } catch (err) {
-      if (err?.name === "AbortError" || batch.cancelled) break;
+      if (err?.name === "AbortError" || batch.cancelled) {
+        entry.status = "queued";
+        updateBatchRowStatus(tab, i);
+        break;
+      }
+      entry.status = "failed";
       batch.failed++;
+      updateBatchRowStatus(tab, i);
     }
   }
 
   const wasCancelled = batch.cancelled;
   batch.running = false;
   batch.cancelled = false;
+  batch.tabId = null;
   state.isProcessing = false;
   state.abortController = null;
   dom.busyOverlay.classList.remove("active");
-  syncMenuBarState();
 
   // Browser mode: deliver all collected results as one ZIP download.
   if (!outputDir && batch.results.length > 0) {
@@ -849,28 +1286,41 @@ async function runBatch(files) {
         data: new Uint8Array(await r.blob.arrayBuffer()),
       }))
     );
-    batch.results = [];
     downloadBlob(buildZip(entries), "openbgr-cutouts.zip");
-  } else {
-    batch.results = [];
   }
+  batch.results = [];
 
-  if (wasCancelled) {
-    dom.statTime.textContent = `CANCELLED ${completed}/${batch.total}`;
-    return;
+  tab.elapsedText = wasCancelled
+    ? `CANCELLED ${completed}/${batch.total}`
+    : `${completed}/${batch.total} DONE`;
+  if (tab.id === state.activeTabId) {
+    dom.statTime.textContent = tab.elapsedText;
+    renderBatchPanel(tab);
   }
-  dom.statTime.textContent = "BATCH DONE";
+  syncMenuBarState();
+
+  if (wasCancelled) return;
   openConfirmModal(
     {
       title: "BATCH COMPLETE",
-      message: `${completed} of ${batch.total} image${batch.total > 1 ? "s" : ""} processed` +
+      message:
+        `${completed} of ${batch.total} image${batch.total > 1 ? "s" : ""} processed` +
         (batch.failed > 0 ? ` — ${batch.failed} failed` : "") +
-        (outputDir ? `.\nSaved to: ${outputDir}` : " — downloaded as openbgr-cutouts.zip."),
+        (outputDir
+          ? `.\nSaved to: ${outputDir}`
+          : " — downloaded as openbgr-cutouts.zip."),
       confirmText: "DONE",
       hideCancel: true,
     },
     () => {}
   );
+}
+
+/** RUN BATCH entry point for the active batch tab. */
+function runBatchRequest() {
+  const tab = getActiveTab();
+  if (!tab || tab.kind !== "batch") return;
+  runBatch(tab);
 }
 
 /**
@@ -1444,14 +1894,6 @@ function syncMenuBarState() {
       : hasResult
         ? "REPROCESS IMAGE"
         : "PROCESS IMAGE";
-  }
-
-  // BATCH button: always available while the queue is idle
-  if (dom.btnBatch) {
-    dom.btnBatch.classList.toggle("disabled", isBusy);
-    dom.btnBatch.textContent = state.batch.running
-      ? "BATCH RUNNING…"
-      : "BATCH PROCESS IMAGES";
   }
 }
 
@@ -2386,10 +2828,15 @@ async function openImageDialog() {
         return;
       }
       if (Array.isArray(res?.files) && res.files.length > 0) {
-        res.files.forEach((f) => {
-          const blob = base64ToBlob(f.data_b64);
-          ingestImageFile(new File([blob], f.name || "image.png"));
-        });
+        const files = res.files.map(
+          (f) => new File([base64ToBlob(f.data_b64)], f.name || "image.png")
+        );
+        // Multi-select is ambiguous — ask once: batch tab or separate tabs.
+        if (files.length > 1) {
+          openMultiFileChooser(files, "SELECTED");
+        } else {
+          files.forEach((f) => ingestImageFile(f));
+        }
         return;
       }
       if (res?.data_b64) {
@@ -2427,48 +2874,63 @@ dom.emptyState.addEventListener("click", () => requestOpenImage());
 dom.btnOpen.addEventListener("click", () => requestOpenImage());
 
 /**
- * Batch entry point (sidebar button, File menu, ⌘B): opens a multi-file
- * picker and always routes the selection through the batch queue.
+ * Batch entry point (File menu, ⌘B): opens a multi-file picker and creates a
+ * batch tab from the selection. Intent is explicit here, so no chooser modal.
  */
 function requestBatch() {
   if (state.batch.running) return;
-  if (window.pywebview?.api?.open_image_dialog) {
-    (async () => {
-      try {
-        const res = await window.pywebview.api.open_image_dialog();
-        if (res?.error) {
-          setError(res.error);
-          return;
-        }
-        if (Array.isArray(res?.files) && res.files.length > 0) {
-          const files = res.files.map(
-            (f) => new File([base64ToBlob(f.data_b64)], f.name || "image.png")
-          );
-          startBatchFlow(files);
-        } else if (res?.data_b64) {
-          startBatchFlow([new File([base64ToBlob(res.data_b64)], res.name || "image.png")]);
-        }
-      } catch (_) {
-        state.expectingBatch = true;
-        triggerOpenFileDialog();
-      }
-    })();
-    return;
-  }
-  state.expectingBatch = true;
-  triggerOpenFileDialog();
+  pickImageFiles(requestBatchDispatch);
 }
 
-dom.btnBatch?.addEventListener("click", () => requestBatch());
+/**
+ * Routes files picked through an explicit batch gesture: appends to the
+ * active batch tab if one is open, otherwise creates a new batch tab.
+ * @param {File[]} files
+ */
+function requestBatchDispatch(files) {
+  const active = getActiveTab();
+  if (active?.kind === "batch") {
+    addFilesToBatchTab(active, files);
+  } else {
+    createBatchTab(files);
+  }
+}
+
+dom.btnBatchRun?.addEventListener("click", () => runBatchRequest());
+
+dom.btnBatchAdd?.addEventListener("click", () => {
+  const tab = getActiveTab();
+  if (!tab || tab.kind !== "batch" || state.batch.running) return;
+  pickImageFiles((files) => addFilesToBatchTab(tab, files));
+});
+
+dom.btnBatchOutDir?.addEventListener("click", async () => {
+  const tab = getActiveTab();
+  if (!tab || tab.kind !== "batch" || !window.pywebview?.api?.choose_output_dir) return;
+  try {
+    const res = await window.pywebview.api.choose_output_dir();
+    if (res?.path) {
+      tab.batchOutputDir = res.path;
+      renderBatchPanel(tab);
+    } else if (res?.error) {
+      setError(res.error);
+    }
+  } catch (_) {}
+});
 
 dom.fileInput.addEventListener("change", (e) => {
   const files = Array.from(e.target.files || []);
   const expecting = state.expectingBatch;
   state.expectingBatch = false;
   if (files.length === 0) return;
-  // The BATCH button's picker always routes here; a regular Open always opens tabs.
+  // Batch entry points (⌘B / File menu / ADD IMAGES) flag their picker as batch.
   if (expecting) {
-    startBatchFlow(files);
+    requestBatchDispatch(files);
+    return;
+  }
+  // Multi-select via the plain file input is ambiguous — ask once.
+  if (files.length > 1) {
+    openMultiFileChooser(files, "SELECTED");
     return;
   }
   if (state.isProcessing) {
@@ -2492,23 +2954,16 @@ window.addEventListener("drop", (e) => {
   const files = Array.from(e.dataTransfer?.files || []);
   if (files.length === 0) return;
 
-  // Multi-drop is ambiguous — ask once: tabs or batch.
+  // Dropping onto an open batch tab appends to its queue directly.
+  const activeTab = getActiveTab();
+  if (activeTab?.kind === "batch" && !state.batch.running) {
+    addFilesToBatchTab(activeTab, files);
+    return;
+  }
+
+  // Multi-drop elsewhere is ambiguous — ask once: batch tab or separate tabs.
   if (files.length > 1) {
-    openConfirmModal(
-      {
-        title: `${files.length} IMAGES DROPPED`,
-        message:
-          "Open them as tabs, or batch-process them all with your current settings?",
-        confirmText: "BATCH",
-        cancelText: "CANCEL",
-        altText: "OPEN AS TABS",
-        altFn: () => {
-          if (state.isProcessing) cancelProcessing();
-          files.forEach((f) => ingestImageFile(f));
-        },
-      },
-      () => startBatchFlow(files)
-    );
+    openMultiFileChooser(files, "DROPPED");
     return;
   }
 
