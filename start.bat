@@ -3,7 +3,7 @@ setlocal EnableDelayedExpansion
 cd /d "%~dp0"
 
 :: ============================================================================
-:: REMOVEBG — Zero-Config Bootstrapper for Windows
+:: OpenBGR — Zero-Config Bootstrapper for Windows
 :: ============================================================================
 :: 1. Launches immediately (<1s) if .venv\.installed exists.
 :: 2. Auto-installs standalone Python 3.12 via uv if Python is not installed.
@@ -20,7 +20,7 @@ if exist ".venv\.installed" (
 )
 
 echo --------------------------------------------------------------------
-echo   REMOVEBG // FIRST-TIME LOCAL SETUP
+echo   OpenBGR // FIRST-TIME LOCAL SETUP
 echo --------------------------------------------------------------------
 
 if not exist ".venv" (

@@ -1,6 +1,6 @@
 /**
- * REMOVEBG — Frontend Studio Controller
- * =====================================
+ * OpenBGR — Frontend Studio Controller
+ * ====================================
  * Handles hardware preset switching, drag-and-drop / clipboard image ingestion,
  * split-plane comparison rendering, active request cancellation, live client-side
  * multi-format / custom-pixel preview & export, and communication with the local

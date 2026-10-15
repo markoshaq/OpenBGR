@@ -16,8 +16,8 @@
 # ]
 # ///
 """
-REMOVEBG — Local High-Precision Dichotomous Image Segmentation Studio
-=====================================================================
+OpenBGR — Local Background Removal Studio
+=========================================
 
 A self-hosted FastAPI inference engine for background removal powered by BiRefNet
 (Bilateral Reference Network for High-Resolution Dichotomous Image Segmentation).
@@ -510,7 +510,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(
-    title="REMOVEBG — Local Background Removal Studio",
+    title="OpenBGR — Local Background Removal Studio",
     description="Self-hosted, zero-telemetry dichotomous image segmentation powered by BiRefNet",
     lifespan=lifespan,
 )
@@ -615,7 +615,7 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", "7860"))
     url = f"http://127.0.0.1:{port}"
     print("-" * 68)
-    print("  REMOVEBG // LOCAL AI SEGMENTATION STUDIO")
+    print("  OpenBGR // LOCAL AI SEGMENTATION STUDIO")
     print(f"  Compute   : {DEVICE_LABEL} ({PRECISION_LABEL})")
     print(f"  Default   : {TIERS[RECOMMENDED_TIER]['label']} ({TIERS[RECOMMENDED_TIER]['sublabel']})")
     print(f"  Interface : {url}")

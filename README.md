@@ -1,4 +1,4 @@
-# removebg
+# OpenBGR
 
 Local background removal tool powered by [BiRefNet](https://github.com/ZhengPeng7/BiRefNet). Runs entirely on your own hardware (NVIDIA CUDA, Apple Silicon MPS, or CPU) and exports full-resolution cutouts without cloud uploads, watermarks, or compression.
 
@@ -8,15 +8,15 @@ Works on macOS, Windows, and Linux. If Python 3.10+ isn't installed on your mach
 
 **macOS & Linux**
 ```bash
-git clone https://github.com/markoshaq/removebg.git
-cd removebg
+git clone https://github.com/markoshaq/OpenBGR.git
+cd OpenBGR
 ./start.sh
 ```
 
 **Windows**
 ```bat
-git clone https://github.com/markoshaq/removebg.git
-cd removebg
+git clone https://github.com/markoshaq/OpenBGR.git
+cd OpenBGR
 start.bat
 ```
 

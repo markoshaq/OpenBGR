@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# REMOVEBG — Zero-Config Bootstrapper for macOS & Linux
+# OpenBGR — Zero-Config Bootstrapper for macOS & Linux
 # =============================================================================
 # 1. Uses existing .venv if already provisioned (<1s startup).
 # 2. Auto-provisions Python 3.12 via `uv` if Python 3.10+ is not installed.
@@ -17,7 +17,7 @@ if [ -f ".venv/.installed" ] && [ -x ".venv/bin/python" ]; then
 fi
 
 echo "--------------------------------------------------------------------"
-echo "  REMOVEBG // FIRST-TIME LOCAL SETUP"
+echo "  OpenBGR // FIRST-TIME LOCAL SETUP"
 echo "--------------------------------------------------------------------"
 
 # Check if Python 3.10+ is available; if not, bootstrap via uv
