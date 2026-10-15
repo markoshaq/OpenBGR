@@ -12,11 +12,13 @@ Key Architectural Features:
    multi-threaded CPU backends. Uses FP16 (16-bit half-precision) on GPU/MPS
    targets to cut memory bandwidth by 50% and accelerate inference up to 5.5x.
 
-2. Adaptive Compute Tiers (Spatial Token Scaling + Backbone Selection):
-   - Low-End (Fast)      : BiRefNet_lite (Swin-T) evaluated at 768x768 resolution
-                           (44% fewer spatial tokens than 1024x1024 for ~2x speedup).
-   - Mid-Range (Balanced): BiRefNet_lite (Swin-T) evaluated at native 1024x1024.
-   - High-End (Ultra)    : BiRefNet (Full Swin-L) evaluated at native 1024x1024.
+2. Three Distinct BiRefNet Model Architectures:
+   - Low-End (Lite 1K)   : `ZhengPeng7/BiRefNet_lite` (Swin-T @ 1024x1024, ~110 MB FP16)
+                           Designed for CPU-only laptops, integrated GPUs, and fast batching.
+   - Mid-Range (Full 1K) : `ZhengPeng7/BiRefNet` (Swin-L @ 1024x1024, ~440 MB FP16)
+                           Default on Apple Silicon (MPS) and CUDA GPUs for studio hair/fur detail.
+   - High-End (Ultra 2K) : `ZhengPeng7/BiRefNet_HR` (Swin-L @ 2048x2048, ~440 MB weights + 4x tokens)
+                           Trained natively at 2048x2048 (4.19M pixels) for 4K/8K photography.
 
 3. Deterministic Memory Lifecycle (`ModelManager`):
    Thread-safe singleton model loader that explicitly evicts inactive backbones
@@ -80,51 +82,50 @@ if os.cpu_count():
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 
-# Supported Hugging Face model repositories.
+# Supported Hugging Face model repositories — each tier maps to a distinct trained model.
 MODELS: dict[str, str] = {
-    "lite": "ZhengPeng7/BiRefNet_lite",  # Swin-T backbone (~200 MB)
-    "full": "ZhengPeng7/BiRefNet",       # Swin-L backbone (~900 MB)
+    "lite": "ZhengPeng7/BiRefNet_lite",  # Swin-T backbone trained at 1024x1024
+    "full": "ZhengPeng7/BiRefNet",       # Swin-L backbone trained at 1024x1024
+    "hr": "ZhengPeng7/BiRefNet_HR",      # Swin-L backbone trained natively at 2048x2048
 }
 
-# Hardware execution tiers.
-# Note: "low" and "mid" share the lightweight Swin-T backbone ("lite") so switching
-# between them requires zero model reload overhead, while differing in internal
-# spatial tensor resolution (768x768 = 589K pixels vs 1024x1024 = 1.05M pixels).
+# Hardware execution tiers. Each tier loads a dedicated BiRefNet checkpoint at its
+# native training resolution.
 TIERS: dict[str, dict[str, Any]] = {
     "low": {
         "key": "low",
         "label": "Low-End",
-        "sublabel": "Fast • 768px Lite",
+        "sublabel": "Lite • 1024px Swin-T",
         "model_key": "lite",
         "repo_id": MODELS["lite"],
-        "resolution": 768,
+        "resolution": 1024,
         "description": (
-            "Evaluates BiRefNet-Lite (Swin-T) on a 768x768 tensor (44% fewer spatial "
-            "tokens than 1024x1024) for ~2x faster inference on CPUs and integrated GPUs."
+            "Lightweight BiRefNet_lite (Swin-T) at 1024x1024 (~110 MB in FP16). "
+            "Fastest inference for CPU-only machines and integrated graphics."
         ),
     },
     "mid": {
         "key": "mid",
         "label": "Mid-Range",
-        "sublabel": "Balanced • 1024px Lite",
-        "model_key": "lite",
-        "repo_id": MODELS["lite"],
+        "sublabel": "Full • 1024px Swin-L",
+        "model_key": "full",
+        "repo_id": MODELS["full"],
         "resolution": 1024,
         "description": (
-            "Evaluates BiRefNet-Lite (Swin-T) at its native 1024x1024 training resolution "
-            "for sharp fine-edge matting with a low ~200 MB memory footprint."
+            "Full BiRefNet (Swin-L) at 1024x1024 (~440 MB in FP16). Default for Apple "
+            "Silicon and GPUs, delivering studio-grade hair, fur, and soft edge matting."
         ),
     },
     "high": {
         "key": "high",
         "label": "High-End",
-        "sublabel": "Ultra • 1024px Full",
-        "model_key": "full",
-        "repo_id": MODELS["full"],
-        "resolution": 1024,
+        "sublabel": "Ultra 2K • 2048px HR",
+        "model_key": "hr",
+        "repo_id": MODELS["hr"],
+        "resolution": 2048,
         "description": (
-            "Evaluates the full BiRefNet (Swin-L) architecture at 1024x1024 for maximum "
-            "precision on complex hair strands, fur, and semi-transparent meshes."
+            "High-Resolution BiRefNet_HR (Swin-L) trained natively at 2048x2048 "
+            "(4x the pixel density of 1024x1024) for 4K/8K commercial photography."
         ),
     },
 }
@@ -177,16 +178,16 @@ def format_device_label(device: torch.device) -> str:
 def select_recommended_tier(device: torch.device) -> str:
     """
     Heuristically chooses the default hardware preset at startup:
-    - CPU hosts default to 'low' (768x768 Lite) for responsive latency.
-    - Dedicated CUDA GPUs with >= 10 GB VRAM default to 'high' (1024x1024 Full).
-    - All other GPU/MPS accelerators default to 'mid' (1024x1024 Lite).
+    - CPU hosts default to 'low' (1024x1024 BiRefNet_lite) for responsive latency.
+    - Dedicated CUDA GPUs with >= 16 GB VRAM default to 'high' (2048x2048 BiRefNet_HR).
+    - All other GPU/MPS accelerators default to 'mid' (1024x1024 Full BiRefNet Swin-L).
     """
     if device.type == "cpu":
         return "low"
     if device.type == "cuda":
         try:
             vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-            if vram_gb >= 10.0:
+            if vram_gb >= 16.0:
                 return "high"
         except Exception:
             pass

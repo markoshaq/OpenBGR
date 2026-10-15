@@ -10,7 +10,7 @@
 
 /** Application State */
 const state = {
-  tier: "mid",             // "low" (768px Lite) | "mid" (1024px Lite) | "high" (1024px Full)
+  tier: "mid",             // "low" (BiRefNet_lite 1K) | "mid" (BiRefNet Full 1K) | "high" (BiRefNet_HR 2K)
   defringe: true,          // Morphological edge color decontamination toggle
   viewMode: "split",       // "split" | "cutout" | "original"
   splitPercent: 50,        // Horizontal divider position (0 - 100)

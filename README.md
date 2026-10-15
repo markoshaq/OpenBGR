@@ -34,9 +34,9 @@
 |                            FASTAPI INFERENCE ENGINE                               |
 |                                                                                   |
 |  1. Input Normalization     EXIF orientation transpose + 3-channel RGB projection |
-|  2. Adaptive Tensor Prep    Bilinear resize (768x768 or 1024x1024) + ImageNet norm|
+|  2. Adaptive Tensor Prep    Bilinear resize (1024x1024 or 2048x2048) + ImageNet   |
 |  3. Hardware Dispatch       Auto-routed to CUDA (FP16) / Apple MPS (FP16) / CPU   |
-|  4. BiRefNet Forward Pass   Bilateral Reference Swin-T (Lite) or Swin-L (Full)    |
+|  4. BiRefNet Forward Pass   BiRefNet_lite (1K) | BiRefNet (1K) | BiRefNet_HR (2K) |
 |  5. Native Upsampling       Sigmoid probability -> LANCZOS resize to (W_orig, H)  |
 |  6. Edge Decontamination    Morphological foreground dilation into alpha fringe   |
 |  7. Fast Lossless Encode    32-bit RGBA PNG (DEFLATE level 1 for 4x faster I/O)   |
@@ -45,19 +45,20 @@
 
 ---
 
-## Universal Hardware Presets (Spatial Token Scaling & Backbone Selection)
+## Three Distinct BiRefNet Model Architectures
 
-Instead of hardcoding parameters for a single GPU class, **REMOVEBG** exposes three adaptive execution tiers that decouple internal segmentation tensor dimensions from the final output resolution (alpha masks are always upsampled back to 100% native source dimensions via `LANCZOS` interpolation):
+Instead of relying on a single checkpoint, **REMOVEBG** maps each hardware preset to a dedicated official **BiRefNet** architecture trained at its native resolution (alpha masks are always upsampled back to 100% native source dimensions via `LANCZOS` interpolation):
 
-| Preset | Backbone Architecture | Internal Tensor | Spatial Pixels | Memory Footprint | Target Hardware | Typical Latency (GPU/MPS) |
-| :--- | :--- | :---: | :---: | :---: | :--- | :---: |
-| **Low-End (`Fast`)** | `BiRefNet_lite` (Swin-T) | `768 × 768` | `589,824` (-44%) | ~180 MB | Integrated GPUs, CPUs, Laptops | **~0.7s – 1.2s** |
-| **Mid-Range (`Balanced`)** | `BiRefNet_lite` (Swin-T) | `1024 × 1024` | `1,048,576` (100%) | ~220 MB | Consumer GPUs, Apple Silicon | **~1.3s – 2.1s** |
-| **High-End (`Ultra`)** | `BiRefNet` (Swin-L) | `1024 × 1024` | `1,048,576` (100%) | ~900 MB | Dedicated Workstation GPUs | **~2.5s – 4.0s** |
+| Preset | Hugging Face Checkpoint | Backbone | Native Tensor | Spatial Tokens | FP16 Memory | Target Hardware |
+| :--- | :--- | :--- | :---: | :---: | :---: | :--- |
+| **Low-End (`Lite 1K`)** | `ZhengPeng7/BiRefNet_lite` | Swin-T | `1024 × 1024` | `1.05M` | ~110 MB | CPU-only laptops, Integrated GPUs, Fast previews |
+| **Mid-Range (`Full 1K`)** *(Default)* | `ZhengPeng7/BiRefNet` | Swin-L | `1024 × 1024` | `1.05M` | ~440 MB | Apple Silicon (M1–M4) & Consumer GPUs |
+| **High-End (`Ultra 2K`)** | `ZhengPeng7/BiRefNet_HR` | Swin-L | `2048 × 2048` | `4.19M` (4×) | ~440 MB + activations | Workstation GPUs & 4K/8K Studio Photography |
 
-### Why do Low-End and Mid-Range share `BiRefNet_lite`?
-- **Low-End vs. Mid-Range (Spatial Token Scaling):** Both presets use the lightweight **Swin-T (`BiRefNet_lite`)** backbone, meaning switching between them requires **zero additional downloads and zero memory reload overhead**. However, **Low-End** evaluates the network on a `768 × 768` tensor (`589,824` pixels) instead of `1024 × 1024` (`1,048,576` pixels)—processing **44% fewer spatial tokens** through the Swin Transformer attention blocks for nearly **2× faster inference** on CPUs and integrated graphics.
-- **Mid-Range vs. High-End (Backbone Scaling):** **High-End** swaps the Swin-T backbone (~200 MB) for the full **Swin-L (`BiRefNet`)** architecture (~900 MB) at `1024 × 1024`, providing deeper multi-scale feature representations for intricate hair strands, fur, and fine semi-transparent meshes.
+### Architectural Breakdown
+1. **Low-End (`BiRefNet_lite` — Swin-T @ `1024×1024`):** Uses a compact Swin-Tiny transformer backbone (~4× fewer parameters than Swin-L). Automatically selected on CPU-only machines so users without a discrete GPU still get fast, responsive cutouts.
+2. **Mid-Range (`BiRefNet` — Swin-L @ `1024×1024`):** Uses the full Swin-Large architecture. Because weights are cast to **FP16 (`torch.float16`)** on Apple MPS and NVIDIA CUDA, the entire Swin-L model occupies only **~440 MB of memory** (down from ~885 MB in FP32)—making full studio-grade hair and fur matting the default on any GPU or Apple Silicon Mac.
+3. **High-End (`BiRefNet_HR` — Swin-L @ `2048×2048`):** Uses the high-resolution Swin-L checkpoint trained natively on `2048 × 2048` images (**4× the spatial pixel density** of `1024 × 1024`), preserving single-pixel micro-strands, fine mesh/lace, and fur on high-megapixel commercial photography.
 
 ---
 

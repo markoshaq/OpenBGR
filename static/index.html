@@ -33,28 +33,28 @@
             type="button"
             class="seg-btn"
             data-tier="low"
-            title="BiRefNet-Lite (Swin-T) @ 768x768 tensor resolution (44% fewer spatial tokens for ~2x faster inference on CPUs & integrated GPUs)."
+            title="BiRefNet_lite (Swin-T @ 1024x1024, ~110 MB FP16). Fastest inference for CPU-only machines and integrated GPUs."
           >
             <span>LOW-END</span>
-            <span class="seg-sub">768PX LITE</span>
+            <span class="seg-sub">LITE 1K</span>
           </button>
           <button
             type="button"
             class="seg-btn active"
             data-tier="mid"
-            title="BiRefNet-Lite (Swin-T) @ native 1024x1024 tensor resolution. Sharp fine-edge accuracy with a low ~200 MB memory footprint."
+            title="BiRefNet Full (Swin-L @ 1024x1024, ~440 MB FP16). Default studio model for Apple Silicon and GPUs — high-precision hair, fur, and soft edge matting."
           >
             <span>MID-RANGE</span>
-            <span class="seg-sub">1024PX LITE</span>
+            <span class="seg-sub">FULL 1K</span>
           </button>
           <button
             type="button"
             class="seg-btn"
             data-tier="high"
-            title="BiRefNet-Full (Swin-L) @ 1024x1024 tensor resolution (~900 MB). Maximum precision for complex hair strands, fur, and fine meshes."
+            title="BiRefNet_HR (Swin-L @ native 2048x2048 2K resolution). 4x the spatial pixel density of 1K for 4K/8K commercial photography."
           >
             <span>HIGH-END</span>
-            <span class="seg-sub">1024PX FULL</span>
+            <span class="seg-sub">ULTRA 2K</span>
           </button>
         </div>
 
