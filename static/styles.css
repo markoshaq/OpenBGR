@@ -991,10 +991,9 @@ body {
  * 5. Bottom Telemetry Bar
  * ------------------------------------------------------------------------- */
 .statusbar {
-  display: flex;
+  display: grid;
+  grid-template-columns: 264px 1fr 276px;
   align-items: center;
-  justify-content: space-between;
-  padding: 0 16px;
   background: var(--surface);
   border-top: 1px solid var(--border);
   font-family: var(--mono);
@@ -1006,6 +1005,15 @@ body {
   display: flex;
   align-items: center;
   gap: 20px;
+}
+
+.status-center {
+  justify-content: center;
+}
+
+.status-right {
+  justify-content: flex-end;
+  padding: 0 16px;
 }
 
 .status-kv span {
