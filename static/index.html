@@ -45,6 +45,11 @@
                 <span class="menu-label">Open Image…</span>
                 <span class="menu-kbd" data-shortcut="Mod+O">⌘O</span>
               </button>
+              <button type="button" class="menu-item" data-cmd="batchProcess">
+                <span class="menu-check"></span>
+                <span class="menu-label">Batch Process Images…</span>
+                <span class="menu-kbd" data-shortcut="Mod+B">⌘B</span>
+              </button>
               <div class="menu-sep"></div>
               <button type="button" class="menu-item" data-cmd="exportImage" data-requires="result">
                 <span class="menu-check"></span>
@@ -340,6 +345,7 @@
           <div class="section-header">SOURCE IMAGE</div>
           <button type="button" class="action-btn full-width" id="btnOpen">OPEN IMAGE FILE</button>
           <button type="button" class="action-btn primary full-width disabled" id="btnProcess">PROCESS IMAGE</button>
+          <button type="button" class="action-btn full-width" id="btnBatch">BATCH PROCESS IMAGES</button>
           <input type="file" id="fileInput" accept="image/*" multiple />
         </div>
 
@@ -357,7 +363,7 @@
             step="1"
             value="0"
           />
-          <div class="field-hint">Slices off faint semi-transparent floor reflections and ghost shadows in real time.</div>
+          <div class="field-hint">Slices off faint semi-transparent floor reflections and ghost shadows.</div>
         </div>
 
         <div class="sidebar-section requires-image">
@@ -369,7 +375,7 @@
             <button type="button" class="swatch" data-bg="#18181b" style="background:#18181b" title="Studio Dark Gray"></button>
             <input type="color" id="colorPicker" value="#00ff66" class="swatch" style="padding:0; background:none;" title="Custom Matte Color" />
           </div>
-          <div class="field-hint">Solid colors are composited into exports (or always for JPG).</div>
+          <div class="field-hint">Solid colors are composited into exports.</div>
         </div>
       </aside>
 

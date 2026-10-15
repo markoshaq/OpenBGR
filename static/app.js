@@ -133,6 +133,16 @@ const state = {
   spacePressed: false,       // Spacebar held for pan mode
   loupeEnabled: false,       // Whether 4x circular magnifier loupe is active
   serverStatus: null,        // Cached response from GET /api/status
+  expectingBatch: false,     // Next fileInput selection routes into the batch queue
+  batch: {                   // Client-side FIFO queue state for batch processing
+    running: false,
+    total: 0,
+    index: 0,
+    failed: 0,
+    cancelled: false,
+    outputDir: null,         // Chosen output folder (native desktop mode)
+    results: [],             // [{name, blob}] collected for browser ZIP export
+  },
 };
 
 /** DOM Element References */
@@ -186,6 +196,7 @@ const dom = {
   fileInput: document.getElementById("fileInput"),
   btnOpen: document.getElementById("btnOpen"),
   btnProcess: document.getElementById("btnProcess"),
+  btnBatch: document.getElementById("btnBatch"),
   btnCopy: document.getElementById("btnCopy"),
   btnDownload: document.getElementById("btnDownload"),
   btnDefringe: document.getElementById("btnDefringe"),
@@ -599,6 +610,7 @@ function openConfirmModal(opts, onConfirm) {
   dom.modalDesc.textContent = cfg.message;
   dom.btnModalConfirm.textContent = cfg.confirmText || "STOP & CONTINUE";
   dom.btnModalCancel.textContent = cfg.cancelText || "KEEP PROCESSING";
+  dom.btnModalCancel.style.display = cfg.hideCancel ? "none" : "";
   state.pendingConfirmFn = onConfirm;
   dom.confirmModal.classList.add("active");
 }
@@ -616,6 +628,9 @@ function closeConfirmModal() {
  * and restores the workspace to a clean idle state.
  */
 function cancelProcessing() {
+  if (state.batch.running) {
+    state.batch.cancelled = true;
+  }
   if (state.abortController) {
     state.abortController.abort();
     state.abortController = null;
@@ -631,6 +646,371 @@ function cancelProcessing() {
   }
   saveStateToActiveTab();
   syncMenuBarState();
+}
+
+/* =========================================================================
+ * Batch Processing — client-side FIFO queue over POST /api/remove-bg.
+ * Multi-file selections (native picker, file input, drag-and-drop) route here;
+ * each image runs sequentially through the serialized inference lock, then the
+ * exported blob is written into a user-chosen folder (native mode) or packed
+ * into a single ZIP download (browser mode).
+ * ========================================================================= */
+
+const BATCH_EXT = { png: "png", webp: "webp", jpg: "jpg", mask: "png" };
+
+/**
+ * Entry point for batch: confirms the count, then runs the queue.
+ * @param {Array<File>} files
+ */
+function startBatchFlow(files) {
+  const list = Array.from(files || []).filter((f) => f);
+  if (list.length === 0 || state.batch.running) return;
+
+  if (state.isProcessing) {
+    openConfirmModal(
+      `This will stop the current image processing. Start a batch of ${list.length} image${list.length > 1 ? "s" : ""}?`,
+      () => {
+        cancelProcessing();
+        confirmBatch(list);
+      }
+    );
+    return;
+  }
+  confirmBatch(list);
+}
+
+/**
+ * Shows the batch confirmation summary (current settings apply to every file).
+ * @param {Array<File>} files
+ */
+function confirmBatch(files) {
+  const tierLabel = { low: "LOW · LITE 1K", mid: "MID · FULL 1K", high: "HIGH · ULTRA 2K" }[
+    state.tier
+  ] || state.tier;
+  const opts = [
+    state.matting ? "MATTING" : tierLabel,
+    state.defringe ? "DEFRINGE" : null,
+    state.despill ? "DESPILL" : null,
+    state.shadowCutoff > 0 ? `CUTOFF ${state.shadowCutoff}%` : null,
+    (state.exportFormat || "png").toUpperCase(),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  openConfirmModal(
+    {
+      title: `BATCH PROCESS ${files.length} IMAGE${files.length > 1 ? "S" : ""}?`,
+      message: `Every file is processed locally with your current settings and exported as "_cutout" copies — no tabs are opened.\n\n${opts}`,
+      confirmText: "START BATCH",
+      cancelText: "CANCEL",
+    },
+    () => runBatch(files)
+  );
+}
+
+/**
+ * Runs the FIFO queue: POST each file, render the export blob, then either
+ * write it into the chosen folder via POST /api/save (native) or collect it
+ * for a single ZIP download (browser).
+ * @param {Array<File>} files
+ */
+async function runBatch(files) {
+  const batch = state.batch;
+
+  // Choose the destination folder up-front in native mode.
+  let outputDir = null;
+  if (window.pywebview?.api?.choose_output_dir) {
+    try {
+      const res = await window.pywebview.api.choose_output_dir();
+      if (res?.error) {
+        setError(res.error);
+        return;
+      }
+      if (!res?.path) return; // Folder pick cancelled — abort the batch quietly.
+      outputDir = res.path;
+    } catch (_) {
+      // Bridge failure → fall back to the browser ZIP path below.
+    }
+  }
+
+  // Snapshot settings so mid-batch UI tweaks cannot alter queued jobs.
+  const snap = {
+    tier: state.tier,
+    defringe: state.defringe,
+    despill: state.despill,
+    matting: state.matting,
+    format: state.exportFormat,
+    scale: state.exportScale,
+    backdrop: state.activeBackdrop,
+    shadowCutoff: state.shadowCutoff,
+  };
+
+  batch.running = true;
+  batch.total = files.length;
+  batch.index = 0;
+  batch.failed = 0;
+  batch.cancelled = false;
+  batch.outputDir = outputDir;
+  batch.results = [];
+
+  state.isProcessing = true; // Locks the studio UI through the existing guards.
+  setError(null);
+  dom.busyOverlay.classList.add("active");
+  const tierInfo = snap.matting
+    ? state.serverStatus?.matting
+    : state.serverStatus?.tiers?.[snap.tier];
+  const isCached = tierInfo ? tierInfo.cached !== false : true;
+  syncMenuBarState();
+
+  const controller = new AbortController();
+  state.abortController = controller;
+  let completed = 0;
+
+  for (let i = 0; i < batch.total; i++) {
+    if (batch.cancelled) break;
+    batch.index = i;
+    const file = files[i];
+    const label = `${i + 1}/${batch.total}`;
+    dom.busyTitle.textContent = `BATCH ${label}`;
+    dom.busySub.textContent = `${file.name.toUpperCase()} — ${
+      isCached
+        ? "executing local BiRefNet segmentation at full native resolution"
+        : "fetching model weights from Hugging Face Hub (first run only)"
+    }`;
+    dom.statTime.textContent = label;
+
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("tier", snap.tier);
+      fd.append("defringe", snap.defringe ? "true" : "false");
+      fd.append("despill", snap.despill ? "true" : "false");
+      fd.append("matting", snap.matting ? "true" : "false");
+
+      const response = await fetch("/api/remove-bg", {
+        method: "POST",
+        body: fd,
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        let detail = `HTTP ${response.status}`;
+        try {
+          const payload = await response.json();
+          if (payload?.detail) detail = payload.detail;
+        } catch (_) {}
+        throw new Error(detail);
+      }
+
+      const blob = await response.blob();
+      if (batch.cancelled || controller.signal.aborted) break;
+
+      const outBlob = await buildBatchExportBlob(blob, snap);
+      const ext = BATCH_EXT[snap.format] || "png";
+      const stem = (file.name || "image").replace(/\.[^.]+$/, "") || "image";
+      const outName = `${stem}_cutout.${ext}`;
+
+      if (batch.outputDir) {
+        const ok = await saveBatchFile(batch.outputDir, outName, outBlob);
+        if (!ok) {
+          batch.failed++;
+          continue;
+        }
+      } else {
+        batch.results.push({ name: outName, blob: outBlob });
+      }
+      completed++;
+    } catch (err) {
+      if (err?.name === "AbortError" || batch.cancelled) break;
+      batch.failed++;
+    }
+  }
+
+  const wasCancelled = batch.cancelled;
+  batch.running = false;
+  batch.cancelled = false;
+  state.isProcessing = false;
+  state.abortController = null;
+  dom.busyOverlay.classList.remove("active");
+  syncMenuBarState();
+
+  // Browser mode: deliver all collected results as one ZIP download.
+  if (!outputDir && batch.results.length > 0) {
+    const entries = await Promise.all(
+      batch.results.map(async (r) => ({
+        name: r.name,
+        data: new Uint8Array(await r.blob.arrayBuffer()),
+      }))
+    );
+    batch.results = [];
+    downloadBlob(buildZip(entries), "openbgr-cutouts.zip");
+  } else {
+    batch.results = [];
+  }
+
+  if (wasCancelled) {
+    dom.statTime.textContent = `CANCELLED ${completed}/${batch.total}`;
+    return;
+  }
+  dom.statTime.textContent = "BATCH DONE";
+  openConfirmModal(
+    {
+      title: "BATCH COMPLETE",
+      message: `${completed} of ${batch.total} image${batch.total > 1 ? "s" : ""} processed` +
+        (batch.failed > 0 ? ` — ${batch.failed} failed` : "") +
+        (outputDir ? `.\nSaved to: ${outputDir}` : " — downloaded as openbgr-cutouts.zip."),
+      confirmText: "DONE",
+      hideCancel: true,
+    },
+    () => {}
+  );
+}
+
+/**
+ * Uploads one exported blob to POST /api/save so the server writes it into the
+ * batch output directory.
+ * @returns {Promise<boolean>}
+ */
+async function saveBatchFile(dir, filename, blob) {
+  try {
+    const fd = new FormData();
+    fd.append("directory", dir);
+    fd.append("filename", filename);
+    fd.append("file", blob, filename);
+    const res = await fetch("/api/save", { method: "POST", body: fd });
+    return res.ok;
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * Applies export settings (format, scale, backdrop, shadow cutoff) to one batch
+ * result blob and returns the encoded output Blob.
+ * @param {Blob} blob  Raw RGBA cutout returned by POST /api/remove-bg
+ * @param {object} snap  Settings snapshot taken at batch start
+ * @returns {Promise<Blob>}
+ */
+async function buildBatchExportBlob(blob, snap) {
+  const bmp = await createImageBitmap(blob);
+  try {
+    const srcW = bmp.width;
+    const srcH = bmp.height;
+    const targetW = Math.max(1, Math.round(srcW * (snap.scale || 1)));
+    const targetH = Math.max(1, Math.round(srcH * (snap.scale || 1)));
+
+    // Fast path — untouched full-res PNG with no cutoff or matte.
+    if (
+      snap.format === "png" &&
+      snap.backdrop === "checker" &&
+      snap.shadowCutoff === 0 &&
+      targetW === srcW &&
+      targetH === srcH
+    ) {
+      return blob;
+    }
+
+    return await renderExportBlob(bmp, srcW, srcH, {
+      format: snap.format,
+      targetW,
+      targetH,
+      shadowCutoff: snap.shadowCutoff,
+      backdrop: snap.backdrop,
+    });
+  } finally {
+    bmp.close();
+  }
+}
+
+/** Triggers a browser download for `blob` under `filename`. */
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+/** CRC-32 table for the minimal ZIP writer. */
+const ZIP_CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+
+function crc32(u8) {
+  let c = 0xffffffff;
+  for (let i = 0; i < u8.length; i++) {
+    c = ZIP_CRC_TABLE[(c ^ u8[i]) & 0xff] ^ (c >>> 8);
+  }
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+/**
+ * Builds an uncompressed (STORED) ZIP archive in memory. PNG/WebP payloads are
+ * already compressed, so store-only avoids wasting CPU with no size penalty.
+ * @param {Array<{name: string, data: Uint8Array}>} entries
+ * @returns {Blob}
+ */
+function buildZip(entries) {
+  const enc = new TextEncoder();
+  const chunks = [];
+  const central = [];
+  let offset = 0;
+
+  for (const { name, data } of entries) {
+    const nameBytes = enc.encode(name);
+    const crc = crc32(data);
+    const local = new DataView(new ArrayBuffer(30));
+    local.setUint32(0, 0x04034b50, true);
+    local.setUint16(4, 20, true);
+    local.setUint16(6, 0, true);
+    local.setUint16(8, 0, true);
+    local.setUint16(10, 0, true);
+    local.setUint16(12, 0, true);
+    local.setUint32(14, crc, true);
+    local.setUint32(18, data.length, true);
+    local.setUint32(22, data.length, true);
+    local.setUint16(26, nameBytes.length, true);
+    local.setUint16(28, 0, true);
+    chunks.push(local.buffer, nameBytes, data);
+    central.push({ nameBytes, crc, size: data.length, offset });
+    offset += 30 + nameBytes.length + data.length;
+  }
+
+  const cdStart = offset;
+  for (const e of central) {
+    const cd = new DataView(new ArrayBuffer(46));
+    cd.setUint32(0, 0x02014b50, true);
+    cd.setUint16(4, 20, true);
+    cd.setUint16(6, 20, true);
+    cd.setUint16(8, 0, true);
+    cd.setUint16(10, 0, true);
+    cd.setUint16(12, 0, true);
+    cd.setUint16(14, 0, true);
+    cd.setUint32(16, e.crc, true);
+    cd.setUint32(20, e.size, true);
+    cd.setUint32(24, e.size, true);
+    cd.setUint16(28, e.nameBytes.length, true);
+    cd.setUint32(42, e.offset, true);
+    chunks.push(cd.buffer, e.nameBytes);
+    offset += 46 + e.nameBytes.length;
+  }
+
+  const eocd = new DataView(new ArrayBuffer(22));
+  eocd.setUint32(0, 0x06054b50, true);
+  eocd.setUint16(8, central.length, true);
+  eocd.setUint16(10, central.length, true);
+  eocd.setUint32(12, offset - cdStart, true);
+  eocd.setUint32(16, cdStart, true);
+  chunks.push(eocd.buffer);
+  return new Blob(chunks, { type: "application/zip" });
 }
 
 /**
@@ -746,6 +1126,30 @@ async function buildExportBlob(format) {
     return state.resultBlob;
   }
 
+  return renderExportBlob(masterCutoutImg, srcW, srcH, {
+    format,
+    targetW,
+    targetH,
+    shadowCutoff: state.shadowCutoff,
+    backdrop: state.activeBackdrop,
+  });
+}
+
+/**
+ * Shared export renderer: draws `source` (Image | ImageBitmap) onto a canvas at
+ * `targetW` x `targetH`, applies the alpha `shadowCutoff` threshold, optionally
+ * composites a `backdrop` matte (or forces white for JPG), and encodes to
+ * `format` ("png" | "webp" | "jpg" | "mask"). Used by both interactive export
+ * and the batch pipeline.
+ *
+ * @param {CanvasImageSource} source
+ * @param {{format: string, targetW: number, targetH: number,
+ *          shadowCutoff: number, backdrop: string}} opts
+ * @returns {Promise<Blob>}
+ */
+async function renderExportBlob(source, srcW, srcH, opts) {
+  const { format, targetW, targetH, shadowCutoff, backdrop } = opts;
+
   const canvas = document.createElement("canvas");
   canvas.width = targetW;
   canvas.height = targetH;
@@ -754,10 +1158,12 @@ async function buildExportBlob(format) {
   ctx.imageSmoothingQuality = "high";
 
   // Draw the cutout onto an intermediate buffer if shadow/reflection cutoff or mask is needed
-  const cutoffByte = Math.round((state.shadowCutoff / 100) * 255);
+  const cutoffByte = Math.round((shadowCutoff / 100) * 255);
+  const needsMatte = format === "jpg" || backdrop !== "checker";
+  const matteColor = backdrop === "checker" ? "#ffffff" : backdrop;
 
   if (format === "mask") {
-    ctx.drawImage(masterCutoutImg, 0, 0, targetW, targetH);
+    ctx.drawImage(source, 0, 0, targetW, targetH);
     const imgData = ctx.getImageData(0, 0, targetW, targetH);
     const data = imgData.data;
     const span = Math.max(1, 255 - cutoffByte);
@@ -793,7 +1199,7 @@ async function buildExportBlob(format) {
     const fgCtx = fgCanvas.getContext("2d");
     fgCtx.imageSmoothingEnabled = true;
     fgCtx.imageSmoothingQuality = "high";
-    fgCtx.drawImage(masterCutoutImg, 0, 0, targetW, targetH);
+    fgCtx.drawImage(source, 0, 0, targetW, targetH);
 
     const imgData = fgCtx.getImageData(0, 0, targetW, targetH);
     const data = imgData.data;
@@ -804,21 +1210,19 @@ async function buildExportBlob(format) {
     }
     fgCtx.putImageData(imgData, 0, 0);
 
-    if (format === "jpg" || state.activeBackdrop !== "checker") {
-      ctx.fillStyle =
-        state.activeBackdrop === "checker" ? "#ffffff" : state.activeBackdrop;
+    if (needsMatte) {
+      ctx.fillStyle = matteColor;
       ctx.fillRect(0, 0, targetW, targetH);
     }
     ctx.drawImage(fgCanvas, 0, 0);
     fgCanvas.width = 0;
     fgCanvas.height = 0;
   } else {
-    if (format === "jpg" || state.activeBackdrop !== "checker") {
-      ctx.fillStyle =
-        state.activeBackdrop === "checker" ? "#ffffff" : state.activeBackdrop;
+    if (needsMatte) {
+      ctx.fillStyle = matteColor;
       ctx.fillRect(0, 0, targetW, targetH);
     }
-    ctx.drawImage(masterCutoutImg, 0, 0, targetW, targetH);
+    ctx.drawImage(source, 0, 0, targetW, targetH);
   }
 
   const mimeMap = {
@@ -1032,6 +1436,14 @@ function syncMenuBarState() {
       : hasResult
         ? "REPROCESS IMAGE"
         : "PROCESS IMAGE";
+  }
+
+  // BATCH button: always available while the queue is idle
+  if (dom.btnBatch) {
+    dom.btnBatch.classList.toggle("disabled", isBusy);
+    dom.btnBatch.textContent = state.batch.running
+      ? "BATCH RUNNING…"
+      : "BATCH PROCESS IMAGES";
   }
 }
 
@@ -1668,6 +2080,9 @@ window.addEventListener("keydown", (e) => {
     } else if (key === "w") {
       e.preventDefault();
       window.openBGR.closeActiveTab();
+    } else if (key === "b") {
+      e.preventDefault();
+      window.openBGR.startBatch();
     } else if (key === ",") {
       e.preventDefault();
       window.openBGR.openSettings("preferences");
@@ -1957,10 +2372,15 @@ async function openImageDialog() {
         return;
       }
       if (Array.isArray(res?.files) && res.files.length > 0) {
-        res.files.forEach((f) => {
-          const blob = base64ToBlob(f.data_b64);
-          ingestImageFile(new File([blob], f.name || "image.png"));
-        });
+        const files = res.files.map(
+          (f) => new File([base64ToBlob(f.data_b64)], f.name || "image.png")
+        );
+        // Multiple selections route into the batch queue instead of opening tabs.
+        if (files.length > 1) {
+          startBatchFlow(files);
+        } else {
+          files.forEach((f) => ingestImageFile(f));
+        }
         return;
       }
       if (res?.data_b64) {
@@ -1997,9 +2417,50 @@ dom.emptyState.addEventListener("click", () => requestOpenImage());
 
 dom.btnOpen.addEventListener("click", () => requestOpenImage());
 
+/**
+ * Batch entry point (sidebar button, File menu, ⌘B): opens a multi-file
+ * picker and always routes the selection through the batch queue.
+ */
+function requestBatch() {
+  if (state.batch.running) return;
+  if (window.pywebview?.api?.open_image_dialog) {
+    (async () => {
+      try {
+        const res = await window.pywebview.api.open_image_dialog();
+        if (res?.error) {
+          setError(res.error);
+          return;
+        }
+        if (Array.isArray(res?.files) && res.files.length > 0) {
+          const files = res.files.map(
+            (f) => new File([base64ToBlob(f.data_b64)], f.name || "image.png")
+          );
+          startBatchFlow(files);
+        } else if (res?.data_b64) {
+          startBatchFlow([new File([base64ToBlob(res.data_b64)], res.name || "image.png")]);
+        }
+      } catch (_) {
+        state.expectingBatch = true;
+        triggerOpenFileDialog();
+      }
+    })();
+    return;
+  }
+  state.expectingBatch = true;
+  triggerOpenFileDialog();
+}
+
+dom.btnBatch?.addEventListener("click", () => requestBatch());
+
 dom.fileInput.addEventListener("change", (e) => {
   const files = Array.from(e.target.files || []);
   if (files.length === 0) return;
+  const expecting = state.expectingBatch;
+  state.expectingBatch = false;
+  if (expecting || files.length > 1) {
+    startBatchFlow(files);
+    return;
+  }
   if (state.isProcessing) {
     cancelProcessing();
   }
@@ -2020,6 +2481,12 @@ window.addEventListener("drop", (e) => {
   dom.viewport.classList.remove("dragover");
   const files = Array.from(e.dataTransfer?.files || []);
   if (files.length === 0) return;
+
+  // Dropping multiple files routes into the batch queue (one file = normal tab).
+  if (files.length > 1) {
+    startBatchFlow(files);
+    return;
+  }
 
   if (state.isProcessing) {
     openConfirmModal(
@@ -2251,6 +2718,7 @@ window.openBGR = {
     createBlankTab();
   },
   openImage: () => requestOpenImage(),
+  startBatch: () => requestBatch(),
   exportImage: () => {
     if (!dom.btnDownload.classList.contains("disabled")) dom.btnDownload.click();
   },
@@ -2366,6 +2834,7 @@ window.openBGR = {
       const dispatch = {
         newTab: () => window.openBGR.newTab(),
         openImage: () => window.openBGR.openImage(),
+        batchProcess: () => window.openBGR.startBatch(),
         exportImage: () => window.openBGR.exportImage(),
         closeActiveTab: () => window.openBGR.closeActiveTab(),
         preferences: () => window.openBGR.openSettings("preferences"),

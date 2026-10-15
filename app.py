@@ -692,6 +692,37 @@ def api_status() -> dict[str, Any]:
     }
 
 
+@app.post("/api/save")
+async def api_save(
+    directory: str = Form(...),
+    filename: str = Form(...),
+    file: UploadFile = File(...),
+) -> dict[str, Any]:
+    """
+    Writes a processed image into a user-chosen output directory (batch mode).
+    The filename is sanitized to a plain basename and name collisions are
+    auto-renamed (`name.png` -> `name-1.png`, `name-2.png`, ...).
+    """
+    dest_dir = Path(directory).expanduser()
+    if not dest_dir.is_dir():
+        raise HTTPException(status_code=400, detail="Output folder does not exist.")
+    safe_name = Path(filename).name
+    if not safe_name:
+        raise HTTPException(status_code=400, detail="Invalid filename.")
+
+    target = dest_dir / safe_name
+    if target.exists():
+        stem, suffix = target.stem, target.suffix
+        counter = 1
+        while (dest_dir / f"{stem}-{counter}{suffix}").exists():
+            counter += 1
+        target = dest_dir / f"{stem}-{counter}{suffix}"
+
+    data = await file.read()
+    target.write_bytes(data)
+    return {"ok": True, "path": str(target), "name": target.name}
+
+
 @app.post("/api/remove-bg")
 async def api_remove_bg(
     file: UploadFile = File(...),
@@ -873,6 +904,24 @@ class DesktopApi:
             return {"saved": True, "path": target_path}
         except Exception as exc:
             return {"saved": False, "error": str(exc)}
+
+    def choose_output_dir(self) -> dict[str, Any]:
+        """
+        Opens a native OS folder picker so batch processing can write all
+        exported cutouts into a user-chosen directory.
+        """
+        if self.window is None:
+            return {"cancelled": True}
+        try:
+            import webview
+
+            result = self.window.create_file_dialog(webview.FOLDER_DIALOG)
+            if not result:
+                return {"cancelled": True}
+            path = result[0] if isinstance(result, (list, tuple)) else str(result)
+            return {"cancelled": False, "path": str(path)}
+        except Exception as exc:
+            return {"cancelled": True, "error": str(exc)}
 
     def copy_image(self, data_base64: str) -> dict[str, Any]:
         """
@@ -1227,6 +1276,7 @@ def build_native_menus(window: Any) -> list[Any]:
     file_items: list[Any] = [
         MenuAction("New Tab", call("newTab()")),
         MenuAction("Open Image…", call("openImage()")),
+        MenuAction("Batch Process Images…", call("startBatch()")),
         MenuSeparator(),
         MenuAction("Export Image…", call("exportImage()")),
         MenuSeparator(),
@@ -1343,6 +1393,7 @@ def configure_macos_native_window_and_menus(window: Any) -> None:
                         "Preferences…": (",", cmd_mask),
                         "New Tab": ("t", cmd_mask),
                         "Open Image…": ("o", cmd_mask),
+                        "Batch Process Images…": ("b", cmd_mask),
                         "Export Image…": ("e", cmd_mask),
                         "Close Tab": ("w", cmd_mask),
                         "Copy Cutout": ("c", shift_cmd),
