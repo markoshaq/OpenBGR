@@ -82,20 +82,49 @@ if os.cpu_count():
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 
+def get_system_memory_gb() -> float:
+    """Estimates total system or GPU memory in GiB to prevent swap thrashing on 2K tensors."""
+    if torch.cuda.is_available():
+        try:
+            return torch.cuda.get_device_properties(0).total_memory / (1024**3)
+        except Exception:
+            pass
+    if platform.system() == "Darwin":
+        try:
+            mem_bytes = int(
+                subprocess.check_output(["sysctl", "-n", "hw.memsize"], text=True).strip()
+            )
+            return mem_bytes / (1024**3)
+        except Exception:
+            pass
+    try:
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        page_count = os.sysconf("SC_PHYS_PAGES")
+        if page_size > 0 and page_count > 0:
+            return (page_size * page_count) / (1024**3)
+    except Exception:
+        pass
+    return 16.0
+
+
+SYSTEM_MEMORY_GB: float = get_system_memory_gb()
+# Evaluating BiRefNet_HR at 2048x2048 allocates >6 GB of intermediate attention feature
+# pyramids; on 8 GB systems, 1536x1536 (2.25x pixel density of 1024x1024) prevents swap thrashing.
+HR_RESOLUTION: int = 2048 if SYSTEM_MEMORY_GB >= 14.0 else 1536
+
 # Supported Hugging Face model repositories — each tier maps to a distinct trained model.
 MODELS: dict[str, str] = {
     "lite": "ZhengPeng7/BiRefNet_lite",  # Swin-T backbone trained at 1024x1024
     "full": "ZhengPeng7/BiRefNet",       # Swin-L backbone trained at 1024x1024
-    "hr": "ZhengPeng7/BiRefNet_HR",      # Swin-L backbone trained natively at 2048x2048
+    "hr": "ZhengPeng7/BiRefNet_HR",      # Swin-L high-res backbone (1536px / 2048px)
 }
 
-# Hardware execution tiers. Each tier loads a dedicated BiRefNet checkpoint at its
-# native training resolution.
+# Hardware execution tiers. Each tier loads a dedicated BiRefNet checkpoint.
 TIERS: dict[str, dict[str, Any]] = {
     "low": {
         "key": "low",
         "label": "Low-End",
-        "sublabel": "Lite • 1024px Swin-T",
+        "sublabel": "Lite / 1024px Swin-T",
         "model_key": "lite",
         "repo_id": MODELS["lite"],
         "resolution": 1024,
@@ -107,7 +136,7 @@ TIERS: dict[str, dict[str, Any]] = {
     "mid": {
         "key": "mid",
         "label": "Mid-Range",
-        "sublabel": "Full • 1024px Swin-L",
+        "sublabel": "Full / 1024px Swin-L",
         "model_key": "full",
         "repo_id": MODELS["full"],
         "resolution": 1024,
@@ -119,13 +148,13 @@ TIERS: dict[str, dict[str, Any]] = {
     "high": {
         "key": "high",
         "label": "High-End",
-        "sublabel": "Ultra 2K • 2048px HR",
+        "sublabel": f"Ultra HR / {HR_RESOLUTION}px Swin-L",
         "model_key": "hr",
         "repo_id": MODELS["hr"],
-        "resolution": 2048,
+        "resolution": HR_RESOLUTION,
         "description": (
-            "High-Resolution BiRefNet_HR (Swin-L) trained natively at 2048x2048 "
-            "(4x the pixel density of 1024x1024) for 4K/8K commercial photography."
+            f"High-Resolution BiRefNet_HR (Swin-L) evaluated at {HR_RESOLUTION}x{HR_RESOLUTION} "
+            "for high-megapixel commercial photography and micro-strand detail."
         ),
     },
 }
@@ -151,10 +180,10 @@ def detect_compute_device() -> torch.device:
 
 
 def format_device_label(device: torch.device) -> str:
-    """Returns a human-readable hardware identifier for UI telemetry headers."""
+    """Returns an ASCII-safe hardware identifier for UI telemetry and HTTP headers."""
     if device.type == "cuda":
         try:
-            return f"CUDA • {torch.cuda.get_device_name(0)}"
+            return f"CUDA / {torch.cuda.get_device_name(0)}"
         except Exception:
             return "NVIDIA CUDA GPU"
 
@@ -169,10 +198,10 @@ def format_device_label(device: torch.device) -> str:
                     chip = out
             except Exception:
                 pass
-        return f"MPS • {chip}"
+        return f"MPS / {chip}"
 
     cpu_name = platform.processor() or platform.machine() or "CPU"
-    return f"CPU • {cpu_name}"
+    return f"CPU / {cpu_name}"
 
 
 def select_recommended_tier(device: torch.device) -> str:
@@ -534,17 +563,22 @@ async def api_remove_bg(
     telemetry_headers = {
         "X-Inference-Time-Ms": f"{elapsed_ms:.1f}",
         "X-Tier-Used": f"{tier_cfg['label']} ({tier_cfg['sublabel']})",
-        "X-Device": f"{DEVICE_LABEL} • {PRECISION_LABEL}",
+        "X-Device": f"{DEVICE_LABEL} / {PRECISION_LABEL}",
         "X-Image-Width": str(result_img.width),
         "X-Image-Height": str(result_img.height),
         "Access-Control-Expose-Headers": (
             "X-Inference-Time-Ms, X-Tier-Used, X-Device, X-Image-Width, X-Image-Height"
         ),
     }
+    # Ensure all HTTP header values are strictly latin-1 safe per RFC 7230.
+    safe_headers = {
+        k: v.encode("latin-1", errors="ignore").decode("latin-1")
+        for k, v in telemetry_headers.items()
+    }
     return Response(
         content=output_buffer.getvalue(),
         media_type="image/png",
-        headers=telemetry_headers,
+        headers=safe_headers,
     )
 
 
