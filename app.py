@@ -98,7 +98,7 @@ BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 STATIC_DIR.mkdir(exist_ok=True)
 
-APP_VERSION = "1.1.0"
+APP_VERSION = "0.01"
 
 # Scale intra-op CPU parallelism for machines running without a GPU accelerator.
 if os.cpu_count():
@@ -1169,9 +1169,9 @@ def set_macos_app_name(name: str) -> None:
             if info_dict is not None:
                 info_dict["CFBundleName"] = name
                 info_dict["CFBundleDisplayName"] = name
-                info_dict["CFBundleShortVersionString"] = "1.0.0"
-                info_dict["CFBundleVersion"] = "1.0.0"
-                info_dict["CFBundleGetInfoString"] = f"{name} 1.0.0"
+                info_dict["CFBundleShortVersionString"] = APP_VERSION
+                info_dict["CFBundleVersion"] = APP_VERSION
+                info_dict["CFBundleGetInfoString"] = f"{name} {APP_VERSION}"
                 info_dict["NSHumanReadableCopyright"] = (
                     f"{name} — Local AI Background Removal Studio"
                 )

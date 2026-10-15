@@ -76,7 +76,7 @@ To build lightweight desktop release bundles locally into `dist/`:
 python3 scripts/build_release.py
 ```
 
-Pushing a version tag (e.g. `git tag v1.0.0 && git push origin v1.0.0`) triggers `.github/workflows/release.yml` to build and attach `OpenBGR-macOS.dmg`, `OpenBGR-Windows.zip`, and `OpenBGR-Linux.tar.gz` to a GitHub Release automatically.
+Pushing a version tag (e.g. `git tag v0.01 && git push origin v0.01`) triggers `.github/workflows/release.yml` to build and attach `OpenBGR-macOS.dmg`, `OpenBGR-Windows.zip`, and `OpenBGR-Linux.tar.gz` to a GitHub Release automatically.
 
 ## License
 
