@@ -123,12 +123,13 @@ curl -X POST "http://127.0.0.1:7860/api/remove-bg" \
 removebg/
 ├── app.py               # FastAPI engine, ModelManager, FP16 inference & edge decontamination
 ├── static/
-│   ├── index.html       # Semantic studio layout (4-row grid workspace)
+│   ├── index.html       # Semantic 3-column studio layout (settings, viewport, export)
 │   ├── styles.css       # Industrial high-contrast design system & split-plane styles
-│   └── app.js           # Modular frontend controller, pointer physics & telemetry client
+│   └── app.js           # Modular frontend controller, live canvas preview & export engine
 ├── requirements.txt     # Pinned production dependencies
-├── start.sh             # One-command bootstrapper for macOS & Linux
-├── start.bat            # One-command bootstrapper for Windows
+├── Start Mac.command    # Double-clickable macOS Finder launcher
+├── start.sh             # Zero-config bootstrapper for macOS & Linux
+├── start.bat            # Double-clickable zero-config bootstrapper for Windows
 └── LICENSE              # MIT License
 ```
 
