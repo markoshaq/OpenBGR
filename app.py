@@ -98,6 +98,8 @@ BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 STATIC_DIR.mkdir(exist_ok=True)
 
+APP_VERSION = "1.1.0"
+
 # Scale intra-op CPU parallelism for machines running without a GPU accelerator.
 if os.cpu_count():
     torch.set_num_threads(max(1, min(8, os.cpu_count() or 4)))
@@ -680,6 +682,7 @@ def api_status() -> dict[str, Any]:
         "precision": PRECISION_LABEL,
         "recommended_tier": RECOMMENDED_TIER,
         "active_model": MANAGER.active_model_key,
+        "version": APP_VERSION,
         "tiers": tiers_status,
         "matting": {
             "repo_id": MODELS["matting"],

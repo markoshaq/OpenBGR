@@ -186,6 +186,11 @@ const dom = {
   exportHeightInput: document.getElementById("exportHeightInput"),
 
   hwCompute: document.getElementById("hwCompute"),
+  hwPrecision: document.getElementById("hwPrecision"),
+  prefsVersion: document.getElementById("prefsVersion"),
+  sysVersion: document.getElementById("sysVersion"),
+  aboutVersion: document.getElementById("aboutVersion"),
+  btnPrefsCloseX: document.getElementById("btnPrefsCloseX"),
   statFile: document.getElementById("statFile"),
   statDim: document.getElementById("statDim"),
   statTier: document.getElementById("statTier"),
@@ -640,21 +645,37 @@ function applyDotState(dotEl, status) {
 
 /**
  * Updates the status dots and tooltips on all 3 preset buttons and the Matting toggle.
+ * Also refreshes the System pane model inventory badges in Preferences.
  */
 function updateCacheIndicator() {
   const tiers = state.serverStatus?.tiers;
   if (!tiers) return;
 
-  ["low", "mid", "high"].forEach((key) => {
-    const dotEl = document.getElementById(`dot-${key}`);
-    const status = getTierAvailability(tiers[key]);
-    applyDotState(dotEl, status);
-  });
+  const inventory = {
+    low: tiers.low,
+    mid: tiers.mid,
+    high: tiers.high,
+    matting: state.serverStatus?.matting,
+  };
 
-  if (state.serverStatus?.matting) {
-    const matDot = document.getElementById("dot-matting");
-    applyDotState(matDot, getTierAvailability(state.serverStatus.matting));
-  }
+  Object.entries(inventory).forEach(([key, tierInfo]) => {
+    const status = getTierAvailability(tierInfo);
+    applyDotState(document.getElementById(`dot-${key}`), status);
+    applyDotState(document.getElementById(`sysdot-${key}`), status);
+
+    const badge = document.getElementById(`sysbadge-${key}`);
+    if (badge) {
+      const isActive = Boolean(tierInfo?.active);
+      badge.textContent = isActive
+        ? "ACTIVE"
+        : status === "ready"
+          ? "CACHED"
+          : status === "downloadable"
+            ? "ON DEMAND"
+            : "OFFLINE";
+      badge.classList.toggle("on", isActive);
+    }
+  });
 }
 
 /**
@@ -864,8 +885,13 @@ async function syncServerStatus(isInitialLoad = false) {
     const response = await fetch("/api/status");
     state.serverStatus = await response.json();
 
-    const { device_label, precision, recommended_tier } = state.serverStatus;
-    dom.hwCompute.textContent = `${device_label} (${precision})`.toUpperCase();
+    const { device_label, precision, recommended_tier, version } = state.serverStatus;
+    dom.hwCompute.textContent = (device_label || "LOCAL ENGINE").toUpperCase();
+    if (dom.hwPrecision) dom.hwPrecision.textContent = (precision || "—").toUpperCase();
+    const verLabel = version ? `V${version}` : "V—";
+    if (dom.prefsVersion) dom.prefsVersion.textContent = verLabel;
+    if (dom.sysVersion) dom.sysVersion.textContent = verLabel;
+    if (dom.aboutVersion) dom.aboutVersion.textContent = verLabel;
 
     if (isInitialLoad) {
       const targetTier =
@@ -1408,10 +1434,14 @@ dom.confirmModal.addEventListener("click", (e) => {
 });
 
 dom.btnInfo.addEventListener("click", () => {
-  dom.infoModal.classList.add("active");
+  openPrefsDialog();
 });
 
 dom.btnInfoClose.addEventListener("click", () => {
+  dom.infoModal.classList.remove("active");
+});
+
+dom.btnPrefsCloseX?.addEventListener("click", () => {
   dom.infoModal.classList.remove("active");
 });
 
@@ -1419,6 +1449,37 @@ dom.infoModal.addEventListener("click", (e) => {
   if (e.target === dom.infoModal) {
     dom.infoModal.classList.remove("active");
   }
+});
+
+// Preferences dialog sidebar navigation
+const PREFS_SECTION_MAP = {
+  preferences: "settings-preferences",
+  appearance: "settings-preferences",
+  general: "settings-general",
+  behavior: "settings-general",
+  system: "settings-system",
+  about: "settings-about",
+};
+
+function selectPrefsPane(paneId) {
+  dom.infoModal.querySelectorAll(".prefs-nav-item").forEach((item) => {
+    item.classList.toggle("active", item.getAttribute("data-pane") === paneId);
+  });
+  dom.infoModal.querySelectorAll(".prefs-pane").forEach((pane) => {
+    pane.classList.toggle("active", pane.id === paneId);
+  });
+}
+
+function openPrefsDialog(section) {
+  dom.infoModal.classList.add("active");
+  const paneId = PREFS_SECTION_MAP[section] || "settings-preferences";
+  selectPrefsPane(paneId);
+}
+
+dom.infoModal.querySelectorAll(".prefs-nav-item").forEach((item) => {
+  item.addEventListener("click", () => {
+    selectPrefsPane(item.getAttribute("data-pane"));
+  });
 });
 
 // Sync initial state of "Confirm before closing image tab" toggle in Settings
@@ -2186,14 +2247,7 @@ window.openBGR = {
   cancelProcessing: () => {
     if (state.isProcessing) cancelProcessing();
   },
-  openSettings: (section) => {
-    dom.infoModal.classList.add("active");
-    if (section) {
-      document
-        .getElementById(`settings-${section}`)
-        ?.scrollIntoView({ block: "start" });
-    }
-  },
+  openSettings: (section) => openPrefsDialog(section),
   openGithub: () => openExternalUrl("https://github.com/markoshaq/OpenBGR"),
   quitApp: () => {
     if (window.pywebview?.api?.quit) {

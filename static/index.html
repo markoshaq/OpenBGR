@@ -548,120 +548,263 @@
       </div>
     </div>
 
-    <!-- Full-Window Settings & System Info Modal -->
+    <!-- Preferences & System Info Modal (sidebar navigation layout) -->
     <div class="modal-backdrop" id="infoModal">
-      <div class="modal-dialog info-dialog" role="dialog" aria-modal="true" aria-labelledby="infoModalTitle">
-        <div class="modal-title" id="infoModalTitle">PREFERENCES &amp; SYSTEM INFO</div>
-
-        <div class="settings-block" id="settings-preferences">
-          <div class="section-header">APPEARANCE</div>
-          <div class="pref-row">
-            <span class="pref-label">THEME</span>
-            <div class="segmented pref-segmented">
-              <button type="button" class="seg-btn" id="prefThemeDark">DARK</button>
-              <button type="button" class="seg-btn" id="prefThemeLight">LIGHT</button>
+      <div class="modal-dialog prefs-dialog" role="dialog" aria-modal="true" aria-labelledby="infoModalTitle">
+        <div class="prefs-header">
+          <div class="prefs-title-group">
+            <svg class="prefs-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.26.6.86 1 1.51 1H21a2 2 0 1 1 0 4h-.09c-.65 0-1.25.4-1.51 1z"></path>
+            </svg>
+            <div class="prefs-title-stack">
+              <div class="modal-title" id="infoModalTitle">PREFERENCES</div>
+              <div class="prefs-subtitle">OPENBGR <span id="prefsVersion">V—</span> · LOCAL ENGINE</div>
             </div>
           </div>
-          <div class="pref-row">
-            <span class="pref-label">ACCENT</span>
-            <div class="swatches-grid accent-swatches" id="accentSwatches">
-              <button type="button" class="swatch active" data-accent="default" style="background:#fafafa" title="Default Monochrome"></button>
-              <button type="button" class="swatch" data-accent="green" style="background:#34d399" title="Green"></button>
-              <button type="button" class="swatch" data-accent="blue" style="background:#60a5fa" title="Blue"></button>
-              <button type="button" class="swatch" data-accent="amber" style="background:#fbbf24" title="Amber"></button>
-              <button type="button" class="swatch" data-accent="red" style="background:#f87171" title="Red"></button>
-              <button type="button" class="swatch" data-accent="violet" style="background:#a78bfa" title="Violet"></button>
-            </div>
-          </div>
-          <div class="pref-row">
-            <span class="pref-label">UI DENSITY</span>
-            <div class="segmented pref-segmented">
-              <button type="button" class="seg-btn" id="prefDensityComfortable">COMFORTABLE</button>
-              <button type="button" class="seg-btn" id="prefDensityCompact">COMPACT</button>
-            </div>
-          </div>
-        </div>
-
-        <div class="settings-block">
-          <div class="section-header">BEHAVIOR</div>
-          <button type="button" class="toggle-card active" id="btnToggleConfirmClose">
-            <div class="toggle-card-top">
-              <span>CONFIRM BEFORE CLOSING IMAGE TAB</span>
-              <span class="toggle-indicator"></span>
-            </div>
-            <div class="preset-desc">Ask for confirmation when clicking × on an open image tab.</div>
+          <button type="button" class="prefs-close" id="btnPrefsCloseX" aria-label="Close preferences">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+              <line x1="5" y1="5" x2="19" y2="19"></line>
+              <line x1="19" y1="5" x2="5" y2="19"></line>
+            </svg>
           </button>
-          <div class="pref-row">
-            <span class="pref-label">DEFAULT HARDWARE PRESET</span>
-            <select class="studio-select pref-select" id="prefDefaultTier">
-              <option value="auto">AUTO — Hardware Recommended</option>
-              <option value="low">LOW-END — Lite 1K (Swin-T)</option>
-              <option value="mid">MID-RANGE — Full 1K (Swin-L)</option>
-              <option value="high">HIGH-END — Ultra 2K (Swin-L HR)</option>
-            </select>
-          </div>
-          <div class="pref-row">
-            <span class="pref-label">DEFAULT EXPORT FORMAT</span>
-            <select class="studio-select pref-select" id="prefDefaultFormat">
-              <option value="png">PNG — 32-Bit Lossless RGBA</option>
-              <option value="webp">WEBP — Transparent WebP</option>
-              <option value="jpg">JPG — Matte Composited</option>
-              <option value="mask">MASK — 8-Bit Alpha Matte</option>
-            </select>
-          </div>
-          <div class="pref-row">
-            <span class="pref-label">DEFAULT MATTE BACKDROP</span>
-            <select class="studio-select pref-select" id="prefDefaultBackdrop">
-              <option value="checker">Transparency Grid</option>
-              <option value="#ffffff">Pure White</option>
-              <option value="#000000">Pure Black</option>
-              <option value="#18181b">Studio Dark Gray</option>
-            </select>
+        </div>
+
+        <div class="prefs-body">
+          <nav class="prefs-nav" aria-label="Preference sections">
+            <button type="button" class="prefs-nav-item active" data-pane="settings-preferences">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="9"></circle>
+                <path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor" stroke="none"></path>
+              </svg>
+              APPEARANCE
+            </button>
+            <button type="button" class="prefs-nav-item" data-pane="settings-general">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <line x1="4" y1="8" x2="20" y2="8"></line>
+                <line x1="4" y1="16" x2="20" y2="16"></line>
+                <circle cx="9" cy="8" r="2" fill="var(--surface)"></circle>
+                <circle cx="15" cy="16" r="2" fill="var(--surface)"></circle>
+              </svg>
+              GENERAL
+            </button>
+            <button type="button" class="prefs-nav-item" data-pane="settings-system">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="6" y="6" width="12" height="12" rx="1"></rect>
+                <rect x="10" y="10" width="4" height="4"></rect>
+                <path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3"></path>
+              </svg>
+              SYSTEM
+            </button>
+            <button type="button" class="prefs-nav-item" data-pane="settings-about">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="9"></circle>
+                <line x1="12" y1="11" x2="12" y2="16"></line>
+                <circle cx="12" cy="8" r="0.6" fill="currentColor"></circle>
+              </svg>
+              ABOUT
+            </button>
+          </nav>
+
+          <div class="prefs-content">
+            <!-- APPEARANCE PANE -->
+            <section class="prefs-pane active" id="settings-preferences">
+              <div class="pane-heading">APPEARANCE</div>
+              <div class="pref-card">
+                <div class="pref-row">
+                  <div class="pref-text">
+                    <span class="pref-label">THEME</span>
+                    <span class="pref-desc">Interface color scheme for the studio workspace.</span>
+                  </div>
+                  <div class="segmented pref-segmented">
+                    <button type="button" class="seg-btn" id="prefThemeDark">DARK</button>
+                    <button type="button" class="seg-btn" id="prefThemeLight">LIGHT</button>
+                  </div>
+                </div>
+                <div class="pref-row">
+                  <div class="pref-text">
+                    <span class="pref-label">ACCENT</span>
+                    <span class="pref-desc">Highlight color for active controls and selections.</span>
+                  </div>
+                  <div class="accent-dots" id="accentSwatches">
+                    <button type="button" class="swatch active" data-accent="default" style="--dot:#fafafa" title="Mono (Default)"></button>
+                    <button type="button" class="swatch" data-accent="green" style="--dot:#34d399" title="Green"></button>
+                    <button type="button" class="swatch" data-accent="blue" style="--dot:#60a5fa" title="Blue"></button>
+                    <button type="button" class="swatch" data-accent="amber" style="--dot:#fbbf24" title="Amber"></button>
+                    <button type="button" class="swatch" data-accent="red" style="--dot:#f87171" title="Red"></button>
+                    <button type="button" class="swatch" data-accent="violet" style="--dot:#a78bfa" title="Violet"></button>
+                  </div>
+                </div>
+                <div class="pref-row">
+                  <div class="pref-text">
+                    <span class="pref-label">UI DENSITY</span>
+                    <span class="pref-desc">Spacing and control size across the studio.</span>
+                  </div>
+                  <div class="segmented pref-segmented">
+                    <button type="button" class="seg-btn" id="prefDensityComfortable">COMFORTABLE</button>
+                    <button type="button" class="seg-btn" id="prefDensityCompact">COMPACT</button>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <!-- GENERAL PANE -->
+            <section class="prefs-pane" id="settings-general">
+              <div class="pane-heading">GENERAL</div>
+              <div class="pref-card">
+                <button type="button" class="pref-switch-row" id="btnToggleConfirmClose">
+                  <span class="pref-switch-text">
+                    <span class="pref-label">CONFIRM BEFORE CLOSING TAB</span>
+                    <span class="pref-desc">Ask for confirmation when pressing × on an open image tab.</span>
+                  </span>
+                  <span class="pref-switch" aria-hidden="true"><span class="pref-switch-knob"></span></span>
+                </button>
+                <div class="pref-row">
+                  <div class="pref-text">
+                    <span class="pref-label">DEFAULT HARDWARE PRESET</span>
+                    <span class="pref-desc">Model tier selected when the app launches.</span>
+                  </div>
+                  <select class="studio-select pref-select" id="prefDefaultTier">
+                    <option value="auto">Auto — Hardware Recommended</option>
+                    <option value="low">Low-End — Lite 1K</option>
+                    <option value="mid">Mid-Range — Full 1K</option>
+                    <option value="high">High-End — Ultra 2K</option>
+                  </select>
+                </div>
+                <div class="pref-row">
+                  <div class="pref-text">
+                    <span class="pref-label">DEFAULT EXPORT FORMAT</span>
+                    <span class="pref-desc">File type preselected for every export.</span>
+                  </div>
+                  <select class="studio-select pref-select" id="prefDefaultFormat">
+                    <option value="png">PNG — 32-Bit Lossless RGBA</option>
+                    <option value="webp">WEBP — Transparent WebP</option>
+                    <option value="jpg">JPG — Matte Composited</option>
+                    <option value="mask">MASK — 8-Bit Alpha Matte</option>
+                  </select>
+                </div>
+                <div class="pref-row">
+                  <div class="pref-text">
+                    <span class="pref-label">DEFAULT MATTE BACKDROP</span>
+                    <span class="pref-desc">Preview background behind transparent pixels.</span>
+                  </div>
+                  <select class="studio-select pref-select" id="prefDefaultBackdrop">
+                    <option value="checker">Transparency Grid</option>
+                    <option value="#ffffff">Pure White</option>
+                    <option value="#000000">Pure Black</option>
+                    <option value="#18181b">Studio Dark Gray</option>
+                  </select>
+                </div>
+              </div>
+            </section>
+
+            <!-- SYSTEM PANE -->
+            <section class="prefs-pane" id="settings-system">
+              <div class="pane-heading">SYSTEM</div>
+              <div class="pref-card">
+                <div class="spec-row">
+                  <span class="spec-key">COMPUTE ENGINE</span>
+                  <span class="spec-val" id="hwCompute">DETECTING…</span>
+                </div>
+                <div class="spec-row">
+                  <span class="spec-key">PRECISION</span>
+                  <span class="spec-val" id="hwPrecision">—</span>
+                </div>
+                <div class="spec-row">
+                  <span class="spec-key">VERSION</span>
+                  <span class="spec-val" id="sysVersion">—</span>
+                </div>
+              </div>
+
+              <div class="pane-subheading">MODEL INVENTORY</div>
+              <div class="pref-card model-inventory">
+                <div class="model-row" id="sysModel-low">
+                  <span class="tier-dot" id="sysdot-low"></span>
+                  <div class="model-meta">
+                    <span class="model-name">LITE 1K — LOW-END</span>
+                    <span class="model-desc">BiRefNet_lite (Swin-T) — fast inference for CPUs &amp; integrated GPUs.</span>
+                  </div>
+                  <span class="model-badge" id="sysbadge-low">—</span>
+                </div>
+                <div class="model-row" id="sysModel-mid">
+                  <span class="tier-dot" id="sysdot-mid"></span>
+                  <div class="model-meta">
+                    <span class="model-name">FULL 1K — MID-RANGE</span>
+                    <span class="model-desc">BiRefNet (Swin-L) — studio-grade hair, fur &amp; soft alpha.</span>
+                  </div>
+                  <span class="model-badge" id="sysbadge-mid">—</span>
+                </div>
+                <div class="model-row" id="sysModel-high">
+                  <span class="tier-dot" id="sysdot-high"></span>
+                  <div class="model-meta">
+                    <span class="model-name">ULTRA 2K — HIGH-END</span>
+                    <span class="model-desc">BiRefNet_HR (Swin-L) — high-density tensor for 4K/8K work.</span>
+                  </div>
+                  <span class="model-badge" id="sysbadge-high">—</span>
+                </div>
+                <div class="model-row" id="sysModel-matting">
+                  <span class="tier-dot" id="sysdot-matting"></span>
+                  <div class="model-meta">
+                    <span class="model-name">MATTING — GLASS &amp; SHEER</span>
+                    <span class="model-desc">BiRefNet-matting — true alpha for glass, smoke &amp; sheer fabric.</span>
+                  </div>
+                  <span class="model-badge" id="sysbadge-matting">—</span>
+                </div>
+              </div>
+
+              <div class="pane-subheading">PIPELINE CAPABILITIES</div>
+              <div class="pref-card">
+                <div class="spec-row">
+                  <span class="spec-key">DEFRINGE</span>
+                  <span class="spec-val spec-desc">Removes background color bleed along semi-transparent hair &amp; borders.</span>
+                </div>
+                <div class="spec-row">
+                  <span class="spec-key">SPILL SUPPRESSION</span>
+                  <span class="spec-val spec-desc">Neutralizes rim reflections and color bounce on edges and glass.</span>
+                </div>
+                <div class="spec-row">
+                  <span class="spec-key">SHADOW CUTOFF</span>
+                  <span class="spec-val spec-desc">Alpha threshold that clips floor reflections and faint drop shadows.</span>
+                </div>
+              </div>
+            </section>
+
+            <!-- ABOUT PANE -->
+            <section class="prefs-pane" id="settings-about">
+              <div class="about-mark">
+                <span class="about-word">OPENBGR</span>
+                <span class="about-ver" id="aboutVersion">V—</span>
+              </div>
+              <p class="about-blurb">
+                Local AI background removal studio powered by BiRefNet.
+                100% offline after the initial model download — no uploads,
+                no telemetry, no subscriptions.
+              </p>
+              <div class="pref-card">
+                <div class="spec-row">
+                  <span class="spec-key">PRIVACY</span>
+                  <span class="spec-val spec-desc">Images never leave this machine. Inference runs fully on-device.</span>
+                </div>
+                <div class="spec-row">
+                  <span class="spec-key">LICENSE</span>
+                  <span class="spec-val spec-desc">MIT — free for personal and commercial use.</span>
+                </div>
+                <div class="spec-row">
+                  <span class="spec-key">SOURCE</span>
+                  <span class="spec-val spec-desc">github.com/markoshaq/OpenBGR</span>
+                </div>
+              </div>
+            </section>
           </div>
         </div>
 
-        <div class="section-header" style="margin-top: 4px;">SYSTEM SPECIFICATIONS</div>
-        <div class="info-list">
-          <div class="info-row">
-            <span class="info-key">COMPUTE ENGINE</span>
-            <span class="info-val" id="hwCompute">DETECTING...</span>
-          </div>
-          <div class="info-row">
-            <span class="info-key">LOW-END (LITE 1K)</span>
-            <span class="info-val">BiRefNet_lite (Swin-T) — Fast inference for CPUs &amp; integrated GPUs.</span>
-          </div>
-          <div class="info-row">
-            <span class="info-key">MID-RANGE (FULL 1K)</span>
-            <span class="info-val">BiRefNet (Swin-L) — Studio-grade hair, fur &amp; soft alpha matting.</span>
-          </div>
-          <div class="info-row">
-            <span class="info-key">HIGH-END (ULTRA 2K)</span>
-            <span class="info-val">BiRefNet_HR (Swin-L) — High-density tensor for 4K/8K photography.</span>
-          </div>
-          <div class="info-row">
-            <span class="info-key">DEFRINGE</span>
-            <span class="info-val">Removes background color bleed along semi-transparent hair &amp; borders.</span>
-          </div>
-        </div>
-
-        <div class="settings-block about-block" id="settings-about">
-          <div class="section-header">ABOUT</div>
-          <div class="info-row">
-            <span class="info-key">OPENBGR</span>
-            <span class="info-val">
-              Local AI background removal studio. 100% offline after model download —
-              no uploads, no telemetry, no subscriptions.
-            </span>
-          </div>
-        </div>
-
-        <div class="info-footer">
+        <div class="info-footer prefs-footer">
           <a href="https://github.com/markoshaq" target="_blank" rel="noopener noreferrer" class="credit-link">
             MADE BY MARKOSHAQ ↗
           </a>
           <div class="info-footer-actions">
             <button type="button" class="action-btn" id="btnResetPrefs">RESET DEFAULTS</button>
-            <button type="button" class="action-btn primary" id="btnInfoClose">CLOSE</button>
+            <button type="button" class="action-btn primary" id="btnInfoClose">DONE</button>
           </div>
         </div>
       </div>

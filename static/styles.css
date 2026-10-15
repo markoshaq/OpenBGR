@@ -58,9 +58,16 @@
   font-size: 10px;
 }
 
-.density-compact .modal-dialog .sidebar-section,
-.density-compact .settings-block {
-  padding: 8px 0;
+.density-compact .pref-row,
+.density-compact .pref-switch-row,
+.density-compact .spec-row,
+.density-compact .model-row {
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+
+.density-compact .prefs-content {
+  padding: 12px 16px;
 }
 
 * {
@@ -1250,47 +1257,6 @@ body {
   margin-top: 8px;
 }
 
-.info-dialog {
-  max-width: 480px;
-}
-
-.settings-block {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--border);
-}
-
-.info-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-  padding: 12px 0;
-  margin: 4px 0;
-}
-
-.info-row {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.info-key {
-  font-family: var(--mono);
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text);
-}
-
-.info-val {
-  font-size: 12px;
-  color: var(--muted);
-  line-height: 1.4;
-}
-
 .info-footer {
   display: flex;
   align-items: center;
@@ -1374,19 +1340,217 @@ input[type="file"] {
 }
 
 /* -------------------------------------------------------------------------
- * 6. Preferences Controls, Scrollable Settings Dialog & Light Theme Overrides
+ * 6. Preferences Dialog — Sidebar Navigation Layout
  * ------------------------------------------------------------------------- */
-.info-dialog {
-  max-width: 520px;
+.modal-backdrop.active .modal-dialog {
+  animation: modalIn 0.18s cubic-bezier(0.2, 0.9, 0.25, 1);
+}
+
+@keyframes modalIn {
+  from { opacity: 0; transform: translateY(6px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+
+.prefs-dialog {
+  width: 660px;
+  max-width: 94vw;
+  height: 540px;
   max-height: 86vh;
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+}
+
+.prefs-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  flex-shrink: 0;
+}
+
+.prefs-title-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.prefs-gear {
+  width: 26px;
+  height: 26px;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.prefs-title-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.prefs-subtitle {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+
+.prefs-close {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.prefs-close svg {
+  width: 11px;
+  height: 11px;
+}
+
+.prefs-close:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+  background: var(--surface);
+}
+
+.prefs-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.prefs-nav {
+  width: 158px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  background: var(--bg);
+  padding: 10px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.prefs-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 0;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.prefs-nav-item svg {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+
+.prefs-nav-item:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.prefs-nav-item.active {
+  color: var(--text);
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.prefs-nav-item.active svg {
+  color: var(--accent);
+}
+
+.prefs-content {
+  flex: 1;
+  min-width: 0;
   overflow-y: auto;
+  padding: 18px 20px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+.prefs-content::-webkit-scrollbar {
+  width: 8px;
+}
+
+.prefs-content::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+}
+
+.prefs-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.prefs-pane {
+  display: none;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.prefs-pane.active {
+  display: flex;
+}
+
+.pane-heading {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--text);
+}
+
+.pane-subheading {
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  margin-top: 6px;
+}
+
+/* Grouped settings card — rows separated by hairlines */
+.pref-card {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+}
+
+.pref-card > * + * {
+  border-top: 1px solid var(--border);
 }
 
 .pref-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 14px;
+  padding: 11px 14px;
+}
+
+.pref-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
 }
 
 .pref-label {
@@ -1394,8 +1558,14 @@ input[type="file"] {
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.06em;
-  color: var(--muted);
+  color: var(--text);
   text-transform: uppercase;
+}
+
+.pref-desc {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.4;
 }
 
 .pref-segmented .seg-btn {
@@ -1408,15 +1578,209 @@ input[type="file"] {
   min-width: 200px;
   padding: 6px 8px;
   font-size: 10px;
-}
-
-.accent-swatches {
-  width: 168px;
   flex-shrink: 0;
 }
 
-.accent-swatches .swatch {
-  height: 22px;
+/* Round accent dots with ring indicator */
+.accent-dots {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.accent-dots .swatch {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  background: var(--dot);
+  padding: 0;
+  transition: transform 0.12s;
+}
+
+.accent-dots .swatch:hover {
+  transform: scale(1.12);
+}
+
+.accent-dots .swatch.active::after {
+  display: none;
+}
+
+.accent-dots .swatch.active {
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
+}
+
+/* iOS-style switch row for boolean preferences */
+.pref-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 11px 14px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s;
+}
+
+.pref-switch-row:hover {
+  background: var(--surface-2);
+}
+
+.pref-switch-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.pref-switch {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  border-radius: 10px;
+  background: var(--border-strong);
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.pref-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--surface);
+  transition: transform 0.15s;
+}
+
+.pref-switch-row.active .pref-switch {
+  background: var(--accent);
+}
+
+.pref-switch-row.active .pref-switch-knob {
+  transform: translateX(14px);
+  background: var(--accent-contrast);
+}
+
+/* System pane spec table */
+.spec-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 9px 14px;
+}
+
+.spec-key {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.spec-val {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text);
+  text-align: right;
+}
+
+.spec-desc {
+  font-family: var(--sans);
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.4;
+  max-width: 300px;
+}
+
+/* Model inventory rows */
+.model-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+}
+
+.model-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.model-name {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--text);
+}
+
+.model-desc {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.model-badge {
+  font-family: var(--mono);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 3px 7px;
+  border: 1px solid var(--border-strong);
+  color: var(--muted);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.model-badge.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* About pane */
+.about-mark {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.about-word {
+  font-family: var(--mono);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--text);
+}
+
+.about-ver {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--accent);
+  letter-spacing: 0.08em;
+}
+
+.about-blurb {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.55;
+  max-width: 400px;
+}
+
+.prefs-footer {
+  border-top: 1px solid var(--border);
+  padding: 10px 18px;
+  background: var(--surface-2);
+  flex-shrink: 0;
+  margin-top: 0;
 }
 
 /* Light theme component overrides */
