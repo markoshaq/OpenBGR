@@ -28,6 +28,7 @@ DIST_DIR = ROOT_DIR / "dist"
 
 APP_FILES = [
     "app.py",
+    "icon_render.py",
     "requirements.txt",
     "start.sh",
     "start.bat",
@@ -59,9 +60,13 @@ def make_executable(path: Path) -> None:
 
 
 def generate_macos_icns(icns_path: Path) -> None:
-    """Generates a monochrome studio app icon (`OpenBGR.icns`) using Pillow and `iconutil`."""
+    """Generates the squircle `OpenBGR.icns` via Pillow (shared renderer) and `iconutil`."""
     try:
-        from PIL import Image, ImageDraw
+        import sys
+
+        sys.path.insert(0, str(ROOT_DIR))
+        import icon_render
+        from PIL import Image
     except ImportError:
         return
 
@@ -69,21 +74,7 @@ def generate_macos_icns(icns_path: Path) -> None:
         iconset_dir = Path(tmp) / "OpenBGR.iconset"
         iconset_dir.mkdir(parents=True, exist_ok=True)
 
-        # Render a crisp 1024x1024 monochrome studio icon
-        base_img = Image.new("RGBA", (1024, 1024), (9, 9, 11, 255))
-        draw = ImageDraw.Draw(base_img)
-        # Outer border frame
-        draw.rectangle((64, 64, 960, 960), outline=(250, 250, 250, 255), width=28)
-        # Split-screen motif (left solid white, right dark checkerboard)
-        draw.rectangle((92, 92, 512, 932), fill=(250, 250, 250, 255))
-        tile = 84
-        for y in range(92, 932, tile):
-            for x in range(512, 932, tile):
-                is_light = ((x - 512) // tile + (y - 92) // tile) % 2 == 0
-                color = (39, 39, 42, 255) if is_light else (17, 17, 19, 255)
-                draw.rectangle(
-                    (x, y, min(x + tile, 932), min(y + tile, 932)), fill=color
-                )
+        base_img = icon_render.render_icon(1024)
 
         sizes = [16, 32, 128, 256, 512]
         for sz in sizes:

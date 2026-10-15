@@ -1070,26 +1070,26 @@ APP_ICON_PATH = APP_CONFIG_DIR / "icon.png"
 
 def ensure_app_icon() -> Optional[str]:
     """
-    Generates a crisp 256x256 monochrome OpenBGR studio icon in `~/.openbgr/icon.png`
+    Generates the macOS-squircle OpenBGR icon in `~/.openbgr/icon.png`
     so the native window, Dock, and task switcher display the OpenBGR mark.
+    Regenerates when the on-disk file predates the squircle design.
     """
     try:
+        icon_src = BASE_DIR / "icon_render.py"
+        if (
+            APP_ICON_PATH.exists()
+            and icon_src.exists()
+            and APP_ICON_PATH.stat().st_mtime < icon_src.stat().st_mtime
+        ):
+            APP_ICON_PATH.unlink()  # stale icon from an older design
         if not APP_ICON_PATH.exists():
-            from PIL import ImageDraw
+            import sys
+
+            sys.path.insert(0, str(BASE_DIR))
+            import icon_render
 
             APP_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-            img = Image.new("RGBA", (256, 256), (9, 9, 11, 255))
-            draw = ImageDraw.Draw(img)
-            draw.rectangle((16, 16, 240, 240), outline=(250, 250, 250, 255), width=8)
-            draw.rectangle((24, 24, 128, 232), fill=(250, 250, 250, 255))
-            tile = 26
-            for y in range(24, 232, tile):
-                for x in range(128, 232, tile):
-                    is_light = ((x - 128) // tile + (y - 24) // tile) % 2 == 0
-                    color = (39, 39, 42, 255) if is_light else (17, 17, 19, 255)
-                    draw.rectangle(
-                        (x, y, min(x + tile, 232), min(y + tile, 232)), fill=color
-                    )
+            img = icon_render.render_icon(512)
             img.save(APP_ICON_PATH, format="PNG")
             img.close()
         return str(APP_ICON_PATH)
