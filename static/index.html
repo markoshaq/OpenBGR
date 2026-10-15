@@ -11,8 +11,7 @@
     <!-- 1. Top Hardware & Telemetry Header -->
     <header class="topbar">
       <div class="brand">
-        <div class="brand-mark">REMOVEBG</div>
-        <div class="brand-meta">LOCAL BIREFNET STUDIO // ZERO TELEMETRY // UNCOMPRESSED RGBA</div>
+        <div class="brand-mark">NOT REMOVE.BG</div>
       </div>
       <div class="hardware-readout">
         <div class="hw-item">
@@ -103,10 +102,9 @@
 
       <!-- Empty / Dropzone State -->
       <div class="empty-state" id="emptyState">
-        <div class="empty-tag">INPUT // SOURCE IMAGE</div>
         <div class="empty-title">Drop image file, click to browse, or paste</div>
         <div class="empty-desc">
-          Processes 100% locally on your hardware with zero image compression. Outputs full-resolution 32-bit RGBA PNG.
+          100% local processing, zero image compression, full-resolution 32-bit RGBA PNG output.
         </div>
         <div class="empty-shortcuts">
           <span class="kbd">CLICK TO BROWSE</span>
@@ -133,6 +131,21 @@
         <div class="progress-bar"></div>
         <div class="busy-title" id="busyTitle">RUNNING INFERENCE</div>
         <div class="busy-sub" id="busySub">Executing BiRefNet locally. First run of a model downloads weights once.</div>
+        <button type="button" class="action-btn cancel-btn" id="btnCancel">CANCEL PROCESSING</button>
+      </div>
+
+      <!-- Interrupt Confirmation Modal -->
+      <div class="modal-backdrop" id="confirmModal">
+        <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+          <div class="modal-title" id="modalTitle">STOP CURRENT IMAGE?</div>
+          <div class="modal-desc" id="modalDesc">
+            This will stop the current image processing. Do you want to continue?
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="action-btn" id="btnModalCancel">KEEP PROCESSING</button>
+            <button type="button" class="action-btn primary" id="btnModalConfirm">STOP &amp; CONTINUE</button>
+          </div>
+        </div>
       </div>
     </main>
 

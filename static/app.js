@@ -2,8 +2,8 @@
  * REMOVEBG — Frontend Studio Controller
  * =====================================
  * Handles hardware preset switching, drag-and-drop / clipboard image ingestion,
- * split-plane comparison rendering, and communication with the local FastAPI
- * segmentation backend (`/api/status` and `/api/remove-bg`).
+ * split-plane comparison rendering, active request cancellation, and
+ * communication with the local FastAPI segmentation backend.
  */
 
 "use strict";
@@ -15,6 +15,9 @@ const state = {
   viewMode: "split",       // "split" | "cutout" | "original"
   splitPercent: 50,        // Horizontal divider position (0 - 100)
   isDraggingSplit: false,  // Pointer drag state for split comparator
+  isProcessing: false,     // Whether an inference request is currently in-flight
+  abortController: null,   // AbortController for the active fetch request
+  pendingConfirmFn: null,  // Callback to execute if user confirms interrupting active processing
   sourceFile: null,        // Active File/Blob object
   resultBlob: null,        // Latest segmented PNG Blob
   originalObjectUrl: null, // Object URL for source preview
@@ -37,7 +40,13 @@ const dom = {
   busyOverlay: document.getElementById("busyOverlay"),
   busyTitle: document.getElementById("busyTitle"),
   busySub: document.getElementById("busySub"),
+  btnCancel: document.getElementById("btnCancel"),
   errorToast: document.getElementById("errorToast"),
+
+  confirmModal: document.getElementById("confirmModal"),
+  modalDesc: document.getElementById("modalDesc"),
+  btnModalCancel: document.getElementById("btnModalCancel"),
+  btnModalConfirm: document.getElementById("btnModalConfirm"),
 
   fileInput: document.getElementById("fileInput"),
   btnOpen: document.getElementById("btnOpen"),
@@ -65,6 +74,45 @@ function setError(message) {
   }
   dom.errorToast.textContent = `ERROR // ${message}`;
   dom.errorToast.classList.add("visible");
+}
+
+/**
+ * Opens the confirmation dialog before interrupting an active inference job.
+ * @param {string} message
+ * @param {() => void} onConfirm
+ */
+function openConfirmModal(message, onConfirm) {
+  dom.modalDesc.textContent = message;
+  state.pendingConfirmFn = onConfirm;
+  dom.confirmModal.classList.add("active");
+}
+
+/**
+ * Closes the confirmation dialog without interrupting the active job.
+ */
+function closeConfirmModal() {
+  state.pendingConfirmFn = null;
+  dom.confirmModal.classList.remove("active");
+}
+
+/**
+ * Cancels the currently running segmentation request via AbortController
+ * and restores the workspace to a clean idle state.
+ */
+function cancelProcessing() {
+  if (state.abortController) {
+    state.abortController.abort();
+    state.abortController = null;
+  }
+  state.isProcessing = false;
+  dom.busyOverlay.classList.remove("active");
+  closeConfirmModal();
+  dom.statTime.textContent = "CANCELLED";
+
+  // If this image has no completed cutout yet, show the original image cleanly.
+  if (!state.resultBlob && state.sourceFile) {
+    setViewMode("original");
+  }
 }
 
 /**
@@ -181,6 +229,10 @@ function handleSplitDrag(clientX) {
  */
 function ingestImageFile(file) {
   state.sourceFile = file;
+  state.resultBlob = null;
+  dom.btnDownload.classList.add("disabled");
+  dom.btnCopy.classList.add("disabled");
+
   if (state.originalObjectUrl) URL.revokeObjectURL(state.originalObjectUrl);
   state.originalObjectUrl = URL.createObjectURL(file);
 
@@ -200,8 +252,18 @@ function ingestImageFile(file) {
  */
 async function runSegmentation() {
   if (!state.sourceFile) return;
+
+  // If a previous segmentation request is still running, abort it first.
+  if (state.abortController) {
+    state.abortController.abort();
+  }
+  const controller = new AbortController();
+  state.abortController = controller;
+  state.isProcessing = true;
+
   setError(null);
   dom.busyOverlay.classList.add("active");
+  dom.statTime.textContent = "PROCESSING...";
 
   const tierInfo = state.serverStatus?.tiers?.[state.tier];
   const isCached = tierInfo ? tierInfo.cached : true;
@@ -222,6 +284,7 @@ async function runSegmentation() {
     const response = await fetch("/api/remove-bg", {
       method: "POST",
       body: formData,
+      signal: controller.signal,
     });
 
     if (!response.ok) {
@@ -239,7 +302,10 @@ async function runSegmentation() {
     const height = response.headers.get("X-Image-Height") || "";
     const tierLabel = response.headers.get("X-Tier-Used") || state.tier.toUpperCase();
 
-    state.resultBlob = await response.blob();
+    const blob = await response.blob();
+    if (controller.signal.aborted) return;
+
+    state.resultBlob = blob;
     if (state.resultObjectUrl) URL.revokeObjectURL(state.resultObjectUrl);
     state.resultObjectUrl = URL.createObjectURL(state.resultBlob);
 
@@ -258,9 +324,18 @@ async function runSegmentation() {
     setViewMode("split");
     syncServerStatus(false);
   } catch (err) {
+    if (err.name === "AbortError") {
+      return;
+    }
     setError(err.message || "Failed to process image.");
+    dom.statTime.textContent = "ERROR";
   } finally {
-    dom.busyOverlay.classList.remove("active");
+    if (state.abortController === controller) {
+      state.isProcessing = false;
+      state.abortController = null;
+      dom.busyOverlay.classList.remove("active");
+      closeConfirmModal();
+    }
   }
 }
 
@@ -268,7 +343,32 @@ async function runSegmentation() {
  * Event Listeners Registration
  * ------------------------------------------------------------------------- */
 
-// 1. Hardware Preset Buttons
+// 1. Cancel Button & Confirmation Modal Controls
+dom.btnCancel.addEventListener("click", () => {
+  cancelProcessing();
+});
+
+dom.btnModalCancel.addEventListener("click", () => {
+  closeConfirmModal();
+});
+
+dom.btnModalConfirm.addEventListener("click", () => {
+  const fn = state.pendingConfirmFn;
+  closeConfirmModal();
+  if (typeof fn === "function") fn();
+});
+
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    if (dom.confirmModal.classList.contains("active")) {
+      closeConfirmModal();
+    } else if (state.isProcessing) {
+      cancelProcessing();
+    }
+  }
+});
+
+// 2. Hardware Preset Buttons
 document.querySelectorAll("#tierSelector .seg-btn").forEach((btn) => {
   btn.addEventListener("click", () => {
     const targetTier = btn.getAttribute("data-tier");
@@ -278,19 +378,19 @@ document.querySelectorAll("#tierSelector .seg-btn").forEach((btn) => {
   });
 });
 
-// 2. Edge Defringe Toggle
+// 3. Edge Defringe Toggle
 dom.btnDefringe.addEventListener("click", () => {
   state.defringe = !state.defringe;
   dom.btnDefringe.classList.toggle("active", state.defringe);
   if (state.sourceFile) runSegmentation();
 });
 
-// 3. View Mode Segmented Control
+// 4. View Mode Segmented Control
 document.getElementById("viewSplit").addEventListener("click", () => setViewMode("split"));
 document.getElementById("viewCutout").addEventListener("click", () => setViewMode("cutout"));
 document.getElementById("viewOriginal").addEventListener("click", () => setViewMode("original"));
 
-// 4. Split-Plane Pointer Dragging (Mouse + Touch)
+// 5. Split-Plane Pointer Dragging (Mouse + Touch)
 dom.stage.addEventListener("mousedown", (e) => {
   if (state.viewMode !== "split") return;
   state.isDraggingSplit = true;
@@ -321,7 +421,7 @@ window.addEventListener("touchend", () => {
   state.isDraggingSplit = false;
 });
 
-// 5. Matte Backdrop Swatches & Custom Color Picker
+// 6. Matte Backdrop Swatches & Custom Color Picker
 document.querySelectorAll(".swatch[data-bg]").forEach((swatch) => {
   swatch.addEventListener("click", () => {
     document.querySelectorAll(".swatch").forEach((s) => s.classList.remove("active"));
@@ -345,15 +445,35 @@ document.getElementById("colorPicker").addEventListener("input", (e) => {
   dom.viewport.style.background = e.target.value;
 });
 
-// 6. File Selection, Drag-and-Drop, and Clipboard Paste
-dom.emptyState.addEventListener("click", () => dom.fileInput.click());
-dom.btnOpen.addEventListener("click", () => {
+// 7. File Selection, Drag-and-Drop, and Clipboard Paste (with active-job guard)
+function triggerOpenFileDialog() {
   dom.fileInput.value = "";
   dom.fileInput.click();
+}
+
+dom.emptyState.addEventListener("click", () => triggerOpenFileDialog());
+
+dom.btnOpen.addEventListener("click", () => {
+  if (state.isProcessing) {
+    openConfirmModal(
+      "This will stop the current image processing. Do you want to open a new image?",
+      () => {
+        cancelProcessing();
+        triggerOpenFileDialog();
+      }
+    );
+    return;
+  }
+  triggerOpenFileDialog();
 });
 
 dom.fileInput.addEventListener("change", (e) => {
-  if (e.target.files?.[0]) ingestImageFile(e.target.files[0]);
+  const file = e.target.files?.[0];
+  if (!file) return;
+  if (state.isProcessing) {
+    cancelProcessing();
+  }
+  ingestImageFile(file);
 });
 
 window.addEventListener("dragover", (e) => {
@@ -368,7 +488,20 @@ window.addEventListener("dragleave", () => {
 window.addEventListener("drop", (e) => {
   e.preventDefault();
   dom.viewport.classList.remove("dragover");
-  if (e.dataTransfer?.files?.[0]) ingestImageFile(e.dataTransfer.files[0]);
+  const file = e.dataTransfer?.files?.[0];
+  if (!file) return;
+
+  if (state.isProcessing) {
+    openConfirmModal(
+      "This will stop the current image processing. Do you want to load the dropped image?",
+      () => {
+        cancelProcessing();
+        ingestImageFile(file);
+      }
+    );
+    return;
+  }
+  ingestImageFile(file);
 });
 
 window.addEventListener("paste", (e) => {
@@ -376,13 +509,24 @@ window.addEventListener("paste", (e) => {
   for (const item of items) {
     if (item.type.startsWith("image/")) {
       const blob = item.getAsFile();
-      if (blob) ingestImageFile(blob);
+      if (!blob) break;
+      if (state.isProcessing) {
+        openConfirmModal(
+          "This will stop the current image processing. Do you want to load the pasted image?",
+          () => {
+            cancelProcessing();
+            ingestImageFile(blob);
+          }
+        );
+      } else {
+        ingestImageFile(blob);
+      }
       break;
     }
   }
 });
 
-// 7. Direct Clipboard PNG Copy
+// 8. Direct Clipboard PNG Copy
 dom.btnCopy.addEventListener("click", async () => {
   if (!state.resultBlob) return;
   try {

@@ -37,6 +37,7 @@ Key Architectural Features:
 
 from __future__ import annotations
 
+import asyncio
 import gc
 import io
 import os
@@ -547,8 +548,10 @@ async def api_remove_bg(
         ) from exc
 
     try:
-        result_img, elapsed_ms, tier_cfg = segment_foreground(
-            pil_img, tier=tier, defringe=defringe
+        # Offload blocking PyTorch inference to a worker thread so the ASGI
+        # event loop stays responsive to status polls and client cancellation.
+        result_img, elapsed_ms, tier_cfg = await asyncio.to_thread(
+            segment_foreground, pil_img, tier, defringe
         )
     except Exception as exc:
         raise HTTPException(
