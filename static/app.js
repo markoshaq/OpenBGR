@@ -89,8 +89,6 @@ const dom = {
   exportHeightInput: document.getElementById("exportHeightInput"),
 
   hwCompute: document.getElementById("hwCompute"),
-  hwCache: document.getElementById("hwCache"),
-  headerCacheDot: document.getElementById("headerCacheDot"),
   statFile: document.getElementById("statFile"),
   statDim: document.getElementById("statDim"),
   statTier: document.getElementById("statTier"),
@@ -180,8 +178,7 @@ function applyDotState(dotEl, status) {
 }
 
 /**
- * Updates the status dots and tooltips on all 3 preset buttons as well as
- * the top header MODEL CACHE indicator.
+ * Updates the status dots and tooltips on all 3 preset buttons.
  */
 function updateCacheIndicator() {
   const tiers = state.serverStatus?.tiers;
@@ -192,20 +189,6 @@ function updateCacheIndicator() {
     const status = getTierAvailability(tiers[key]);
     applyDotState(dotEl, status);
   });
-
-  const activeInfo = tiers[state.tier];
-  if (!activeInfo) return;
-
-  const activeStatus = getTierAvailability(activeInfo);
-  applyDotState(dom.headerCacheDot, activeStatus);
-
-  if (activeStatus === "ready") {
-    dom.hwCache.textContent = "READY OFFLINE";
-  } else if (activeStatus === "downloadable") {
-    dom.hwCache.textContent = "CAN BE DOWNLOADED";
-  } else {
-    dom.hwCache.textContent = "UNAVAILABLE OFFLINE";
-  }
 }
 
 /**

@@ -24,18 +24,6 @@
       </div>
 
       <div class="hardware-readout">
-        <div class="hw-item">
-          COMPUTE: <span class="hw-value" id="hwCompute">DETECTING...</span>
-        </div>
-        <div class="hw-item">
-          MODEL CACHE:
-          <span
-            class="status-dot has-tooltip"
-            id="headerCacheDot"
-            data-tooltip="Checking model cache..."
-          ></span>
-          <span class="hw-value" id="hwCache">—</span>
-        </div>
         <button type="button" class="info-btn" id="btnInfo" title="About &amp; System Info" aria-label="Information">i</button>
       </div>
     </header>
@@ -108,7 +96,6 @@
             </button>
           </div>
 
-          <div class="status-legend">
             <span
               class="legend-item has-tooltip"
               data-tooltip="READY OFFLINE: Model weights are cached on disk (works without internet)"
@@ -219,6 +206,10 @@
               100% local, offline background removal powered by <strong>BiRefNet</strong>. Zero cloud uploads, zero telemetry, and zero image compression.
             </div>
             <div class="info-list">
+              <div class="info-row">
+                <span class="info-key">COMPUTE ENGINE</span>
+                <span class="info-val" id="hwCompute">DETECTING...</span>
+              </div>
               <div class="info-row">
                 <span class="info-key">LOW-END (LITE 1K)</span>
                 <span class="info-val">BiRefNet_lite (Swin-T) — Fast inference for CPUs &amp; integrated GPUs.</span>
