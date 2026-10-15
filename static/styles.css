@@ -47,7 +47,7 @@ body {
 
 /* Grey out all image-dependent options when no source image is loaded */
 .app-shell.no-image .topbar-center,
-.app-shell.no-image .sidebar-left .sidebar-section:not(:first-child),
+.app-shell.no-image .requires-image,
 .app-shell.no-image .sidebar-right,
 .app-shell.no-image .status-center {
   opacity: 0.3;
