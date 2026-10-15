@@ -9,6 +9,21 @@
 
 "use strict";
 
+/** Format descriptions shown in the right Export sidebar */
+const FORMAT_HINTS = {
+  png: "Uncompressed 32-bit RGBA PNG with full alpha transparency.",
+  webp: "High-efficiency WebP with alpha transparency (~40% smaller file size).",
+  jpg: "Lossy JPEG composited onto the active Matte backdrop color.",
+  mask: "8-bit grayscale Alpha Matte PNG (White = Foreground, Black = Background).",
+};
+
+/** Status dot tooltip descriptions */
+const DOT_TOOLTIPS = {
+  ready: "READY OFFLINE — Model weights are cached on disk",
+  downloadable: "CAN BE DOWNLOADED — Model will download on 1st run",
+  unavailable: "UNAVAILABLE OFFLINE — Model is not cached and device is offline",
+};
+
 /** Application State */
 const state = {
   tier: "mid",             // "low" (BiRefNet_lite 1K) | "mid" (BiRefNet Full 1K) | "high" (BiRefNet_HR 2K)
@@ -67,6 +82,7 @@ const dom = {
   btnDefringe: document.getElementById("btnDefringe"),
 
   exportFormatSelect: document.getElementById("exportFormatSelect"),
+  formatHint: document.getElementById("formatHint"),
   exportScaleSlider: document.getElementById("exportScaleSlider"),
   scalePctLabel: document.getElementById("scalePctLabel"),
   exportWidthInput: document.getElementById("exportWidthInput"),
@@ -149,19 +165,23 @@ function getTierAvailability(tierInfo) {
 
 /**
  * Applies the status dot class ("ready", "downloadable", or "unavailable")
- * to a DOM element.
+ * and updates its hover tooltip (`data-tooltip` and `title`).
+ *
  * @param {HTMLElement|null} dotEl
  * @param {"ready"|"downloadable"|"unavailable"} status
  */
-function applyDotClass(dotEl, status) {
+function applyDotState(dotEl, status) {
   if (!dotEl) return;
   dotEl.classList.remove("ready", "downloadable", "unavailable");
   dotEl.classList.add(status);
+  const tip = DOT_TOOLTIPS[status] || "";
+  dotEl.setAttribute("data-tooltip", tip);
+  dotEl.setAttribute("title", tip);
 }
 
 /**
- * Updates the status dots on all 3 preset buttons as well as the header
- * MODEL CACHE indicator.
+ * Updates the status dots and tooltips on all 3 preset buttons as well as
+ * the top header MODEL CACHE indicator.
  */
 function updateCacheIndicator() {
   const tiers = state.serverStatus?.tiers;
@@ -170,14 +190,14 @@ function updateCacheIndicator() {
   ["low", "mid", "high"].forEach((key) => {
     const dotEl = document.getElementById(`dot-${key}`);
     const status = getTierAvailability(tiers[key]);
-    applyDotClass(dotEl, status);
+    applyDotState(dotEl, status);
   });
 
   const activeInfo = tiers[state.tier];
   if (!activeInfo) return;
 
   const activeStatus = getTierAvailability(activeInfo);
-  applyDotClass(dom.headerCacheDot, activeStatus);
+  applyDotState(dom.headerCacheDot, activeStatus);
 
   if (activeStatus === "ready") {
     dom.hwCache.textContent = "READY OFFLINE";
@@ -189,17 +209,25 @@ function updateCacheIndicator() {
 }
 
 /**
- * Synchronizes the EXPORT button label, scale percentage readout, WxH px inputs,
- * and bottom DIMENSIONS status bar.
+ * Synchronizes the EXPORT button label, format hint, scale percentage readout,
+ * quick-scale buttons, WxH px inputs, and bottom DIMENSIONS status bar.
  */
 function updateExportTelemetry() {
   dom.btnDownload.textContent = `EXPORT ${state.exportFormat.toUpperCase()}`;
+  if (dom.formatHint && FORMAT_HINTS[state.exportFormat]) {
+    dom.formatHint.textContent = FORMAT_HINTS[state.exportFormat];
+  }
 
   const pct = Math.round(state.exportScale * 100);
   dom.scalePctLabel.textContent = `${pct}%`;
 
   const clampedSlider = Math.max(10, Math.min(200, pct));
   dom.exportScaleSlider.value = String(clampedSlider);
+
+  document.querySelectorAll(".quick-scale-btn").forEach((btn) => {
+    const btnScale = parseFloat(btn.getAttribute("data-scale") || "0");
+    btn.classList.toggle("active", Math.abs(btnScale - state.exportScale) < 0.005);
+  });
 
   if (state.naturalWidth > 0 && state.naturalHeight > 0) {
     if (!state.exportWidth || !state.exportHeight) {
@@ -330,7 +358,7 @@ async function syncServerStatus(isInitialLoad = false) {
  */
 function selectTier(tierKey, reprocess = true) {
   state.tier = tierKey;
-  document.querySelectorAll("#tierSelector .seg-btn").forEach((btn) => {
+  document.querySelectorAll("#tierSelector .preset-card").forEach((btn) => {
     btn.classList.toggle("active", btn.getAttribute("data-tier") === tierKey);
   });
   updateCacheIndicator();
@@ -565,8 +593,8 @@ window.addEventListener("keydown", (e) => {
   }
 });
 
-// 3. Hardware Preset Buttons
-document.querySelectorAll("#tierSelector .seg-btn").forEach((btn) => {
+// 3. Left Sidebar: Hardware Preset Cards
+document.querySelectorAll("#tierSelector .preset-card").forEach((btn) => {
   btn.addEventListener("click", () => {
     const targetTier = btn.getAttribute("data-tier");
     if (targetTier && targetTier !== state.tier) {
@@ -575,32 +603,43 @@ document.querySelectorAll("#tierSelector .seg-btn").forEach((btn) => {
   });
 });
 
-// 4. Edge Defringe Toggle
+// 4. Left Sidebar: Edge Defringe Toggle Card
 dom.btnDefringe.addEventListener("click", () => {
   state.defringe = !state.defringe;
   dom.btnDefringe.classList.toggle("active", state.defringe);
   if (state.sourceFile) runSegmentation();
 });
 
-// 5. View Mode Segmented Control
+// 5. Top Bar: View Mode Segmented Control
 document.getElementById("viewSplit").addEventListener("click", () => setViewMode("split"));
 document.getElementById("viewCutout").addEventListener("click", () => setViewMode("cutout"));
 document.getElementById("viewOriginal").addEventListener("click", () => setViewMode("original"));
 
-// 6. Export Format Dropdown, Scale Slider & Custom PX Inputs
+// 6. Right Sidebar: Export Format Dropdown, Scale Slider, Quick Scale & Custom PX Inputs
 dom.exportFormatSelect.addEventListener("change", (e) => {
   state.exportFormat = e.target.value;
   updateExportTelemetry();
 });
 
-dom.exportScaleSlider.addEventListener("input", (e) => {
-  const pct = parseInt(e.target.value || "100", 10);
-  state.exportScale = pct / 100;
+function applyScaleValue(newScale) {
+  state.exportScale = newScale;
   if (state.naturalWidth > 0 && state.naturalHeight > 0) {
     state.exportWidth = Math.max(1, Math.round(state.naturalWidth * state.exportScale));
     state.exportHeight = Math.max(1, Math.round(state.naturalHeight * state.exportScale));
   }
   updateExportTelemetry();
+}
+
+dom.exportScaleSlider.addEventListener("input", (e) => {
+  const pct = parseInt(e.target.value || "100", 10);
+  applyScaleValue(pct / 100);
+});
+
+document.querySelectorAll(".quick-scale-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const sc = parseFloat(btn.getAttribute("data-scale") || "1");
+    applyScaleValue(sc);
+  });
 });
 
 dom.exportWidthInput.addEventListener("input", (e) => {

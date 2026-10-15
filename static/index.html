@@ -3,238 +3,322 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>REMOVEBG — Local AI Segmentation Studio</title>
+  <title>NOT REMOVE.BG — Local AI Segmentation Studio</title>
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
   <div class="app-shell">
-    <!-- 1. Top Hardware & Telemetry Header -->
+    <!-- 1. Top Hardware & View Mode Header -->
     <header class="topbar">
       <div class="brand">
         <div class="brand-mark">NOT REMOVE.BG</div>
       </div>
-      <div class="hardware-readout">
-        <div class="hw-item">
-          COMPUTE: <span class="hw-value" id="hwCompute">DETECTING...</span>
-        </div>
-        <div class="hw-item">
-          MODEL CACHE: <span class="status-dot" id="headerCacheDot"></span><span class="hw-value" id="hwCache">—</span>
-        </div>
-        <button type="button" class="info-btn" id="btnInfo" title="About &amp; System Info" aria-label="Information">i</button>
-      </div>
-    </header>
 
-    <!-- 2. Studio Control Strip -->
-    <div class="controlbar">
-      <div class="control-cluster">
-        <span class="cluster-label">Preset</span>
-        <div class="segmented" id="tierSelector">
-          <button
-            type="button"
-            class="seg-btn tier-btn"
-            data-tier="low"
-            title="BiRefNet_lite (Swin-T @ 1024x1024, ~110 MB FP16). Fastest inference for CPU-only machines and integrated GPUs."
-          >
-            <span>LOW-END</span>
-            <span class="seg-sub">LITE 1K</span>
-            <span class="tier-dot" id="dot-low"></span>
-          </button>
-          <button
-            type="button"
-            class="seg-btn tier-btn active"
-            data-tier="mid"
-            title="BiRefNet Full (Swin-L @ 1024x1024, ~440 MB FP16). Default studio model for Apple Silicon and GPUs — high-precision hair, fur, and soft edge matting."
-          >
-            <span>MID-RANGE</span>
-            <span class="seg-sub">FULL 1K</span>
-            <span class="tier-dot" id="dot-mid"></span>
-          </button>
-          <button
-            type="button"
-            class="seg-btn tier-btn"
-            data-tier="high"
-            title="BiRefNet_HR (Swin-L @ native 2048x2048 2K resolution). 4x the spatial pixel density of 1K for 4K/8K commercial photography."
-          >
-            <span>HIGH-END</span>
-            <span class="seg-sub">ULTRA 2K</span>
-            <span class="tier-dot" id="dot-high"></span>
-          </button>
-        </div>
-
-        <button
-          type="button"
-          class="toggle-btn active"
-          id="btnDefringe"
-          title="Morphological edge color decontamination: removes background color halos from semi-transparent hair and border pixels"
-        >
-          <span class="toggle-indicator"></span>
-          <span>DEFRINGE</span>
-        </button>
-      </div>
-
-      <div class="control-cluster">
-        <span class="cluster-label">View</span>
+      <div class="topbar-center">
+        <span class="cluster-label">VIEW</span>
         <div class="segmented">
           <button type="button" class="seg-btn active" id="viewSplit">SPLIT</button>
           <button type="button" class="seg-btn" id="viewCutout">CUTOUT</button>
           <button type="button" class="seg-btn" id="viewOriginal">ORIGINAL</button>
         </div>
+      </div>
 
-        <div class="divider-v"></div>
+      <div class="hardware-readout">
+        <div class="hw-item">
+          COMPUTE: <span class="hw-value" id="hwCompute">DETECTING...</span>
+        </div>
+        <div class="hw-item">
+          MODEL CACHE:
+          <span
+            class="status-dot has-tooltip"
+            id="headerCacheDot"
+            data-tooltip="Checking model cache..."
+          ></span>
+          <span class="hw-value" id="hwCache">—</span>
+        </div>
+        <button type="button" class="info-btn" id="btnInfo" title="About &amp; System Info" aria-label="Information">i</button>
+      </div>
+    </header>
 
-        <span class="cluster-label">Matte</span>
-        <div class="swatches">
-          <button type="button" class="swatch swatch-checker active" data-bg="checker" title="Transparency Grid"></button>
-          <button type="button" class="swatch" data-bg="#ffffff" style="background:#ffffff" title="White"></button>
-          <button type="button" class="swatch" data-bg="#000000" style="background:#000000" title="Black"></button>
-          <button type="button" class="swatch" data-bg="#18181b" style="background:#18181b" title="Dark Gray"></button>
-          <input type="color" id="colorPicker" value="#00ff66" class="swatch" style="padding:0; background:none;" title="Custom Matte Color" />
+    <!-- 2. Main 3-Column Studio Body (Left Sidebar | Center Viewport | Right Sidebar) -->
+    <div class="studio-body">
+      <!-- Left Sidebar: Settings, Presets, Defringe & Matte Backdrop -->
+      <aside class="sidebar sidebar-left">
+        <div class="sidebar-section">
+          <div class="section-header">SOURCE IMAGE</div>
+          <button type="button" class="action-btn full-width" id="btnOpen">OPEN IMAGE FILE</button>
+          <input type="file" id="fileInput" accept="image/*" />
         </div>
 
-        <div class="divider-v"></div>
+        <div class="sidebar-section">
+          <div class="section-header">HARDWARE PRESET</div>
+          <div class="preset-stack" id="tierSelector">
+            <button
+              type="button"
+              class="preset-card"
+              data-tier="low"
+              title="BiRefNet_lite (Swin-T @ 1024x1024, ~110 MB FP16). Fastest inference for CPU-only machines and integrated GPUs."
+            >
+              <div class="preset-card-top">
+                <span class="preset-name">LOW-END</span>
+                <span class="preset-tag">LITE 1K</span>
+                <span
+                  class="tier-dot has-tooltip"
+                  id="dot-low"
+                  data-tooltip="Checking cache status..."
+                ></span>
+              </div>
+              <div class="preset-desc">Swin-T @ 1024px • Fast CPU / iGPU</div>
+            </button>
 
-        <button type="button" class="action-btn" id="btnOpen">OPEN IMAGE</button>
-        <button type="button" class="action-btn disabled" id="btnCopy">COPY</button>
+            <button
+              type="button"
+              class="preset-card active"
+              data-tier="mid"
+              title="BiRefNet Full (Swin-L @ 1024x1024, ~440 MB FP16). Default studio model for Apple Silicon and GPUs — high-precision hair, fur, and soft edge matting."
+            >
+              <div class="preset-card-top">
+                <span class="preset-name">MID-RANGE</span>
+                <span class="preset-tag">FULL 1K</span>
+                <span
+                  class="tier-dot has-tooltip"
+                  id="dot-mid"
+                  data-tooltip="Checking cache status..."
+                ></span>
+              </div>
+              <div class="preset-desc">Swin-L @ 1024px • Studio Hair &amp; Fur</div>
+            </button>
 
-        <div class="export-group">
-          <select class="studio-select" id="exportFormatSelect" title="Output File Format">
-            <option value="png">PNG</option>
-            <option value="webp">WEBP</option>
-            <option value="jpg">JPG</option>
-            <option value="mask">MASK</option>
+            <button
+              type="button"
+              class="preset-card"
+              data-tier="high"
+              title="BiRefNet_HR (Swin-L @ High-Res 1536px/2048px). Maximum spatial pixel density for 4K/8K commercial photography."
+            >
+              <div class="preset-card-top">
+                <span class="preset-name">HIGH-END</span>
+                <span class="preset-tag">ULTRA 2K</span>
+                <span
+                  class="tier-dot has-tooltip"
+                  id="dot-high"
+                  data-tooltip="Checking cache status..."
+                ></span>
+              </div>
+              <div class="preset-desc">Swin-L @ 2K HR • 4K/8K Detail</div>
+            </button>
+          </div>
+
+          <div class="status-legend">
+            <span
+              class="legend-item has-tooltip"
+              data-tooltip="READY OFFLINE: Model weights are cached on disk (works without internet)"
+            >
+              <span class="status-dot ready"></span>READY
+            </span>
+            <span
+              class="legend-item has-tooltip"
+              data-tooltip="DOWNLOADABLE: Model will download automatically on first use"
+            >
+              <span class="status-dot downloadable"></span>DOWNLOAD
+            </span>
+            <span
+              class="legend-item has-tooltip"
+              data-tooltip="UNAVAILABLE: Model is not cached on disk and your device is offline"
+            >
+              <span class="status-dot unavailable"></span>OFFLINE
+            </span>
+          </div>
+        </div>
+
+        <div class="sidebar-section">
+          <div class="section-header">EDGE REFINEMENT</div>
+          <button
+            type="button"
+            class="toggle-card active"
+            id="btnDefringe"
+            title="Morphological edge color decontamination: removes background color halos from semi-transparent hair and border pixels"
+          >
+            <div class="toggle-card-top">
+              <span>DEFRINGE EDGES</span>
+              <span class="toggle-indicator"></span>
+            </div>
+            <div class="preset-desc">Removes background color bleed along hair &amp; soft borders</div>
+          </button>
+        </div>
+
+        <div class="sidebar-section">
+          <div class="section-header">MATTE BACKDROP</div>
+          <div class="swatches-grid">
+            <button type="button" class="swatch swatch-checker active" data-bg="checker" title="Transparency Grid"></button>
+            <button type="button" class="swatch" data-bg="#ffffff" style="background:#ffffff" title="Pure White"></button>
+            <button type="button" class="swatch" data-bg="#000000" style="background:#000000" title="Pure Black"></button>
+            <button type="button" class="swatch" data-bg="#18181b" style="background:#18181b" title="Studio Dark Gray"></button>
+            <input type="color" id="colorPicker" value="#00ff66" class="swatch" style="padding:0; background:none;" title="Custom Matte Color" />
+          </div>
+          <div class="field-hint">Solid colors are composited into exports (or always for JPG).</div>
+        </div>
+      </aside>
+
+      <!-- Center Interactive Canvas Viewport -->
+      <main class="viewport checkerboard-canvas" id="viewport">
+        <div class="error-toast" id="errorToast"></div>
+
+        <!-- Empty / Dropzone State -->
+        <div class="empty-state" id="emptyState">
+          <div class="empty-title">Drop image file, click to browse, or paste</div>
+          <div class="empty-desc">
+            100% local processing, zero image compression, full-resolution 32-bit RGBA PNG output.
+          </div>
+          <div class="empty-shortcuts">
+            <span class="kbd">CLICK TO BROWSE</span>
+            <span class="kbd">DRAG &amp; DROP</span>
+            <span class="kbd">⌘V / CTRL+V PASTE</span>
+          </div>
+        </div>
+
+        <!-- Split-Plane Comparison Stage -->
+        <div class="stage" id="stage">
+          <img id="afterImg" alt="Cutout Result" />
+          <div class="before-clip" id="beforeClip">
+            <img id="beforeImg" alt="Original Source" />
+          </div>
+          <div class="stage-label left" id="lblLeft">ORIGINAL</div>
+          <div class="stage-label right" id="lblRight">RGBA CUTOUT</div>
+          <div class="split-line" id="splitLine" style="left: 50%;">
+            <div class="split-handle">↔</div>
+          </div>
+        </div>
+
+        <!-- Inference Progress Overlay -->
+        <div class="busy-overlay" id="busyOverlay">
+          <div class="progress-bar"></div>
+          <div class="busy-title" id="busyTitle">RUNNING INFERENCE</div>
+          <div class="busy-sub" id="busySub">Executing BiRefNet locally. First run of a model downloads weights once.</div>
+          <button type="button" class="action-btn cancel-btn" id="btnCancel">CANCEL PROCESSING</button>
+        </div>
+
+        <!-- Interrupt Confirmation Modal -->
+        <div class="modal-backdrop" id="confirmModal">
+          <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+            <div class="modal-title" id="modalTitle">STOP CURRENT IMAGE?</div>
+            <div class="modal-desc" id="modalDesc">
+              This will stop the current image processing. Do you want to continue?
+            </div>
+            <div class="modal-actions">
+              <button type="button" class="action-btn" id="btnModalCancel">KEEP PROCESSING</button>
+              <button type="button" class="action-btn primary" id="btnModalConfirm">STOP &amp; CONTINUE</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Info / About Modal -->
+        <div class="modal-backdrop" id="infoModal">
+          <div class="modal-dialog info-dialog" role="dialog" aria-modal="true" aria-labelledby="infoModalTitle">
+            <div class="modal-title" id="infoModalTitle">SYSTEM INFO // LOCAL AI STUDIO</div>
+            <div class="modal-desc">
+              100% local, offline background removal powered by <strong>BiRefNet</strong>. Zero cloud uploads, zero telemetry, and zero image compression.
+            </div>
+            <div class="info-list">
+              <div class="info-row">
+                <span class="info-key">LOW-END (LITE 1K)</span>
+                <span class="info-val">BiRefNet_lite (Swin-T) — Fast inference for CPUs &amp; integrated GPUs.</span>
+              </div>
+              <div class="info-row">
+                <span class="info-key">MID-RANGE (FULL 1K)</span>
+                <span class="info-val">BiRefNet (Swin-L) — Studio-grade hair, fur &amp; soft alpha matting.</span>
+              </div>
+              <div class="info-row">
+                <span class="info-key">HIGH-END (ULTRA 2K)</span>
+                <span class="info-val">BiRefNet_HR (Swin-L) — High-density tensor for 4K/8K photography.</span>
+              </div>
+              <div class="info-row">
+                <span class="info-key">DEFRINGE</span>
+                <span class="info-val">Removes background color bleed along semi-transparent hair &amp; borders.</span>
+              </div>
+            </div>
+            <div class="info-footer">
+              <a href="https://github.com/markoshaq" target="_blank" rel="noopener noreferrer" class="credit-link">
+                MADE BY MARKOSHAQ ↗
+              </a>
+              <button type="button" class="action-btn primary" id="btnInfoClose">CLOSE</button>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      <!-- Right Sidebar: Export Format, Resolution Slider, Custom PX & Download Actions -->
+      <aside class="sidebar sidebar-right">
+        <div class="sidebar-section">
+          <div class="section-header">OUTPUT FORMAT</div>
+          <select class="studio-select full-width" id="exportFormatSelect" aria-label="Output File Format">
+            <option value="png">PNG — 32-Bit Lossless RGBA</option>
+            <option value="webp">WEBP — Transparent WebP</option>
+            <option value="jpg">JPG — Matte Composited</option>
+            <option value="mask">MASK — 8-Bit Alpha Matte</option>
           </select>
+          <div class="field-hint" id="formatHint">Uncompressed 32-bit RGBA PNG with full alpha transparency.</div>
+        </div>
 
-          <div class="scale-control" title="Output Resolution Scale">
-            <input
-              type="range"
-              class="studio-slider"
-              id="exportScaleSlider"
-              min="10"
-              max="200"
-              step="5"
-              value="100"
-            />
+        <div class="sidebar-section">
+          <div class="section-header-row">
+            <span class="section-header">RESOLUTION SCALE</span>
             <span class="scale-pct" id="scalePctLabel">100%</span>
           </div>
-
-          <div class="px-control" title="Custom Export Dimensions (Width × Height in pixels)">
-            <input
-              type="number"
-              class="px-input"
-              id="exportWidthInput"
-              min="1"
-              max="16384"
-              placeholder="W"
-              aria-label="Export Width in Pixels"
-            />
-            <span class="px-sep">×</span>
-            <input
-              type="number"
-              class="px-input"
-              id="exportHeightInput"
-              min="1"
-              max="16384"
-              placeholder="H"
-              aria-label="Export Height in Pixels"
-            />
-            <span class="px-unit">PX</span>
+          <input
+            type="range"
+            class="studio-slider full-width"
+            id="exportScaleSlider"
+            min="10"
+            max="200"
+            step="5"
+            value="100"
+          />
+          <div class="scale-quick-btns">
+            <button type="button" class="quick-scale-btn" data-scale="0.25">25%</button>
+            <button type="button" class="quick-scale-btn" data-scale="0.5">50%</button>
+            <button type="button" class="quick-scale-btn active" data-scale="1">100%</button>
+            <button type="button" class="quick-scale-btn" data-scale="2">200%</button>
           </div>
-
-          <button type="button" class="action-btn primary disabled" id="btnDownload">EXPORT PNG</button>
         </div>
 
-        <input type="file" id="fileInput" accept="image/*" />
-      </div>
+        <div class="sidebar-section">
+          <div class="section-header">CUSTOM DIMENSIONS (PX)</div>
+          <div class="px-grid">
+            <div class="px-field">
+              <label for="exportWidthInput">WIDTH</label>
+              <input
+                type="number"
+                class="px-input"
+                id="exportWidthInput"
+                min="1"
+                max="16384"
+                placeholder="—"
+              />
+            </div>
+            <span class="px-sep">×</span>
+            <div class="px-field">
+              <label for="exportHeightInput">HEIGHT</label>
+              <input
+                type="number"
+                class="px-input"
+                id="exportHeightInput"
+                min="1"
+                max="16384"
+                placeholder="—"
+              />
+            </div>
+          </div>
+          <div class="field-hint">Aspect-ratio locked. Updates instantly without re-running inference.</div>
+        </div>
+
+        <div class="sidebar-section export-actions-section">
+          <button type="button" class="action-btn primary full-width disabled" id="btnDownload">EXPORT PNG</button>
+          <button type="button" class="action-btn full-width disabled" id="btnCopy">COPY TO CLIPBOARD</button>
+        </div>
+      </aside>
     </div>
 
-    <!-- 3. Interactive Canvas Viewport -->
-    <main class="viewport checkerboard-canvas" id="viewport">
-      <div class="error-toast" id="errorToast"></div>
-
-      <!-- Empty / Dropzone State -->
-      <div class="empty-state" id="emptyState">
-        <div class="empty-title">Drop image file, click to browse, or paste</div>
-        <div class="empty-desc">
-          100% local processing, zero image compression, full-resolution 32-bit RGBA PNG output.
-        </div>
-        <div class="empty-shortcuts">
-          <span class="kbd">CLICK TO BROWSE</span>
-          <span class="kbd">DRAG &amp; DROP</span>
-          <span class="kbd">⌘V / CTRL+V PASTE</span>
-        </div>
-      </div>
-
-      <!-- Split-Plane Comparison Stage -->
-      <div class="stage" id="stage">
-        <img id="afterImg" alt="Cutout Result" />
-        <div class="before-clip" id="beforeClip">
-          <img id="beforeImg" alt="Original Source" />
-        </div>
-        <div class="stage-label left" id="lblLeft">ORIGINAL</div>
-        <div class="stage-label right" id="lblRight">RGBA CUTOUT</div>
-        <div class="split-line" id="splitLine" style="left: 50%;">
-          <div class="split-handle">↔</div>
-        </div>
-      </div>
-
-      <!-- Inference Progress Overlay -->
-      <div class="busy-overlay" id="busyOverlay">
-        <div class="progress-bar"></div>
-        <div class="busy-title" id="busyTitle">RUNNING INFERENCE</div>
-        <div class="busy-sub" id="busySub">Executing BiRefNet locally. First run of a model downloads weights once.</div>
-        <button type="button" class="action-btn cancel-btn" id="btnCancel">CANCEL PROCESSING</button>
-      </div>
-
-      <!-- Interrupt Confirmation Modal -->
-      <div class="modal-backdrop" id="confirmModal">
-        <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
-          <div class="modal-title" id="modalTitle">STOP CURRENT IMAGE?</div>
-          <div class="modal-desc" id="modalDesc">
-            This will stop the current image processing. Do you want to continue?
-          </div>
-          <div class="modal-actions">
-            <button type="button" class="action-btn" id="btnModalCancel">KEEP PROCESSING</button>
-            <button type="button" class="action-btn primary" id="btnModalConfirm">STOP &amp; CONTINUE</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Info / About Modal -->
-      <div class="modal-backdrop" id="infoModal">
-        <div class="modal-dialog info-dialog" role="dialog" aria-modal="true" aria-labelledby="infoModalTitle">
-          <div class="modal-title" id="infoModalTitle">SYSTEM INFO // LOCAL AI STUDIO</div>
-          <div class="modal-desc">
-            100% local, offline background removal powered by <strong>BiRefNet</strong>. Zero cloud uploads, zero telemetry, and zero image compression.
-          </div>
-          <div class="info-list">
-            <div class="info-row">
-              <span class="info-key">LOW-END (LITE 1K)</span>
-              <span class="info-val">BiRefNet_lite (Swin-T) — Fast inference for CPUs &amp; integrated GPUs.</span>
-            </div>
-            <div class="info-row">
-              <span class="info-key">MID-RANGE (FULL 1K)</span>
-              <span class="info-val">BiRefNet (Swin-L) — Studio-grade hair, fur &amp; soft alpha matting.</span>
-            </div>
-            <div class="info-row">
-              <span class="info-key">HIGH-END (ULTRA 2K)</span>
-              <span class="info-val">BiRefNet_HR (Swin-L) — High-density tensor for 4K/8K photography.</span>
-            </div>
-            <div class="info-row">
-              <span class="info-key">DEFRINGE</span>
-              <span class="info-val">Removes background color bleed along semi-transparent hair &amp; borders.</span>
-            </div>
-          </div>
-          <div class="info-footer">
-            <a href="https://github.com/markoshaq" target="_blank" rel="noopener noreferrer" class="credit-link">
-              MADE BY MARKOSHAQ ↗
-            </a>
-            <button type="button" class="action-btn primary" id="btnInfoClose">CLOSE</button>
-          </div>
-        </div>
-      </div>
-    </main>
-
-    <!-- 4. Bottom Telemetry Bar -->
+    <!-- 3. Bottom Telemetry Bar -->
     <footer class="statusbar">
       <div class="status-group">
         <div class="status-kv">FILE: <span id="statFile">NONE</span></div>
@@ -243,11 +327,6 @@
         <div class="status-kv">LATENCY: <span id="statTime">—</span></div>
       </div>
       <div class="status-group">
-        <div class="status-legend">
-          <span class="legend-item"><span class="status-dot ready"></span>READY</span>
-          <span class="legend-item"><span class="status-dot downloadable"></span>DOWNLOAD</span>
-          <span class="legend-item"><span class="status-dot unavailable"></span>OFFLINE</span>
-        </div>
         <a href="https://github.com/markoshaq" target="_blank" rel="noopener noreferrer" class="credit-link">
           MADE BY MARKOSHAQ ↗
         </a>
