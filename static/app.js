@@ -58,6 +58,14 @@ const state = {
   exportWidth: 0,            // Target export width in pixels
   exportHeight: 0,           // Target export height in pixels
   activeBackdrop: "checker", // "checker" or hex color string (e.g. "#ffffff")
+  zoom: 1,                   // Viewport zoom factor (1.0 to 8.0)
+  panX: 0,                   // Viewport pan X offset in px
+  panY: 0,                   // Viewport pan Y offset in px
+  isPanning: false,          // Whether user is currently panning the canvas
+  panStartX: 0,
+  panStartY: 0,
+  spacePressed: false,       // Spacebar held for pan mode
+  loupeEnabled: false,       // Whether 4x circular magnifier loupe is active
   serverStatus: null,        // Cached response from GET /api/status
 };
 
@@ -75,6 +83,12 @@ const dom = {
   splitLine: document.getElementById("splitLine"),
   lblLeft: document.getElementById("lblLeft"),
   lblRight: document.getElementById("lblRight"),
+  loupeCanvas: document.getElementById("loupeCanvas"),
+
+  btnZoomOut: document.getElementById("btnZoomOut"),
+  btnZoomReset: document.getElementById("btnZoomReset"),
+  btnZoomIn: document.getElementById("btnZoomIn"),
+  btnLoupe: document.getElementById("btnLoupe"),
 
   busyOverlay: document.getElementById("busyOverlay"),
   busyTitle: document.getElementById("busyTitle"),
@@ -791,6 +805,137 @@ function renderStageGeometry() {
 }
 
 /**
+ * Applies the current `state.zoom`, `state.panX`, and `state.panY` transform
+ * to `#stage` and updates the top-bar zoom percentage button.
+ */
+function applyZoomTransform() {
+  if (!dom.stage) return;
+  if (state.zoom <= 1) {
+    state.zoom = 1;
+    state.panX = 0;
+    state.panY = 0;
+  }
+  dom.stage.style.transform = `translate(${state.panX}px, ${state.panY}px) scale(${state.zoom})`;
+  if (dom.btnZoomReset) {
+    dom.btnZoomReset.textContent = `${Math.round(state.zoom * 100)}%`;
+  }
+}
+
+/**
+ * Sets a new zoom factor (clamped to [1, 8]) and updates the stage transform.
+ * @param {number} newZoom
+ */
+function setZoom(newZoom) {
+  state.zoom = Math.max(1, Math.min(8, newZoom));
+  applyZoomTransform();
+}
+
+/**
+ * Toggles the 4× circular mouse magnifier loupe on or off.
+ * @param {boolean} [forceState]
+ */
+function toggleLoupe(forceState) {
+  state.loupeEnabled = typeof forceState === "boolean" ? forceState : !state.loupeEnabled;
+  dom.btnLoupe?.classList.toggle("active", state.loupeEnabled);
+  dom.stage?.classList.toggle("loupe-active", state.loupeEnabled);
+  if (!state.loupeEnabled) {
+    dom.loupeCanvas?.classList.remove("visible");
+  }
+}
+
+/**
+ * Renders the 4× magnified circular loupe at the current cursor position `(clientX, clientY)`.
+ * In `SPLIT` mode, the left half of the circle shows 4× Original and the right half shows 4× Cutout.
+ *
+ * @param {number} clientX
+ * @param {number} clientY
+ */
+function renderLoupeAtPointer(clientX, clientY) {
+  if (!state.loupeEnabled || !state.resultBlob || !dom.loupeCanvas) {
+    dom.loupeCanvas?.classList.remove("visible");
+    return;
+  }
+
+  const stageRect = dom.stage.getBoundingClientRect();
+  const vpRect = dom.viewport.getBoundingClientRect();
+  if (
+    !stageRect.width ||
+    clientX < stageRect.left ||
+    clientX > stageRect.right ||
+    clientY < stageRect.top ||
+    clientY > stageRect.bottom
+  ) {
+    dom.loupeCanvas.classList.remove("visible");
+    return;
+  }
+
+  dom.loupeCanvas.classList.add("visible");
+  dom.loupeCanvas.style.left = `${clientX - vpRect.left}px`;
+  dom.loupeCanvas.style.top = `${clientY - vpRect.top}px`;
+
+  const normX = (clientX - stageRect.left) / stageRect.width;
+  const normY = (clientY - stageRect.top) / stageRect.height;
+
+  const size = 180;
+  const zoomFactor = 4;
+  const ctx = dom.loupeCanvas.getContext("2d");
+  ctx.clearRect(0, 0, size, size);
+
+  // 1. Fill circular loupe backdrop (checkerboard or solid matte)
+  if (state.activeBackdrop === "checker") {
+    const tile = 10;
+    for (let y = 0; y < size; y += tile) {
+      for (let x = 0; x < size; x += tile) {
+        ctx.fillStyle = ((x / tile + y / tile) & 1) === 0 ? "#16161a" : "#0e0e11";
+        ctx.fillRect(x, y, tile, tile);
+      }
+    }
+  } else {
+    ctx.fillStyle = state.activeBackdrop;
+    ctx.fillRect(0, 0, size, size);
+  }
+
+  const drawMagnifiedSource = (imgEl, clipX, clipW) => {
+    const imgW = imgEl.naturalWidth;
+    const imgH = imgEl.naturalHeight;
+    if (!imgW || !imgH) return;
+
+    const sampleW = (size / stageRect.width) * (imgW / zoomFactor);
+    const sampleH = (size / stageRect.height) * (imgH / zoomFactor);
+    const sx = normX * imgW - sampleW / 2;
+    const sy = normY * imgH - sampleH / 2;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(clipX, 0, clipW, size);
+    ctx.clip();
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(imgEl, sx, sy, sampleW, sampleH, 0, 0, size, size);
+    ctx.restore();
+  };
+
+  if (state.viewMode === "split") {
+    drawMagnifiedSource(dom.beforeImg, 0, size / 2);
+    drawMagnifiedSource(dom.afterImg, size / 2, size / 2);
+    // Center split hairline inside the loupe
+    ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
+    ctx.fillRect(size / 2 - 0.5, 0, 1, size);
+  } else if (state.viewMode === "original") {
+    drawMagnifiedSource(dom.beforeImg, 0, size);
+  } else {
+    drawMagnifiedSource(dom.afterImg, 0, size);
+  }
+
+  // Subtle center target reticle
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.55)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(size / 2, size / 2, 4, 0, Math.PI * 2);
+  ctx.stroke();
+}
+
+/**
  * Updates the split-plane divider position from a mouse or touch X coordinate.
  * @param {number} clientX
  */
@@ -1051,7 +1196,27 @@ window.addEventListener("keydown", (e) => {
       closeConfirmModal();
     } else if (state.isProcessing) {
       cancelProcessing();
+    } else if (state.loupeEnabled) {
+      toggleLoupe(false);
     }
+    return;
+  }
+
+  // Ignore shortcuts when typing in an input field
+  if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "SELECT")) {
+    return;
+  }
+
+  if (e.code === "Space") {
+    state.spacePressed = true;
+  } else if ((e.key === "z" || e.key === "Z") && !e.metaKey && !e.ctrlKey && state.resultBlob) {
+    toggleLoupe();
+  }
+});
+
+window.addEventListener("keyup", (e) => {
+  if (e.code === "Space") {
+    state.spacePressed = false;
   }
 });
 
@@ -1073,10 +1238,15 @@ dom.btnDefringe.addEventListener("click", () => {
   if (state.sourceFile) runSegmentation();
 });
 
-// 5. Top Bar: View Mode Segmented Control
+// 5. Top Bar: View Mode, Zoom Controls & 4x Loupe Toggle
 document.getElementById("viewSplit").addEventListener("click", () => setViewMode("split"));
 document.getElementById("viewCutout").addEventListener("click", () => setViewMode("cutout"));
 document.getElementById("viewOriginal").addEventListener("click", () => setViewMode("original"));
+
+dom.btnZoomIn?.addEventListener("click", () => setZoom(state.zoom + 0.25));
+dom.btnZoomOut?.addEventListener("click", () => setZoom(state.zoom - 0.25));
+dom.btnZoomReset?.addEventListener("click", () => setZoom(1));
+dom.btnLoupe?.addEventListener("click", () => toggleLoupe());
 
 // 6. Right Sidebar: Export Format Dropdown, Scale Slider, Quick Scale & Custom PX Inputs
 dom.exportFormatSelect.addEventListener("change", (e) => {
@@ -1129,14 +1299,68 @@ dom.exportHeightInput.addEventListener("input", (e) => {
   updateExportTelemetry();
 });
 
-// 7. Split-Plane Pointer Dragging (Mouse + Touch)
-dom.stage.addEventListener("mousedown", (e) => {
-  if (state.viewMode !== "split") return;
-  state.isDraggingSplit = true;
-  handleSplitDrag(e.clientX);
+// 7. Split-Plane Pointer Dragging, Scroll-Wheel Zoom, Pan & 4x Loupe
+dom.viewport.addEventListener(
+  "wheel",
+  (e) => {
+    if (!state.resultBlob) return;
+    e.preventDefault();
+    const delta = e.deltaY < 0 ? 0.2 : -0.2;
+    setZoom(state.zoom + delta);
+    renderLoupeAtPointer(e.clientX, e.clientY);
+  },
+  { passive: false }
+);
+
+dom.stage.addEventListener("dblclick", () => {
+  setZoom(1);
 });
-window.addEventListener("mousemove", (e) => handleSplitDrag(e.clientX));
+
+dom.stage.addEventListener("contextmenu", (e) => {
+  if (state.zoom > 1) e.preventDefault();
+});
+
+dom.stage.addEventListener("mousedown", (e) => {
+  // Right-click, Middle-click, Space+drag, or Left-click in non-split mode when zoomed -> Pan
+  if (
+    state.zoom > 1 &&
+    (e.button === 1 || e.button === 2 || state.spacePressed || state.viewMode !== "split")
+  ) {
+    e.preventDefault();
+    state.isPanning = true;
+    state.panStartX = e.clientX - state.panX;
+    state.panStartY = e.clientY - state.panY;
+    dom.stage.classList.add("panning");
+    return;
+  }
+  if (e.button === 0 && state.viewMode === "split") {
+    state.isDraggingSplit = true;
+    handleSplitDrag(e.clientX);
+  }
+});
+
+window.addEventListener("mousemove", (e) => {
+  if (state.isPanning) {
+    state.panX = e.clientX - state.panStartX;
+    state.panY = e.clientY - state.panStartY;
+    applyZoomTransform();
+    return;
+  }
+  handleSplitDrag(e.clientX);
+  if (state.loupeEnabled) {
+    renderLoupeAtPointer(e.clientX, e.clientY);
+  }
+});
+
+dom.stage.addEventListener("mouseleave", () => {
+  dom.loupeCanvas?.classList.remove("visible");
+});
+
 window.addEventListener("mouseup", () => {
+  if (state.isPanning) {
+    state.isPanning = false;
+    dom.stage.classList.remove("panning");
+  }
   state.isDraggingSplit = false;
   saveStateToActiveTab();
 });
@@ -1271,7 +1495,20 @@ window.addEventListener("paste", (e) => {
   }
 });
 
-// 10. Export Download & Clipboard Copy (Multi-Format & Custom Pixel Resolution)
+// 10. Export Download & Clipboard Copy (Native OS Save Dialog or Browser Download)
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const dataUrl = String(reader.result || "");
+      const base64 = dataUrl.includes(",") ? dataUrl.split(",")[1] : dataUrl;
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
 dom.btnDownload.addEventListener("click", async () => {
   if (!state.resultBlob) return;
   try {
@@ -1286,6 +1523,16 @@ dom.btnDownload.addEventListener("click", async () => {
       : `-${state.exportWidth}x${state.exportHeight}`;
     const baseName = (state.sourceFile?.name || "image").replace(/\.[^/.]+$/, "");
     const fileName = `${baseName}-${suffix}${sizeTag}.${extMap[state.exportFormat] || "png"}`;
+
+    // If running inside the pywebview native desktop window, use the native OS Save dialog
+    if (window.pywebview?.api?.save_file) {
+      const b64 = await blobToBase64(exportBlob);
+      const res = await window.pywebview.api.save_file(b64, fileName);
+      if (res && res.error) {
+        throw new Error(res.error);
+      }
+      return;
+    }
 
     const downloadUrl = URL.createObjectURL(exportBlob);
     const a = document.createElement("a");

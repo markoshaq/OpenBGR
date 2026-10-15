@@ -134,6 +134,22 @@ body {
   font-weight: 600;
 }
 
+.zoom-readout {
+  min-width: 48px;
+  justify-content: center;
+}
+
+.loupe-btn {
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.divider-v {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+}
+
 .hardware-readout {
   display: flex;
   align-items: center;
@@ -845,10 +861,37 @@ body {
   max-width: calc(100vw - 580px);
   max-height: calc(100vh - 150px);
   border: 1px solid var(--border);
+  transform-origin: center center;
+  will-change: transform;
 }
 
 .stage.visible {
   display: inline-block;
+}
+
+.stage.panning {
+  cursor: grabbing;
+}
+
+.stage.loupe-active {
+  cursor: crosshair;
+}
+
+.loupe-canvas {
+  position: absolute;
+  width: 180px;
+  height: 180px;
+  border-radius: 50%;
+  border: 1.5px solid var(--text);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(0, 0, 0, 0.85);
+  pointer-events: none;
+  display: none;
+  z-index: 25;
+  transform: translate(-50%, -50%);
+}
+
+.loupe-canvas.visible {
+  display: block;
 }
 
 .stage-sizer {

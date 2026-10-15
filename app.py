@@ -13,6 +13,7 @@
 #   "fastapi>=0.115.0",
 #   "uvicorn>=0.30.0",
 #   "python-multipart>=0.0.9",
+#   "pywebview>=5.0",
 # ]
 # ///
 """
@@ -55,10 +56,13 @@ Key Architectural Features:
 from __future__ import annotations
 
 import asyncio
+import base64
 import gc
 import io
 import os
 import platform
+import shutil
+import socket
 import subprocess
 import threading
 import time
@@ -611,9 +615,93 @@ def serve_index() -> FileResponse:
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
+# ---------------------------------------------------------------------------
+# Native Desktop Window (pywebview) & Chromeless Browser Fallback
+# ---------------------------------------------------------------------------
+
+
+class DesktopApi:
+    """
+    JavaScript-to-Python bridge exposed as `window.pywebview.api` when running
+    inside the native pywebview desktop window. Allows the frontend EXPORT button
+    to open a native OS "Save As" file dialog.
+    """
+
+    def __init__(self) -> None:
+        self.window: Any = None
+
+    def save_file(self, data_base64: str, default_filename: str) -> dict[str, Any]:
+        """Opens a native OS Save dialog and writes the base64-encoded image to disk."""
+        if self.window is None:
+            return {"saved": False, "error": "Desktop window is not initialized."}
+        try:
+            import webview
+
+            dest = self.window.create_file_dialog(
+                webview.SAVE_DIALOG,
+                save_filename=default_filename,
+            )
+            if not dest:
+                return {"saved": False, "cancelled": True}
+
+            target_path = dest[0] if isinstance(dest, (list, tuple)) else str(dest)
+            raw_bytes = base64.b64decode(data_base64)
+            Path(target_path).write_bytes(raw_bytes)
+            return {"saved": True, "path": target_path}
+        except Exception as exc:
+            return {"saved": False, "error": str(exc)}
+
+
+def wait_for_server(host: str, port: int, timeout_s: float = 15.0) -> bool:
+    """Polls until the local Uvicorn TCP socket is accepting connections."""
+    deadline = time.perf_counter() + timeout_s
+    while time.perf_counter() < deadline:
+        try:
+            with socket.create_connection((host, port), timeout=0.25):
+                return True
+        except OSError:
+            time.sleep(0.1)
+    return False
+
+
+def open_fallback_app_window(url: str) -> None:
+    """
+    Fallback if pywebview is unavailable (e.g. Linux without GTK WebKit).
+    Attempts to open a chromeless standalone `--app` window via Chrome, Edge,
+    or Brave before falling back to the default system web browser.
+    """
+    candidates = [
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        "google-chrome",
+        "chromium",
+        "chromium-browser",
+        "brave-browser",
+        "microsoft-edge",
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    ]
+    for binary in candidates:
+        resolved = binary if os.path.exists(binary) else shutil.which(binary)
+        if resolved:
+            try:
+                subprocess.Popen(
+                    [resolved, f"--app={url}", "--window-size=1380,860"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                return
+            except Exception:
+                continue
+    webbrowser.open(url)
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "7860"))
-    url = f"http://127.0.0.1:{port}"
+    host = "127.0.0.1"
+    url = f"http://{host}:{port}"
+
     print("-" * 68)
     print("  OpenBGR // LOCAL AI SEGMENTATION STUDIO")
     print(f"  Compute   : {DEVICE_LABEL} ({PRECISION_LABEL})")
@@ -621,7 +709,37 @@ if __name__ == "__main__":
     print(f"  Interface : {url}")
     print("-" * 68)
 
-    if os.environ.get("NO_BROWSER") != "1":
-        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+    # Headless / server-only mode when NO_BROWSER=1 or OPENBGR_BROWSER=1 is set
+    if os.environ.get("NO_BROWSER") == "1":
+        uvicorn.run(app, host=host, port=port, log_level="warning")
+    elif os.environ.get("OPENBGR_BROWSER") == "1":
+        threading.Timer(1.0, lambda: open_fallback_app_window(url)).start()
+        uvicorn.run(app, host=host, port=port, log_level="warning")
+    else:
+        # Start FastAPI server in a background daemon thread and open native desktop window
+        server_thread = threading.Thread(
+            target=lambda: uvicorn.run(app, host=host, port=port, log_level="warning"),
+            daemon=True,
+        )
+        server_thread.start()
+        wait_for_server(host, port)
 
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+        try:
+            import webview
+
+            api_bridge = DesktopApi()
+            window = webview.create_window(
+                title="OpenBGR",
+                url=url,
+                width=1380,
+                height=860,
+                min_size=(980, 640),
+                background_color="#09090b",
+                js_api=api_bridge,
+            )
+            api_bridge.window = window
+            webview.start()
+        except Exception as exc:
+            print(f"[Desktop] Native window unavailable ({exc}); opening app window...")
+            open_fallback_app_window(url)
+            server_thread.join()

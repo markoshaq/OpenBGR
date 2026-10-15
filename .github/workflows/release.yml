@@ -1,0 +1,73 @@
+name: Build & Publish Desktop Releases
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Pillow for icon generation
+        run: pip install pillow
+      - name: Build OpenBGR-macOS.dmg
+        run: python scripts/build_release.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenBGR-macOS-dmg
+          path: dist/OpenBGR-macOS.dmg
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build OpenBGR-Windows.zip (with OpenBGR.exe)
+        run: python scripts/build_release.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenBGR-Windows-zip
+          path: dist/OpenBGR-Windows.zip
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build OpenBGR-Linux.tar.gz
+        run: python scripts/build_release.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenBGR-Linux-tar-gz
+          path: dist/OpenBGR-Linux.tar.gz
+
+  publish-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-macos, build-windows, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-assets/OpenBGR-macOS.dmg
+            release-assets/OpenBGR-Windows.zip
+            release-assets/OpenBGR-Linux.tar.gz
+          generate_release_notes: true

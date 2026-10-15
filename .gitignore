@@ -8,3 +8,5 @@ Thumbs.db
 *.log
 .env
 models/
+dist/
+build/

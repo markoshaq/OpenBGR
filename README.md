@@ -28,6 +28,8 @@ Or download the repository ZIP and double-click **`Start Mac.command`** (macOS) 
 - **Three Model Presets** — Switch between `BiRefNet_lite` (fast CPU/iGPU), full `BiRefNet` (default for GPUs and Apple Silicon), and `BiRefNet_HR` (2K high-resolution).
 - **Edge Defringing** — Removes background color bleed along semi-transparent hair and soft borders.
 - **Live Export Preview** — Export as `PNG`, `WEBP`, `JPG`, or an 8-bit `Alpha Mask` at any scale (`10%–200%`) or custom pixel dimensions (`W × H`), rendered live on `<canvas>` without re-running inference.
+- **Zoom, Pan & 4× Loupe** — Scroll-wheel zoom (`100%–800%`) with click-and-drag panning, plus a toggleable 4× circular magnifier loupe (`Z` key) for inspecting hair strands and edges.
+- **Native Desktop Window** — Opens in a standalone native OS window via `pywebview` (with a native OS Save dialog and automatic browser fallback).
 - **Hardware Acceleration** — Runs in `FP16` half-precision on CUDA and Apple MPS (cutting memory usage in half and speeding up inference ~5×), and automatically evicts inactive models from memory when switching presets.
 
 ## Models
@@ -65,6 +67,16 @@ curl -X POST "http://127.0.0.1:7860/api/remove-bg" \
 ├── start.bat            # Windows bootstrapper
 └── requirements.txt     # Python dependencies
 ```
+
+## Building Desktop Releases (`.dmg` / `.exe` / Linux)
+
+To build lightweight desktop release bundles locally into `dist/`:
+
+```bash
+python3 scripts/build_release.py
+```
+
+Pushing a version tag (e.g. `git tag v1.0.0 && git push origin v1.0.0`) triggers `.github/workflows/release.yml` to build and attach `OpenBGR-macOS.dmg`, `OpenBGR-Windows.zip`, and `OpenBGR-Linux.tar.gz` to a GitHub Release automatically.
 
 ## License
 

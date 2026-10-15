@@ -21,6 +21,24 @@
           <button type="button" class="seg-btn" id="viewCutout">CUTOUT</button>
           <button type="button" class="seg-btn" id="viewOriginal">ORIGINAL</button>
         </div>
+
+        <div class="divider-v"></div>
+
+        <span class="cluster-label">ZOOM</span>
+        <div class="segmented">
+          <button type="button" class="seg-btn" id="btnZoomOut" title="Zoom Out">−</button>
+          <button type="button" class="seg-btn zoom-readout" id="btnZoomReset" title="Reset Zoom to 100%">100%</button>
+          <button type="button" class="seg-btn" id="btnZoomIn" title="Zoom In">+</button>
+        </div>
+
+        <button
+          type="button"
+          class="seg-btn loupe-btn"
+          id="btnLoupe"
+          title="Toggle 4× Circle Magnifier Loupe (Shortcut: Z)"
+        >
+          LOUPE 4×
+        </button>
       </div>
 
       <div class="hardware-readout">
@@ -164,6 +182,9 @@
               <div class="split-handle">↔</div>
             </div>
           </div>
+
+          <!-- 4x Circular Magnifier Loupe Canvas -->
+          <canvas id="loupeCanvas" class="loupe-canvas" width="180" height="180"></canvas>
 
           <!-- Inference Progress Overlay -->
           <div class="busy-overlay" id="busyOverlay">
