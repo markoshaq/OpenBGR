@@ -3,8 +3,8 @@
  * =====================================
  * Handles hardware preset switching, drag-and-drop / clipboard image ingestion,
  * split-plane comparison rendering, active request cancellation, client-side
- * multi-format / multi-resolution export, and communication with the local
- * FastAPI segmentation backend.
+ * multi-format / custom-pixel export, and communication with the local FastAPI
+ * segmentation backend.
  */
 
 "use strict";
@@ -26,7 +26,9 @@ const state = {
   naturalWidth: 0,         // Native pixel width of active cutout
   naturalHeight: 0,        // Native pixel height of active cutout
   exportFormat: "png",     // "png" | "webp" | "jpg" | "mask"
-  exportScale: 1,          // 1 (100%) | 0.5 (50%) | 0.25 (25%)
+  exportScale: 1,          // Scale multiplier (0.1 to 2.0)
+  exportWidth: 0,          // Target export width in pixels
+  exportHeight: 0,         // Target export height in pixels
   activeBackdrop: "checker", // "checker" or hex color string (e.g. "#ffffff")
   serverStatus: null,      // Cached response from GET /api/status
 };
@@ -64,8 +66,15 @@ const dom = {
   btnDownload: document.getElementById("btnDownload"),
   btnDefringe: document.getElementById("btnDefringe"),
 
+  exportFormatSelect: document.getElementById("exportFormatSelect"),
+  exportScaleSlider: document.getElementById("exportScaleSlider"),
+  scalePctLabel: document.getElementById("scalePctLabel"),
+  exportWidthInput: document.getElementById("exportWidthInput"),
+  exportHeightInput: document.getElementById("exportHeightInput"),
+
   hwCompute: document.getElementById("hwCompute"),
   hwCache: document.getElementById("hwCache"),
+  headerCacheDot: document.getElementById("headerCacheDot"),
   statFile: document.getElementById("statFile"),
   statDim: document.getElementById("statDim"),
   statTier: document.getElementById("statTier"),
@@ -125,60 +134,117 @@ function cancelProcessing() {
 }
 
 /**
- * Updates the header badge showing whether the active tier's weights are
- * already cached on disk for offline execution.
+ * Resolves the availability state of a model tier:
+ * - "ready"        : Green  (Model weights are cached locally on disk)
+ * - "downloadable" : Orange (Not cached yet, but internet is available to download)
+ * - "unavailable"  : Red    (Not cached on disk and browser is currently offline)
+ *
+ * @param {object} tierInfo
+ * @returns {"ready"|"downloadable"|"unavailable"}
  */
-function updateCacheIndicator() {
-  const tierInfo = state.serverStatus?.tiers?.[state.tier];
-  if (!tierInfo) return;
-  dom.hwCache.textContent = tierInfo.cached
-    ? "READY OFFLINE"
-    : "DOWNLOADS ON 1ST RUN";
+function getTierAvailability(tierInfo) {
+  if (tierInfo?.cached) return "ready";
+  return navigator.onLine ? "downloadable" : "unavailable";
 }
 
 /**
- * Updates the DIMENSIONS status readout and EXPORT button label based on
- * the currently selected `exportFormat` and `exportScale`.
+ * Applies the status dot class ("ready", "downloadable", or "unavailable")
+ * to a DOM element.
+ * @param {HTMLElement|null} dotEl
+ * @param {"ready"|"downloadable"|"unavailable"} status
+ */
+function applyDotClass(dotEl, status) {
+  if (!dotEl) return;
+  dotEl.classList.remove("ready", "downloadable", "unavailable");
+  dotEl.classList.add(status);
+}
+
+/**
+ * Updates the status dots on all 3 preset buttons as well as the header
+ * MODEL CACHE indicator.
+ */
+function updateCacheIndicator() {
+  const tiers = state.serverStatus?.tiers;
+  if (!tiers) return;
+
+  ["low", "mid", "high"].forEach((key) => {
+    const dotEl = document.getElementById(`dot-${key}`);
+    const status = getTierAvailability(tiers[key]);
+    applyDotClass(dotEl, status);
+  });
+
+  const activeInfo = tiers[state.tier];
+  if (!activeInfo) return;
+
+  const activeStatus = getTierAvailability(activeInfo);
+  applyDotClass(dom.headerCacheDot, activeStatus);
+
+  if (activeStatus === "ready") {
+    dom.hwCache.textContent = "READY OFFLINE";
+  } else if (activeStatus === "downloadable") {
+    dom.hwCache.textContent = "CAN BE DOWNLOADED";
+  } else {
+    dom.hwCache.textContent = "UNAVAILABLE OFFLINE";
+  }
+}
+
+/**
+ * Synchronizes the EXPORT button label, scale percentage readout, WxH px inputs,
+ * and bottom DIMENSIONS status bar.
  */
 function updateExportTelemetry() {
   dom.btnDownload.textContent = `EXPORT ${state.exportFormat.toUpperCase()}`;
 
+  const pct = Math.round(state.exportScale * 100);
+  dom.scalePctLabel.textContent = `${pct}%`;
+
+  const clampedSlider = Math.max(10, Math.min(200, pct));
+  dom.exportScaleSlider.value = String(clampedSlider);
+
   if (state.naturalWidth > 0 && state.naturalHeight > 0) {
-    const outW = Math.max(1, Math.round(state.naturalWidth * state.exportScale));
-    const outH = Math.max(1, Math.round(state.naturalHeight * state.exportScale));
-    const scalePct = Math.round(state.exportScale * 100);
+    if (!state.exportWidth || !state.exportHeight) {
+      state.exportWidth = Math.max(1, Math.round(state.naturalWidth * state.exportScale));
+      state.exportHeight = Math.max(1, Math.round(state.naturalHeight * state.exportScale));
+    }
+    if (document.activeElement !== dom.exportWidthInput) {
+      dom.exportWidthInput.value = String(state.exportWidth);
+    }
+    if (document.activeElement !== dom.exportHeightInput) {
+      dom.exportHeightInput.value = String(state.exportHeight);
+    }
+
     dom.statDim.textContent =
-      state.exportScale === 1
-        ? `${outW}×${outH} PX`
-        : `${outW}×${outH} PX (${scalePct}%)`;
+      pct === 100
+        ? `${state.exportWidth}×${state.exportHeight} PX`
+        : `${state.exportWidth}×${state.exportHeight} PX (${pct}%)`;
   }
 }
 
 /**
  * Renders the master segmented image onto an offscreen canvas at the target
- * `exportScale` and `exportFormat` ("png", "webp", "jpg", or "mask") and
- * returns a Promise resolving to the encoded Blob.
+ * `exportWidth` x `exportHeight` and `exportFormat` ("png", "webp", "jpg", or "mask")
+ * and returns a Promise resolving to the encoded Blob.
  *
  * @param {"png"|"webp"|"jpg"|"mask"} format
- * @param {number} scale
  * @returns {Promise<Blob>}
  */
-async function buildExportBlob(format, scale) {
-  // Fast path: 100% scale, transparent PNG with no solid matte backdrop.
+async function buildExportBlob(format) {
+  const img = dom.afterImg;
+  const srcW = state.naturalWidth || img.naturalWidth;
+  const srcH = state.naturalHeight || img.naturalHeight;
+  const targetW = Math.max(1, state.exportWidth || srcW);
+  const targetH = Math.max(1, state.exportHeight || srcH);
+
+  // Fast path: untouched 100% native resolution transparent PNG.
   if (
     format === "png" &&
-    scale === 1 &&
+    targetW === srcW &&
+    targetH === srcH &&
     state.activeBackdrop === "checker" &&
     state.resultBlob
   ) {
     return state.resultBlob;
   }
-
-  const img = dom.afterImg;
-  const srcW = state.naturalWidth || img.naturalWidth;
-  const srcH = state.naturalHeight || img.naturalHeight;
-  const targetW = Math.max(1, Math.round(srcW * scale));
-  const targetH = Math.max(1, Math.round(srcH * scale));
 
   const canvas = document.createElement("canvas");
   canvas.width = targetW;
@@ -188,7 +254,6 @@ async function buildExportBlob(format, scale) {
   ctx.imageSmoothingQuality = "high";
 
   if (format === "mask") {
-    // Draw cutout and convert its alpha channel into an 8-bit grayscale mask.
     ctx.drawImage(img, 0, 0, targetW, targetH);
     const imgData = ctx.getImageData(0, 0, targetW, targetH);
     const data = imgData.data;
@@ -208,7 +273,6 @@ async function buildExportBlob(format, scale) {
     });
   }
 
-  // Fill background color if exporting JPEG or if user selected a solid Matte swatch.
   if (format === "jpg" || state.activeBackdrop !== "checker") {
     ctx.fillStyle =
       state.activeBackdrop === "checker" ? "#ffffff" : state.activeBackdrop;
@@ -362,6 +426,12 @@ function ingestImageFile(file) {
 async function runSegmentation() {
   if (!state.sourceFile) return;
 
+  const tierInfo = state.serverStatus?.tiers?.[state.tier];
+  if (tierInfo && !tierInfo.cached && !navigator.onLine) {
+    setError(`Model for ${state.tier.toUpperCase()} preset is not cached and device is offline.`);
+    return;
+  }
+
   if (state.abortController) {
     state.abortController.abort();
   }
@@ -373,7 +443,6 @@ async function runSegmentation() {
   dom.busyOverlay.classList.add("active");
   dom.statTime.textContent = "PROCESSING...";
 
-  const tierInfo = state.serverStatus?.tiers?.[state.tier];
   const isCached = tierInfo ? tierInfo.cached : true;
 
   dom.busyTitle.textContent = isCached
@@ -415,6 +484,8 @@ async function runSegmentation() {
     state.resultBlob = blob;
     state.naturalWidth = width;
     state.naturalHeight = height;
+    state.exportWidth = Math.max(1, Math.round(width * state.exportScale));
+    state.exportHeight = Math.max(1, Math.round(height * state.exportScale));
 
     if (state.resultObjectUrl) URL.revokeObjectURL(state.resultObjectUrl);
     state.resultObjectUrl = URL.createObjectURL(state.resultBlob);
@@ -449,7 +520,11 @@ async function runSegmentation() {
  * Event Listeners Registration
  * ------------------------------------------------------------------------- */
 
-// 1. Cancel Button, Confirmation Modal & Info Modal Controls
+// 1. Online / Offline Connectivity Listeners for Preset Status Dots
+window.addEventListener("online", () => updateCacheIndicator());
+window.addEventListener("offline", () => updateCacheIndicator());
+
+// 2. Cancel Button, Confirmation Modal & Info Modal Controls
 dom.btnCancel.addEventListener("click", () => {
   cancelProcessing();
 });
@@ -490,7 +565,7 @@ window.addEventListener("keydown", (e) => {
   }
 });
 
-// 2. Hardware Preset Buttons
+// 3. Hardware Preset Buttons
 document.querySelectorAll("#tierSelector .seg-btn").forEach((btn) => {
   btn.addEventListener("click", () => {
     const targetTier = btn.getAttribute("data-tier");
@@ -500,43 +575,59 @@ document.querySelectorAll("#tierSelector .seg-btn").forEach((btn) => {
   });
 });
 
-// 3. Edge Defringe Toggle
+// 4. Edge Defringe Toggle
 dom.btnDefringe.addEventListener("click", () => {
   state.defringe = !state.defringe;
   dom.btnDefringe.classList.toggle("active", state.defringe);
   if (state.sourceFile) runSegmentation();
 });
 
-// 4. View Mode Segmented Control
+// 5. View Mode Segmented Control
 document.getElementById("viewSplit").addEventListener("click", () => setViewMode("split"));
 document.getElementById("viewCutout").addEventListener("click", () => setViewMode("cutout"));
 document.getElementById("viewOriginal").addEventListener("click", () => setViewMode("original"));
 
-// 5. Output Format & Scale Selectors
-document.querySelectorAll("#formatSelector .mini-seg-btn").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    const fmt = btn.getAttribute("data-format");
-    if (!fmt) return;
-    state.exportFormat = fmt;
-    document.querySelectorAll("#formatSelector .mini-seg-btn").forEach((b) => {
-      b.classList.toggle("active", b === btn);
-    });
-    updateExportTelemetry();
-  });
+// 6. Export Format Dropdown, Scale Slider & Custom PX Inputs
+dom.exportFormatSelect.addEventListener("change", (e) => {
+  state.exportFormat = e.target.value;
+  updateExportTelemetry();
 });
 
-document.querySelectorAll("#scaleSelector .mini-seg-btn").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    const sc = parseFloat(btn.getAttribute("data-scale") || "1");
-    state.exportScale = sc;
-    document.querySelectorAll("#scaleSelector .mini-seg-btn").forEach((b) => {
-      b.classList.toggle("active", b === btn);
-    });
-    updateExportTelemetry();
-  });
+dom.exportScaleSlider.addEventListener("input", (e) => {
+  const pct = parseInt(e.target.value || "100", 10);
+  state.exportScale = pct / 100;
+  if (state.naturalWidth > 0 && state.naturalHeight > 0) {
+    state.exportWidth = Math.max(1, Math.round(state.naturalWidth * state.exportScale));
+    state.exportHeight = Math.max(1, Math.round(state.naturalHeight * state.exportScale));
+  }
+  updateExportTelemetry();
 });
 
-// 6. Split-Plane Pointer Dragging (Mouse + Touch)
+dom.exportWidthInput.addEventListener("input", (e) => {
+  const val = parseInt(e.target.value, 10);
+  if (!val || val < 1) return;
+  state.exportWidth = Math.min(16384, val);
+  if (state.naturalWidth > 0 && state.naturalHeight > 0) {
+    state.exportScale = state.exportWidth / state.naturalWidth;
+    state.exportHeight = Math.max(1, Math.round(state.naturalHeight * state.exportScale));
+    dom.exportHeightInput.value = String(state.exportHeight);
+  }
+  updateExportTelemetry();
+});
+
+dom.exportHeightInput.addEventListener("input", (e) => {
+  const val = parseInt(e.target.value, 10);
+  if (!val || val < 1) return;
+  state.exportHeight = Math.min(16384, val);
+  if (state.naturalWidth > 0 && state.naturalHeight > 0) {
+    state.exportScale = state.exportHeight / state.naturalHeight;
+    state.exportWidth = Math.max(1, Math.round(state.naturalWidth * state.exportScale));
+    dom.exportWidthInput.value = String(state.exportWidth);
+  }
+  updateExportTelemetry();
+});
+
+// 7. Split-Plane Pointer Dragging (Mouse + Touch)
 dom.stage.addEventListener("mousedown", (e) => {
   if (state.viewMode !== "split") return;
   state.isDraggingSplit = true;
@@ -567,7 +658,7 @@ window.addEventListener("touchend", () => {
   state.isDraggingSplit = false;
 });
 
-// 7. Matte Backdrop Swatches & Custom Color Picker
+// 8. Matte Backdrop Swatches & Custom Color Picker
 document.querySelectorAll(".swatch[data-bg]").forEach((swatch) => {
   swatch.addEventListener("click", () => {
     document.querySelectorAll(".swatch").forEach((s) => s.classList.remove("active"));
@@ -593,7 +684,7 @@ document.getElementById("colorPicker").addEventListener("input", (e) => {
   dom.viewport.style.background = e.target.value;
 });
 
-// 8. File Selection, Drag-and-Drop, and Clipboard Paste (with active-job guard)
+// 9. File Selection, Drag-and-Drop, and Clipboard Paste (with active-job guard)
 function triggerOpenFileDialog() {
   dom.fileInput.value = "";
   dom.fileInput.click();
@@ -674,17 +765,21 @@ window.addEventListener("paste", (e) => {
   }
 });
 
-// 9. Export Download & Clipboard Copy (Multi-Format & Multi-Resolution)
+// 10. Export Download & Clipboard Copy (Multi-Format & Custom Pixel Resolution)
 dom.btnDownload.addEventListener("click", async () => {
   if (!state.resultBlob) return;
   try {
-    const exportBlob = await buildExportBlob(state.exportFormat, state.exportScale);
+    const exportBlob = await buildExportBlob(state.exportFormat);
     const extMap = { png: "png", webp: "webp", jpg: "jpg", mask: "png" };
     const suffix = state.exportFormat === "mask" ? "mask" : "cutout";
-    const scaleTag =
-      state.exportScale === 1 ? "" : `-${Math.round(state.exportScale * 100)}pct`;
+    const isNativeSize =
+      state.exportWidth === state.naturalWidth &&
+      state.exportHeight === state.naturalHeight;
+    const sizeTag = isNativeSize
+      ? ""
+      : `-${state.exportWidth}x${state.exportHeight}`;
     const baseName = (state.sourceFile?.name || "image").replace(/\.[^/.]+$/, "");
-    const fileName = `${baseName}-${suffix}${scaleTag}.${extMap[state.exportFormat] || "png"}`;
+    const fileName = `${baseName}-${suffix}${sizeTag}.${extMap[state.exportFormat] || "png"}`;
 
     const downloadUrl = URL.createObjectURL(exportBlob);
     const a = document.createElement("a");
@@ -702,9 +797,8 @@ dom.btnDownload.addEventListener("click", async () => {
 dom.btnCopy.addEventListener("click", async () => {
   if (!state.resultBlob) return;
   try {
-    // ClipboardItem requires image/png; render at selected scale & matte/mask mode.
     const copyFormat = state.exportFormat === "mask" ? "mask" : "png";
-    const pngBlob = await buildExportBlob(copyFormat, state.exportScale);
+    const pngBlob = await buildExportBlob(copyFormat);
     await navigator.clipboard.write([
       new ClipboardItem({ "image/png": pngBlob }),
     ]);

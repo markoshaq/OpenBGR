@@ -18,7 +18,7 @@
           COMPUTE: <span class="hw-value" id="hwCompute">DETECTING...</span>
         </div>
         <div class="hw-item">
-          MODEL CACHE: <span class="hw-value" id="hwCache">—</span>
+          MODEL CACHE: <span class="status-dot" id="headerCacheDot"></span><span class="hw-value" id="hwCache">—</span>
         </div>
         <button type="button" class="info-btn" id="btnInfo" title="About &amp; System Info" aria-label="Information">i</button>
       </div>
@@ -31,30 +31,33 @@
         <div class="segmented" id="tierSelector">
           <button
             type="button"
-            class="seg-btn"
+            class="seg-btn tier-btn"
             data-tier="low"
             title="BiRefNet_lite (Swin-T @ 1024x1024, ~110 MB FP16). Fastest inference for CPU-only machines and integrated GPUs."
           >
             <span>LOW-END</span>
             <span class="seg-sub">LITE 1K</span>
+            <span class="tier-dot" id="dot-low"></span>
           </button>
           <button
             type="button"
-            class="seg-btn active"
+            class="seg-btn tier-btn active"
             data-tier="mid"
             title="BiRefNet Full (Swin-L @ 1024x1024, ~440 MB FP16). Default studio model for Apple Silicon and GPUs — high-precision hair, fur, and soft edge matting."
           >
             <span>MID-RANGE</span>
             <span class="seg-sub">FULL 1K</span>
+            <span class="tier-dot" id="dot-mid"></span>
           </button>
           <button
             type="button"
-            class="seg-btn"
+            class="seg-btn tier-btn"
             data-tier="high"
             title="BiRefNet_HR (Swin-L @ native 2048x2048 2K resolution). 4x the spatial pixel density of 1K for 4K/8K commercial photography."
           >
             <span>HIGH-END</span>
             <span class="seg-sub">ULTRA 2K</span>
+            <span class="tier-dot" id="dot-high"></span>
           </button>
         </div>
 
@@ -92,7 +95,54 @@
 
         <button type="button" class="action-btn" id="btnOpen">OPEN IMAGE</button>
         <button type="button" class="action-btn disabled" id="btnCopy">COPY</button>
-        <button type="button" class="action-btn primary disabled" id="btnDownload">EXPORT PNG</button>
+
+        <div class="export-group">
+          <select class="studio-select" id="exportFormatSelect" title="Output File Format">
+            <option value="png">PNG</option>
+            <option value="webp">WEBP</option>
+            <option value="jpg">JPG</option>
+            <option value="mask">MASK</option>
+          </select>
+
+          <div class="scale-control" title="Output Resolution Scale">
+            <input
+              type="range"
+              class="studio-slider"
+              id="exportScaleSlider"
+              min="10"
+              max="200"
+              step="5"
+              value="100"
+            />
+            <span class="scale-pct" id="scalePctLabel">100%</span>
+          </div>
+
+          <div class="px-control" title="Custom Export Dimensions (Width × Height in pixels)">
+            <input
+              type="number"
+              class="px-input"
+              id="exportWidthInput"
+              min="1"
+              max="16384"
+              placeholder="W"
+              aria-label="Export Width in Pixels"
+            />
+            <span class="px-sep">×</span>
+            <input
+              type="number"
+              class="px-input"
+              id="exportHeightInput"
+              min="1"
+              max="16384"
+              placeholder="H"
+              aria-label="Export Height in Pixels"
+            />
+            <span class="px-unit">PX</span>
+          </div>
+
+          <button type="button" class="action-btn primary disabled" id="btnDownload">EXPORT PNG</button>
+        </div>
+
         <input type="file" id="fileInput" accept="image/*" />
       </div>
     </div>
@@ -184,7 +234,7 @@
       </div>
     </main>
 
-    <!-- 4. Bottom Telemetry & Output Configuration Bar -->
+    <!-- 4. Bottom Telemetry Bar -->
     <footer class="statusbar">
       <div class="status-group">
         <div class="status-kv">FILE: <span id="statFile">NONE</span></div>
@@ -193,22 +243,10 @@
         <div class="status-kv">LATENCY: <span id="statTime">—</span></div>
       </div>
       <div class="status-group">
-        <div class="status-control">
-          <span>FORMAT:</span>
-          <div class="mini-segmented" id="formatSelector">
-            <button type="button" class="mini-seg-btn active" data-format="png" title="Lossless 32-bit RGBA PNG">PNG</button>
-            <button type="button" class="mini-seg-btn" data-format="webp" title="Transparent WebP">WEBP</button>
-            <button type="button" class="mini-seg-btn" data-format="jpg" title="JPEG composited on active Matte color">JPG</button>
-            <button type="button" class="mini-seg-btn" data-format="mask" title="Black &amp; White Alpha Mask PNG">MASK</button>
-          </div>
-        </div>
-        <div class="status-control">
-          <span>SCALE:</span>
-          <div class="mini-segmented" id="scaleSelector">
-            <button type="button" class="mini-seg-btn active" data-scale="1" title="100% Original Resolution">100%</button>
-            <button type="button" class="mini-seg-btn" data-scale="0.5" title="50% Half Resolution">50%</button>
-            <button type="button" class="mini-seg-btn" data-scale="0.25" title="25% Quarter Resolution">25%</button>
-          </div>
+        <div class="status-legend">
+          <span class="legend-item"><span class="status-dot ready"></span>READY</span>
+          <span class="legend-item"><span class="status-dot downloadable"></span>DOWNLOAD</span>
+          <span class="legend-item"><span class="status-dot unavailable"></span>OFFLINE</span>
         </div>
         <a href="https://github.com/markoshaq" target="_blank" rel="noopener noreferrer" class="credit-link">
           MADE BY MARKOSHAQ ↗

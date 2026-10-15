@@ -157,6 +157,7 @@ body {
 }
 
 .seg-btn {
+  position: relative;
   background: transparent;
   border: none;
   border-right: 1px solid var(--border);
@@ -169,6 +170,45 @@ body {
   align-items: center;
   gap: 6px;
   transition: background 0.1s, color 0.1s;
+}
+
+.tier-btn {
+  padding-right: 16px;
+}
+
+/* Status Dots: Green (Ready Offline), Orange (Downloadable), Red (Unavailable Offline) */
+.tier-dot,
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border-strong);
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.tier-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+}
+
+.tier-dot.ready,
+.status-dot.ready {
+  background: #10b981;
+  box-shadow: 0 0 4px rgba(16, 185, 129, 0.7);
+}
+
+.tier-dot.downloadable,
+.status-dot.downloadable {
+  background: #f59e0b;
+  box-shadow: 0 0 4px rgba(245, 158, 11, 0.7);
+}
+
+.tier-dot.unavailable,
+.status-dot.unavailable {
+  background: #ef4444;
+  box-shadow: 0 0 4px rgba(239, 68, 68, 0.7);
 }
 
 .seg-btn:last-child {
@@ -303,6 +343,117 @@ body {
 .action-btn.disabled {
   opacity: 0.35;
   pointer-events: none;
+}
+
+/* Export Controls Group (Format Dropdown, Scale Slider, Custom PX Inputs) */
+.export-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.studio-select {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 5px 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  outline: none;
+}
+
+.studio-select:hover,
+.studio-select:focus {
+  border-color: var(--border-strong);
+}
+
+.scale-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+}
+
+.studio-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 64px;
+  height: 3px;
+  background: var(--border-strong);
+  outline: none;
+  cursor: pointer;
+}
+
+.studio-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 10px;
+  height: 12px;
+  background: var(--text);
+  cursor: pointer;
+  border: none;
+}
+
+.studio-slider::-moz-range-thumb {
+  width: 10px;
+  height: 12px;
+  background: var(--text);
+  cursor: pointer;
+  border: none;
+  border-radius: 0;
+}
+
+.scale-pct {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text);
+  min-width: 32px;
+  text-align: right;
+}
+
+.px-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  padding: 2px 6px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.px-input {
+  width: 48px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11px;
+  text-align: center;
+  outline: none;
+  padding: 2px 0;
+  -moz-appearance: textfield;
+}
+
+.px-input::-webkit-outer-spin-button,
+.px-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.px-input:focus {
+  background: var(--surface-2);
+}
+
+.px-sep,
+.px-unit {
+  color: var(--muted);
+  font-size: 10px;
 }
 
 /* -------------------------------------------------------------------------
@@ -686,43 +837,18 @@ body {
   color: var(--text);
 }
 
-.status-control {
+.status-legend {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-}
-
-.mini-segmented {
-  display: inline-flex;
-  border: 1px solid var(--border);
-  background: var(--bg);
-}
-
-.mini-seg-btn {
-  background: transparent;
-  border: none;
-  border-right: 1px solid var(--border);
-  color: var(--muted);
-  padding: 2px 7px;
-  font-family: var(--mono);
+  gap: 12px;
   font-size: 10px;
-  cursor: pointer;
-  transition: background 0.1s, color 0.1s;
+  color: var(--muted);
 }
 
-.mini-seg-btn:last-child {
-  border-right: none;
-}
-
-.mini-seg-btn:hover {
-  color: var(--text);
-  background: var(--surface-2);
-}
-
-.mini-seg-btn.active {
-  background: var(--text);
-  color: var(--bg);
-  font-weight: 600;
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 
 input[type="file"] {
