@@ -59,6 +59,18 @@ NOTIFIER_ICNS_PATH = APP_CONFIG_DIR / "OpenBGR.icns"
 LOG_FILE_PATH = APP_CONFIG_DIR / "openbgr.log"
 
 
+def _stderr_is_log_file() -> bool:
+    """Returns True when stderr has already been redirected to `LOG_FILE_PATH` (e.g. `.app` stub)."""
+    try:
+        if not LOG_FILE_PATH.exists():
+            return False
+        st_err = os.fstat(sys.stderr.fileno())
+        st_log = LOG_FILE_PATH.stat()
+        return st_err.st_ino == st_log.st_ino and st_err.st_dev == st_log.st_dev
+    except Exception:
+        return False
+
+
 def _configure_logger() -> logging.Logger:
     """
     Configures a shared logger that echoes `info`/`warning` lines to stderr (so
@@ -71,9 +83,6 @@ def _configure_logger() -> logging.Logger:
         return log
     log.setLevel(logging.INFO)
     log.propagate = False
-    stream = logging.StreamHandler(sys.stderr)
-    stream.setFormatter(logging.Formatter("%(message)s"))
-    log.addHandler(stream)
     try:
         APP_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         fh = RotatingFileHandler(
@@ -85,6 +94,10 @@ def _configure_logger() -> logging.Logger:
         log.addHandler(fh)
     except OSError:
         pass
+    if not _stderr_is_log_file():
+        stream = logging.StreamHandler(sys.stderr)
+        stream.setFormatter(logging.Formatter("%(message)s"))
+        log.addHandler(stream)
     return log
 
 

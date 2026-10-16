@@ -141,7 +141,7 @@ curl -X POST "http://127.0.0.1:7860/api/remove-bg" \
   -o photo-cutout.png
 ```
 
-Other endpoints: `GET /api/status` (version, device, RAM, per-model cache state), `POST /api/refine` (re-apply edge filters to the cached job without re-inference), `POST /api/models/install` / `/api/models/uninstall` (checkpoint management), `POST /api/save` (write to a chosen folder), `POST /api/open-cache-dir` (reveal the HF cache in the OS file manager), `POST /api/cancel` (abort the active job), and `GET/POST /api/quick-action-config`, `POST /api/quick-action`, `POST /api/quick-action-install` (Quick Action settings, execution, and OS integration).
+Other endpoints: `GET /api/status` (version, device, RAM, per-model cache state), `POST /api/refine` (re-apply edge filters to the cached job without re-inference), `POST /api/models/install` / `/api/models/uninstall` (checkpoint management), `POST /api/save` (write to a chosen folder), `POST /api/open-cache-dir` / `POST /api/open-logs-dir` (reveal the HF cache or `~/.openbgr` logs folder in the OS file manager), `POST /api/cancel` (abort the active job), and `GET/POST /api/quick-action-config`, `POST /api/quick-action`, `POST /api/quick-action-install` (Quick Action settings, execution, and OS integration).
 
 ## Tests
 
@@ -156,7 +156,7 @@ The suite covers the status contract, refine endpoint, save sanitization, FP16 c
 The project ships a `pyproject.toml` configured for [Ruff](https://docs.astral.sh/ruff/) and [mypy](https://mypy.readthedocs.io/):
 
 ```bash
-pip install ruff mypy
+pip install -e ".[dev]"
 ruff check . && ruff format --check .   # lint
 mypy app.py openbgr                     # type-check
 ```

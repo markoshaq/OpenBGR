@@ -36,6 +36,7 @@ from .config import (
     TIERS,
     ensure_app_icon,
     get_app_disk_bytes,
+    logger,
     normalize_tier_key,
     open_folder_in_file_manager,
 )
@@ -334,6 +335,7 @@ async def api_install_model(target: str = Form(...)) -> dict[str, Any]:
     try:
         await asyncio.to_thread(_download)
     except Exception as exc:
+        logger.error("[API] Failed to download %s: %s", repo_id, exc)
         raise HTTPException(status_code=500, detail=f"Failed to download {repo_id}: {exc}") from exc
 
     return {
@@ -421,6 +423,7 @@ async def api_remove_bg(
     except InterruptedError as exc:
         raise HTTPException(status_code=499, detail=str(exc)) from exc
     except Exception as exc:
+        logger.error("[API] Segmentation pipeline failed: %s", exc)
         raise HTTPException(status_code=500, detail=f"Segmentation pipeline failed: {exc}") from exc
     finally:
         pil_img.close()
