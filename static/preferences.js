@@ -10,7 +10,9 @@ import {
   DOT_TOOLTIPS,
   TIER_STATUS_SHORT,
   TIER_META,
+  PRESET_NAMES,
   ACCENTS,
+  setError,
 } from "./state.js";
 
 const PREFS_SECTION_MAP = {
@@ -18,9 +20,33 @@ const PREFS_SECTION_MAP = {
   appearance: "settings-preferences",
   general: "settings-general",
   behavior: "settings-general",
+  models: "settings-models",
+  storage: "settings-models",
   system: "settings-system",
   about: "settings-about",
 };
+
+const MODEL_CTX_LABELS = {
+  low: "LITE 1K",
+  mid: "FULL 1K",
+  high: "ULTRA 2K",
+  matting: "GLASS & SHEER MATTING",
+};
+
+export function formatDiskBytes(bytes) {
+  const n = Number(bytes) || 0;
+  if (n <= 0) return "0 MB";
+  const gb = n / (1024 * 1024 * 1024);
+  if (gb >= 1) return `${gb.toFixed(2)} GB`;
+  const mb = n / (1024 * 1024);
+  if (mb >= 1) return `${mb.toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(n / 1024))} KB`;
+}
+
+function getTierInfo(key) {
+  if (key === "matting") return state.serverStatus?.matting || null;
+  return state.serverStatus?.tiers?.[key] || null;
+}
 
 function getTierAvailability(tierInfo) {
   if (tierInfo?.cached) return "ready";
@@ -52,25 +78,44 @@ export function updateCacheIndicator() {
     matting: state.serverStatus?.matting,
   };
 
+  let installedCount = 0;
+  let totalBytes = 0;
+
   Object.entries(inventory).forEach(([key, tierInfo]) => {
     const status = getTierAvailability(tierInfo);
+    const sizeBytes = Number(tierInfo?.size_bytes) || 0;
+    const isInstalled = Boolean(tierInfo?.cached || sizeBytes > 0);
+    if (isInstalled) installedCount++;
+    totalBytes += sizeBytes;
+    const sizeLabel = isInstalled ? formatDiskBytes(sizeBytes) : "0 MB";
+
     applyDotState(document.getElementById(`dot-${key}`), status);
     applyDotState(document.getElementById(`sysdot-${key}`), status);
+
+    const statusDetail = isInstalled
+      ? `CACHED OFFLINE (${sizeLabel}) · Right-click to uninstall`
+      : TIER_STATUS_SHORT[status] || "";
 
     const tierBtn = document.querySelector(
       `#tierSelector .tier-btn[data-tier="${key}"]`
     );
     if (tierBtn) {
-      const tip = `${TIER_META[key] || ""} ${TIER_STATUS_SHORT[status] || ""}`.trim();
+      const tip = `${TIER_META[key] || ""} ${statusDetail}`.trim();
       tierBtn.setAttribute("data-tooltip", tip);
     }
 
     if (key === "matting") {
       const matBtn = document.getElementById("btnMatting");
       if (matBtn) {
-        const tip = `${TIER_META.matting} ${TIER_STATUS_SHORT[status] || ""}`.trim();
+        const tip = `${TIER_META.matting} ${statusDetail}`.trim();
         matBtn.setAttribute("data-tooltip", tip);
       }
+    }
+
+    const sizeEl = document.getElementById(`syssize-${key}`);
+    if (sizeEl) {
+      sizeEl.textContent = isInstalled ? sizeLabel : "0 MB";
+      sizeEl.classList.toggle("dim", !isInstalled);
     }
 
     const badge = document.getElementById(`sysbadge-${key}`);
@@ -85,7 +130,129 @@ export function updateCacheIndicator() {
             : "OFFLINE";
       badge.classList.toggle("on", isActive);
     }
+
+    const uninstallBtn = document.getElementById(`sysbtn-${key}`);
+    if (uninstallBtn) {
+      uninstallBtn.disabled = !isInstalled || state.isProcessing;
+      uninstallBtn.textContent = "UNINSTALL";
+    }
   });
+
+  const serverTotal = state.serverStatus?.total_cache_bytes;
+  const finalTotal = typeof serverTotal === "number" ? serverTotal : totalBytes;
+  const totalSummary = `${formatDiskBytes(finalTotal)} (${installedCount} OF 4 INSTALLED)`;
+
+  const totalEl = document.getElementById("modelsTotalSize");
+  if (totalEl) totalEl.textContent = totalSummary;
+
+  const sysSummaryEl = document.getElementById("sysCacheSummary");
+  if (sysSummaryEl) sysSummaryEl.textContent = totalSummary;
+
+  const cacheDirEl = document.getElementById("modelsCacheDir");
+  if (cacheDirEl && state.serverStatus?.cache_dir) {
+    cacheDirEl.textContent = state.serverStatus.cache_dir;
+  }
+
+  const uninstallAllBtn = document.getElementById("btnUninstallAllModels");
+  if (uninstallAllBtn) {
+    uninstallAllBtn.disabled =
+      (installedCount === 0 && finalTotal === 0) || state.isProcessing;
+    uninstallAllBtn.textContent = "UNINSTALL ALL";
+  }
+}
+
+export async function uninstallModel(target) {
+  if (state.isProcessing) {
+    setError("Cannot uninstall model weights while processing is running.");
+    return;
+  }
+
+  const btn =
+    target === "all"
+      ? document.getElementById("btnUninstallAllModels")
+      : document.getElementById(`sysbtn-${target}`);
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "REMOVING…";
+  }
+
+  try {
+    const fd = new FormData();
+    fd.append("target", target);
+    const response = await fetch("/api/models/uninstall", {
+      method: "POST",
+      body: fd,
+    });
+    if (!response.ok) {
+      let detail = `HTTP ${response.status}`;
+      try {
+        const err = await response.json();
+        if (err?.detail) detail = err.detail;
+      } catch (_) {}
+      throw new Error(detail);
+    }
+    const payload = await response.json();
+    if (payload?.status) {
+      state.serverStatus = payload.status;
+    }
+    updateCacheIndicator();
+  } catch (err) {
+    setError(err?.message || "Failed to uninstall model weights.");
+    updateCacheIndicator();
+  }
+}
+
+export function showModelContextMenu(key, x, y) {
+  const menu = dom.tabContextMenu;
+  if (!menu) return;
+  menu.innerHTML = "";
+
+  const tierInfo = getTierInfo(key);
+  const sizeBytes = Number(tierInfo?.size_bytes) || 0;
+  const isInstalled = Boolean(tierInfo?.cached || sizeBytes > 0);
+  const sizeLabel = isInstalled ? formatDiskBytes(sizeBytes) : "0 MB";
+  const titleLabel =
+    MODEL_CTX_LABELS[key] || PRESET_NAMES[key] || key.toUpperCase();
+
+  const head = document.createElement("div");
+  head.className = "ctx-head";
+  head.textContent = `${titleLabel} · ${isInstalled ? `${sizeLabel} ON DISK` : "NOT INSTALLED"}`;
+  menu.appendChild(head);
+
+  const addItem = (label, fn, disabled = false) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = `ctx-item${disabled ? " ctx-disabled" : ""}`;
+    b.textContent = label;
+    if (!disabled) {
+      b.addEventListener("click", () => {
+        menu.style.display = "none";
+        fn();
+      });
+    }
+    menu.appendChild(b);
+  };
+
+  if (isInstalled) {
+    addItem(
+      `UNINSTALL MODEL (${sizeLabel})`,
+      () => uninstallModel(key),
+      state.isProcessing
+    );
+  } else {
+    addItem("NOT INSTALLED (0 MB)", () => {}, true);
+  }
+
+  const sep = document.createElement("div");
+  sep.className = "ctx-sep";
+  menu.appendChild(sep);
+
+  addItem("MANAGE MODELS IN SETTINGS…", () => openPrefsDialog("models"));
+
+  menu.style.display = "block";
+  const rect = menu.getBoundingClientRect();
+  menu.style.left = `${Math.min(x, window.innerWidth - rect.width - 8)}px`;
+  menu.style.top = `${Math.min(y, window.innerHeight - rect.height - 8)}px`;
 }
 
 export async function syncServerStatus(isInitialLoad = false, onSelectTier = null) {

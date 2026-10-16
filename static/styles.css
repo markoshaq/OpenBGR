@@ -1751,6 +1751,46 @@ input[type="file"] {
   color: var(--accent);
 }
 
+.model-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.model-size {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text);
+  white-space: nowrap;
+  min-width: 58px;
+  text-align: right;
+}
+
+.model-size.dim {
+  color: var(--muted);
+}
+
+.model-uninstall-btn {
+  padding: 4px 9px;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  flex-shrink: 0;
+}
+
+.model-uninstall-btn:not(:disabled):hover {
+  border-color: #ef4444;
+  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.model-uninstall-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
 /* About pane */
 .about-mark {
   display: flex;
@@ -2016,7 +2056,7 @@ input[type="file"] {
 
 .tab-context-menu {
   position: fixed;
-  z-index: 400;
+  z-index: 10050;
   min-width: 190px;
   background: var(--surface);
   border: 1px solid var(--border-strong);

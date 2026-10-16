@@ -86,6 +86,8 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from huggingface_hub import try_to_load_from_cache
+from huggingface_hub.constants import HF_HUB_CACHE
+from huggingface_hub.file_download import repo_folder_name
 from PIL import Image, ImageFilter, ImageOps
 from torchvision import transforms
 from transformers import AutoModelForImageSegmentation
@@ -281,6 +283,26 @@ def get_preprocess_transform(resolution: int) -> transforms.Compose:
             ]
         )
     return _TRANSFORM_CACHE[resolution]
+
+
+def get_model_cache_dir(repo_id: str) -> Path:
+    """Returns the local Hugging Face Hub cache directory for `repo_id`."""
+    return Path(HF_HUB_CACHE) / repo_folder_name(repo_id=repo_id, repo_type="model")
+
+
+def get_model_disk_bytes(repo_id: str) -> int:
+    """Returns total bytes on disk occupied by `repo_id` inside the HF Hub cache."""
+    try:
+        folder = get_model_cache_dir(repo_id)
+        if not folder.exists():
+            return 0
+        return sum(
+            f.stat().st_size
+            for f in folder.rglob("*")
+            if f.is_file() and not f.is_symlink()
+        )
+    except Exception:
+        return 0
 
 
 def is_model_cached_locally(repo_id: str) -> bool:
@@ -667,15 +689,30 @@ def api_cancel() -> dict[str, Any]:
 def api_status() -> dict[str, Any]:
     """
     Returns detected compute hardware, floating-point precision mode,
-    recommended preset, and local offline cache availability for each tier.
+    recommended preset, and local offline cache availability and disk usage for each model.
     """
     tiers_status = {}
+    total_cache_bytes = 0
     for key, cfg in TIERS.items():
+        size_bytes = get_model_disk_bytes(cfg["repo_id"])
+        total_cache_bytes += size_bytes
         tiers_status[key] = {
             **cfg,
             "cached": is_model_cached_locally(cfg["repo_id"]),
             "active": MANAGER.active_model_key == cfg["model_key"],
+            "size_bytes": size_bytes,
         }
+
+    matting_repo = MODELS["matting"]
+    matting_bytes = get_model_disk_bytes(matting_repo)
+    total_cache_bytes += matting_bytes
+
+    cache_path = Path(HF_HUB_CACHE)
+    try:
+        cache_display = f"~/{cache_path.relative_to(Path.home())}"
+    except ValueError:
+        cache_display = str(cache_path)
+
     return {
         "device": DEVICE.type,
         "device_label": DEVICE_LABEL,
@@ -683,12 +720,63 @@ def api_status() -> dict[str, Any]:
         "recommended_tier": RECOMMENDED_TIER,
         "active_model": MANAGER.active_model_key,
         "version": APP_VERSION,
+        "total_cache_bytes": total_cache_bytes,
+        "cache_dir": cache_display,
         "tiers": tiers_status,
         "matting": {
-            "repo_id": MODELS["matting"],
-            "cached": is_model_cached_locally(MODELS["matting"]),
+            "key": "matting",
+            "model_key": "matting",
+            "repo_id": matting_repo,
+            "cached": is_model_cached_locally(matting_repo),
             "active": MANAGER.active_model_key == "matting",
+            "size_bytes": matting_bytes,
         },
+    }
+
+
+@app.post("/api/models/uninstall")
+def api_uninstall_model(target: str = Form(...)) -> dict[str, Any]:
+    """
+    Deletes cached Hugging Face weights for the requested preset (`low`, `mid`,
+    `high`, `matting`, or `all`) and unloads the model from memory if active.
+    """
+    if MANAGER.inference_lock.locked():
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot uninstall model weights while processing is running.",
+        )
+
+    target_map: dict[str, list[str]] = {
+        "low": ["lite"],
+        "lite": ["lite"],
+        "mid": ["full"],
+        "full": ["full"],
+        "high": ["hr"],
+        "hr": ["hr"],
+        "matting": ["matting"],
+        "all": list(MODELS.keys()),
+    }
+    model_keys = target_map.get(target.strip().lower())
+    if not model_keys:
+        raise HTTPException(status_code=400, detail=f"Unknown model target '{target}'.")
+
+    freed_bytes = 0
+    for m_key in model_keys:
+        if MANAGER.active_model_key == m_key:
+            MANAGER.unload()
+        repo_id = MODELS[m_key]
+        folder = get_model_cache_dir(repo_id)
+        freed_bytes += get_model_disk_bytes(repo_id)
+        if folder.exists():
+            shutil.rmtree(folder, ignore_errors=True)
+        lock_dir = Path(HF_HUB_CACHE) / ".locks" / folder.name
+        if lock_dir.exists():
+            shutil.rmtree(lock_dir, ignore_errors=True)
+
+    return {
+        "ok": True,
+        "freed_bytes": freed_bytes,
+        "status": api_status(),
     }
 
 
@@ -1331,6 +1419,8 @@ def build_native_menus(window: Any) -> list[Any]:
             MenuAction("Toggle Glass and Sheer Matting", call("toggleMatting()")),
             MenuSeparator(),
             MenuAction("Re-Run Segmentation", call("rerunSegmentation()")),
+            MenuSeparator(),
+            MenuAction("Manage Model Storage…", call("openSettings('models')")),
         ],
     )
 

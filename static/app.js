@@ -42,6 +42,8 @@ import {
   selectPrefsPane,
   openPrefsDialog,
   applyPreferences,
+  uninstallModel,
+  showModelContextMenu,
 } from "./preferences.js";
 import {
   openMultiFileChooser,
@@ -136,6 +138,26 @@ dom.infoModal.querySelectorAll(".prefs-nav-item").forEach((item) => {
   );
 });
 
+dom.infoModal.querySelectorAll("[data-uninstall-model]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const key = btn.getAttribute("data-uninstall-model");
+    if (key) uninstallModel(key);
+  });
+});
+
+document
+  .getElementById("btnUninstallAllModels")
+  ?.addEventListener("click", () => uninstallModel("all"));
+
+dom.infoModal.querySelectorAll(".model-row[data-model-key]").forEach((row) => {
+  row.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const key = row.getAttribute("data-model-key");
+    if (key) showModelContextMenu(key, e.clientX, e.clientY);
+  });
+});
+
 if (dom.btnToggleConfirmClose) {
   dom.btnToggleConfirmClose.classList.toggle("active", state.confirmCloseTab);
   dom.btnToggleConfirmClose.addEventListener("click", () => {
@@ -220,6 +242,12 @@ document.querySelectorAll("#tierSelector .tier-btn").forEach((btn) => {
       selectTier(targetTier);
     }
   });
+  btn.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const targetTier = btn.getAttribute("data-tier");
+    if (targetTier) showModelContextMenu(targetTier, e.clientX, e.clientY);
+  });
 });
 
 dom.btnProcess?.addEventListener("click", () => {
@@ -247,6 +275,11 @@ dom.btnMatting?.addEventListener("click", () => {
   dom.btnMatting.classList.toggle("active", state.matting);
   saveStateToActiveTab();
   syncMenuBarState();
+});
+dom.btnMatting?.addEventListener("contextmenu", (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  showModelContextMenu("matting", e.clientX, e.clientY);
 });
 
 dom.shadowCutoffSlider?.addEventListener("input", (e) => {
@@ -886,6 +919,7 @@ window.addEventListener("keyup", (e) => {
     toggleDespill: () => window.openBGR.toggleDespill(),
     toggleMatting: () => window.openBGR.toggleMatting(),
     rerun: () => window.openBGR.rerunSegmentation(),
+    manageModels: () => window.openBGR.openSettings("models"),
     openGithub: () => window.openBGR.openGithub(),
   };
 
