@@ -85,7 +85,7 @@ import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
-from huggingface_hub import try_to_load_from_cache
+from huggingface_hub import snapshot_download, try_to_load_from_cache
 from huggingface_hub.constants import HF_HUB_CACHE
 from huggingface_hub.file_download import repo_folder_name
 from PIL import Image, ImageFilter, ImageOps
@@ -172,9 +172,11 @@ TIERS: dict[str, dict[str, Any]] = {
     "lite": {
         "key": "lite",
         "label": "Lite",
+        "tech_name": "BiRefNet_lite",
         "sublabel": "1K · Fast",
         "model_key": "lite",
         "repo_id": MODELS["lite"],
+        "expected_bytes": 177_669_592,
         "resolution": 1024,
         "dynamic": False,
         "description": (
@@ -185,9 +187,11 @@ TIERS: dict[str, dict[str, Any]] = {
     "general": {
         "key": "general",
         "label": "General",
+        "tech_name": "BiRefNet",
         "sublabel": "1K · Studio",
         "model_key": "general",
         "repo_id": MODELS["general"],
+        "expected_bytes": 444_566_476,
         "resolution": 1024,
         "dynamic": False,
         "description": (
@@ -198,9 +202,11 @@ TIERS: dict[str, dict[str, Any]] = {
     "hr": {
         "key": "hr",
         "label": "Ultra HR",
+        "tech_name": "BiRefNet_HR",
         "sublabel": f"2K · {HR_RESOLUTION}px",
         "model_key": "hr",
         "repo_id": MODELS["hr"],
+        "expected_bytes": 444_566_476,
         "resolution": HR_RESOLUTION,
         "dynamic": False,
         "description": (
@@ -211,9 +217,11 @@ TIERS: dict[str, dict[str, Any]] = {
     "portrait": {
         "key": "portrait",
         "label": "Portrait",
+        "tech_name": "BiRefNet-portrait",
         "sublabel": "1K · People",
         "model_key": "portrait",
         "repo_id": MODELS["portrait"],
+        "expected_bytes": 444_566_476,
         "resolution": 1024,
         "dynamic": False,
         "description": (
@@ -224,9 +232,11 @@ TIERS: dict[str, dict[str, Any]] = {
     "matting": {
         "key": "matting",
         "label": "Matting",
+        "tech_name": "BiRefNet_HR-matting",
         "sublabel": "2K · Alpha",
         "model_key": "matting",
         "repo_id": MODELS["matting"],
+        "expected_bytes": 444_566_476,
         "resolution": HR_RESOLUTION,
         "dynamic": False,
         "description": (
@@ -237,9 +247,11 @@ TIERS: dict[str, dict[str, Any]] = {
     "dynamic": {
         "key": "dynamic",
         "label": "Dynamic",
+        "tech_name": "BiRefNet_dynamic",
         "sublabel": "Native Ratio",
         "model_key": "dynamic",
         "repo_id": MODELS["dynamic"],
+        "expected_bytes": 444_566_476,
         "resolution": HR_RESOLUTION,
         "dynamic": True,
         "description": (
@@ -909,6 +921,36 @@ def api_uninstall_model(target: str = Form(...)) -> dict[str, Any]:
     return {
         "ok": True,
         "freed_bytes": freed_bytes,
+        "status": api_status(),
+    }
+
+
+@app.post("/api/models/install")
+async def api_install_model(target: str = Form(...)) -> dict[str, Any]:
+    """
+    Downloads and caches the requested Hugging Face model checkpoint (`lite`,
+    `general`, `hr`, `portrait`, `matting`, or `dynamic`) in the background and
+    compacts any FP32 weights to FP16 on disk.
+    """
+    norm = normalize_tier_key(target)
+    if norm not in MODELS:
+        raise HTTPException(status_code=400, detail=f"Unknown model target '{target}'.")
+
+    repo_id = MODELS[norm]
+
+    def _download() -> None:
+        snapshot_download(repo_id=repo_id)
+        compact_model_cache_fp16(repo_id)
+
+    try:
+        await asyncio.to_thread(_download)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to download {repo_id}: {exc}"
+        ) from exc
+
+    return {
+        "ok": True,
         "status": api_status(),
     }
 

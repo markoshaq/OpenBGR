@@ -9,8 +9,6 @@ import {
   prefs,
   DOT_TOOLTIPS,
   TIER_KEYS,
-  TIER_STATUS_SHORT,
-  PRESET_NAMES,
   ACCENTS,
   normalizeTierKey,
   setError,
@@ -27,23 +25,35 @@ const PREFS_SECTION_MAP = {
   about: "settings-about",
 };
 
-const MODEL_CTX_LABELS = {
-  lite: "LITE 1K",
-  general: "GENERAL 1K",
-  hr: "ULTRA HR 2K",
-  portrait: "PORTRAIT 1K",
-  matting: "MATTING 2K",
-  dynamic: "DYNAMIC",
+const MODEL_TECH_NAMES = {
+  lite: "BiRefNet_lite",
+  general: "BiRefNet",
+  hr: "BiRefNet_HR",
+  portrait: "BiRefNet-portrait",
+  matting: "BiRefNet_HR-matting",
+  dynamic: "BiRefNet_dynamic",
 };
 
-export function formatDiskBytes(bytes) {
+const MODEL_EXPECTED_BYTES = {
+  lite: 177669592,
+  general: 444566476,
+  hr: 444566476,
+  portrait: 444566476,
+  matting: 444566476,
+  dynamic: 444566476,
+};
+
+let installingModelKey = null;
+
+export function formatDiskBytes(bytes, compact = false) {
   const n = Number(bytes) || 0;
-  if (n <= 0) return "0 MB";
+  const sp = compact ? "" : " ";
+  if (n <= 0) return `0${sp}MB`;
   const gb = n / (1024 * 1024 * 1024);
-  if (gb >= 1) return `${gb.toFixed(2)} GB`;
+  if (gb >= 1) return `${gb.toFixed(2)}${sp}GB`;
   const mb = n / (1024 * 1024);
-  if (mb >= 1) return `${mb.toFixed(1)} MB`;
-  return `${Math.max(1, Math.round(n / 1024))} KB`;
+  if (mb >= 1) return `${mb.toFixed(1)}${sp}MB`;
+  return `${Math.max(1, Math.round(n / 1024))}${sp}KB`;
 }
 
 function getTierInfo(key) {
@@ -56,13 +66,17 @@ function getTierAvailability(tierInfo) {
   return navigator.onLine ? "downloadable" : "unavailable";
 }
 
-function applyDotState(dotEl, status) {
+function applyDotState(dotEl, status, allowTooltip = true) {
   if (!dotEl) return;
   dotEl.classList.remove("ready", "downloadable", "unavailable");
   dotEl.classList.add(status);
+  if (!allowTooltip) {
+    dotEl.removeAttribute("title");
+    dotEl.removeAttribute("data-tooltip");
+    return;
+  }
   const tip = DOT_TOOLTIPS[status] || "";
   dotEl.setAttribute("data-tooltip", tip);
-  // Skip native title tooltip when an ancestor already provides a styled tooltip.
   if (dotEl.classList.contains("has-tooltip") || dotEl.closest(".has-tooltip")) {
     dotEl.removeAttribute("title");
   } else {
@@ -81,23 +95,27 @@ export function updateCacheIndicator() {
     const tierInfo = tiers[key];
     const status = getTierAvailability(tierInfo);
     const sizeBytes = Number(tierInfo?.size_bytes) || 0;
+    const expectedBytes =
+      Number(tierInfo?.expected_bytes) || MODEL_EXPECTED_BYTES[key] || 0;
     const isInstalled = Boolean(tierInfo?.cached || sizeBytes > 0);
     if (isInstalled) installedCount++;
     totalBytes += sizeBytes;
     const sizeLabel = isInstalled ? formatDiskBytes(sizeBytes) : "0 MB";
-
-    applyDotState(document.getElementById(`dot-${key}`), status);
-    applyDotState(document.getElementById(`sysdot-${key}`), status);
-
-    const statusDetail = isInstalled
-      ? `CACHED OFFLINE (${sizeLabel}) · Right-click to uninstall`
-      : TIER_STATUS_SHORT[status] || "";
-
-    const tierBtn = document.querySelector(
-      `#tierSelector .tier-btn[data-tier="${key}"]`
+    const compactSize = formatDiskBytes(
+      isInstalled && sizeBytes > 0 ? sizeBytes : expectedBytes,
+      true
     );
-    if (tierBtn) {
-      tierBtn.setAttribute("data-tooltip", statusDetail);
+    const techName = tierInfo?.tech_name || MODEL_TECH_NAMES[key] || key;
+
+    applyDotState(document.getElementById(`dot-${key}`), status, false);
+    applyDotState(document.getElementById(`sysdot-${key}`), status, true);
+
+    const techEl = document.getElementById(`tech-${key}`);
+    if (techEl) {
+      techEl.textContent =
+        installingModelKey === key
+          ? `${techName} (Installing…)`
+          : `${techName} (${compactSize})`;
     }
 
     const sizeEl = document.getElementById(`syssize-${key}`);
@@ -121,7 +139,8 @@ export function updateCacheIndicator() {
 
     const uninstallBtn = document.getElementById(`sysbtn-${key}`);
     if (uninstallBtn) {
-      uninstallBtn.disabled = !isInstalled || state.isProcessing;
+      uninstallBtn.disabled =
+        !isInstalled || state.isProcessing || Boolean(installingModelKey);
       uninstallBtn.textContent = "UNINSTALL";
     }
   });
@@ -190,21 +209,67 @@ export async function uninstallModel(target) {
   }
 }
 
+export async function installModel(target) {
+  if (state.isProcessing || installingModelKey) {
+    setError("Another model operation is already in progress.");
+    return;
+  }
+  if (!navigator.onLine) {
+    setError("Cannot install model weights while device is offline.");
+    return;
+  }
+
+  const norm = normalizeTierKey(target);
+  installingModelKey = norm;
+  updateCacheIndicator();
+
+  try {
+    const fd = new FormData();
+    fd.append("target", norm);
+    const response = await fetch("/api/models/install", {
+      method: "POST",
+      body: fd,
+    });
+    if (!response.ok) {
+      let detail = `HTTP ${response.status}`;
+      try {
+        const err = await response.json();
+        if (err?.detail) detail = err.detail;
+      } catch (_) {}
+      throw new Error(detail);
+    }
+    const payload = await response.json();
+    if (payload?.status) {
+      state.serverStatus = payload.status;
+    }
+  } catch (err) {
+    setError(err?.message || "Failed to install model weights.");
+  } finally {
+    installingModelKey = null;
+    updateCacheIndicator();
+  }
+}
+
 export function showModelContextMenu(key, x, y) {
   const menu = dom.tabContextMenu;
   if (!menu) return;
   menu.innerHTML = "";
 
-  const tierInfo = getTierInfo(key);
+  const norm = normalizeTierKey(key);
+  const tierInfo = getTierInfo(norm);
   const sizeBytes = Number(tierInfo?.size_bytes) || 0;
+  const expectedBytes =
+    Number(tierInfo?.expected_bytes) || MODEL_EXPECTED_BYTES[norm] || 0;
   const isInstalled = Boolean(tierInfo?.cached || sizeBytes > 0);
-  const sizeLabel = isInstalled ? formatDiskBytes(sizeBytes) : "0 MB";
-  const titleLabel =
-    MODEL_CTX_LABELS[key] || PRESET_NAMES[key] || key.toUpperCase();
+  const compactSize = formatDiskBytes(
+    isInstalled && sizeBytes > 0 ? sizeBytes : expectedBytes,
+    true
+  );
+  const techName = tierInfo?.tech_name || MODEL_TECH_NAMES[norm] || norm;
 
   const head = document.createElement("div");
   head.className = "ctx-head";
-  head.textContent = `${titleLabel} · ${isInstalled ? `${sizeLabel} ON DISK` : "NOT INSTALLED"}`;
+  head.textContent = techName;
   menu.appendChild(head);
 
   const addItem = (label, fn, disabled = false) => {
@@ -221,21 +286,24 @@ export function showModelContextMenu(key, x, y) {
     menu.appendChild(b);
   };
 
+  const busy = state.isProcessing || Boolean(installingModelKey);
   if (isInstalled) {
-    addItem(
-      `UNINSTALL MODEL (${sizeLabel})`,
-      () => uninstallModel(key),
-      state.isProcessing
-    );
+    addItem(`Uninstall (${compactSize})`, () => uninstallModel(norm), busy);
   } else {
-    addItem("NOT INSTALLED (0 MB)", () => {}, true);
+    addItem(
+      installingModelKey === norm
+        ? `Installing (${compactSize})…`
+        : `Install (${compactSize})`,
+      () => installModel(norm),
+      busy || !navigator.onLine
+    );
   }
 
   const sep = document.createElement("div");
   sep.className = "ctx-sep";
   menu.appendChild(sep);
 
-  addItem("MANAGE MODELS IN SETTINGS…", () => openPrefsDialog("models"));
+  addItem("Manage Models in Settings…", () => openPrefsDialog("models"));
 
   menu.style.display = "block";
   const rect = menu.getBoundingClientRect();

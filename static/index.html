@@ -289,13 +289,12 @@
           <div class="model-list" id="tierSelector">
             <button
               type="button"
-              class="tier-btn has-tooltip"
+              class="tier-btn"
               data-tier="lite"
-              data-tooltip="Checking cache…"
             >
               <div class="tier-head">
                 <span class="tier-label">LITE</span>
-                <span class="tier-tech">BiRefNet_lite</span>
+                <span class="tier-tech" id="tech-lite">BiRefNet_lite (169.4MB)</span>
               </div>
               <div class="tier-desc">Fastest for quick batches &amp; CPU.</div>
               <span class="tier-dot" id="dot-lite"></span>
@@ -303,13 +302,12 @@
 
             <button
               type="button"
-              class="tier-btn has-tooltip active"
+              class="tier-btn active"
               data-tier="general"
-              data-tooltip="Checking cache…"
             >
               <div class="tier-head">
                 <span class="tier-label">GENERAL</span>
-                <span class="tier-tech">BiRefNet</span>
+                <span class="tier-tech" id="tech-general">BiRefNet (424.0MB)</span>
               </div>
               <div class="tier-desc">Best all-rounder for everyday photos.</div>
               <span class="tier-dot" id="dot-general"></span>
@@ -317,13 +315,12 @@
 
             <button
               type="button"
-              class="tier-btn has-tooltip"
+              class="tier-btn"
               data-tier="hr"
-              data-tooltip="Checking cache…"
             >
               <div class="tier-head">
                 <span class="tier-label">ULTRA HR</span>
-                <span class="tier-tech">BiRefNet_HR</span>
+                <span class="tier-tech" id="tech-hr">BiRefNet_HR (424.0MB)</span>
               </div>
               <div class="tier-desc">Best for 4K/8K detail &amp; fine edges.</div>
               <span class="tier-dot" id="dot-hr"></span>
@@ -331,13 +328,12 @@
 
             <button
               type="button"
-              class="tier-btn has-tooltip"
+              class="tier-btn"
               data-tier="portrait"
-              data-tooltip="Checking cache…"
             >
               <div class="tier-head">
                 <span class="tier-label">PORTRAIT</span>
-                <span class="tier-tech">BiRefNet-portrait</span>
+                <span class="tier-tech" id="tech-portrait">BiRefNet-portrait (424.0MB)</span>
               </div>
               <div class="tier-desc">Best for portraits, hair &amp; eyelashes.</div>
               <span class="tier-dot" id="dot-portrait"></span>
@@ -345,13 +341,12 @@
 
             <button
               type="button"
-              class="tier-btn has-tooltip"
+              class="tier-btn"
               data-tier="matting"
-              data-tooltip="Checking cache…"
             >
               <div class="tier-head">
                 <span class="tier-label">MATTING</span>
-                <span class="tier-tech">BiRefNet_HR-matting</span>
+                <span class="tier-tech" id="tech-matting">BiRefNet_HR-matting (424.0MB)</span>
               </div>
               <div class="tier-desc">Best for glass, smoke &amp; sheer fabric.</div>
               <span class="tier-dot" id="dot-matting"></span>
@@ -359,13 +354,12 @@
 
             <button
               type="button"
-              class="tier-btn has-tooltip"
+              class="tier-btn"
               data-tier="dynamic"
-              data-tooltip="Checking cache…"
             >
               <div class="tier-head">
                 <span class="tier-label">DYNAMIC</span>
-                <span class="tier-tech">BiRefNet_dynamic</span>
+                <span class="tier-tech" id="tech-dynamic">BiRefNet_dynamic (424.0MB)</span>
               </div>
               <div class="tier-desc">Best for panoramas &amp; tall banners.</div>
               <span class="tier-dot" id="dot-dynamic"></span>

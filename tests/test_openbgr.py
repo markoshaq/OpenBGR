@@ -102,6 +102,9 @@ class TestOpenBGR(unittest.TestCase):
         with self.assertRaises(HTTPException) as ctx:
             openbgr_app.api_uninstall_model(target="invalid-tier")
         self.assertEqual(ctx.exception.status_code, 400)
+        with self.assertRaises(HTTPException) as ctx2:
+            asyncio.run(openbgr_app.api_install_model(target="invalid-tier"))
+        self.assertEqual(ctx2.exception.status_code, 400)
 
     def test_fp16_cache_compaction(self) -> None:
         from safetensors import safe_open

@@ -489,7 +489,7 @@ body {
   align-items: flex-start;
   text-align: left;
   gap: 2px;
-  padding: 7px 20px 7px 10px;
+  padding: 7px 18px 7px 9px;
   background: var(--bg);
   border: 1px solid var(--border);
 }
@@ -501,16 +501,20 @@ body {
 .tier-head {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: 5px;
   width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
 }
 
 .tier-tech {
   font-family: var(--mono);
-  font-size: 9.5px;
+  font-size: 8px;
   font-weight: 400;
-  letter-spacing: 0.01em;
+  letter-spacing: -0.02em;
   color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .tier-desc {
@@ -2196,8 +2200,8 @@ input[type="file"] {
 }
 
 .tab-context-menu .ctx-head {
-  font-size: 8px;
-  letter-spacing: 0.12em;
+  font-size: 9.5px;
+  letter-spacing: 0.02em;
   color: var(--muted);
   padding: 5px 10px 3px;
 }

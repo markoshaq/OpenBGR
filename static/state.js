@@ -9,12 +9,6 @@ export const DOT_TOOLTIPS = {
   unavailable: "UNAVAILABLE OFFLINE — Model is not cached and device is offline",
 };
 
-export const TIER_STATUS_SHORT = {
-  ready: "CACHED OFFLINE",
-  downloadable: "DOWNLOADS ON 1ST RUN",
-  unavailable: "NOT CACHED — DEVICE OFFLINE",
-};
-
 export const TIER_KEYS = [
   "lite",
   "general",
