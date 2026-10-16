@@ -8,10 +8,12 @@ import {
   state,
   dom,
   prefs,
+  TIER_KEYS,
   savePrefs,
   getDefaultPrefs,
   getActiveTab,
   saveStateToActiveTab,
+  normalizeTierKey,
   setError,
   openConfirmModal,
   closeConfirmModal,
@@ -205,7 +207,7 @@ dom.prefDefaultTier?.addEventListener("change", (e) => {
     const targetTier =
       prefs.defaultTier !== "auto"
         ? prefs.defaultTier
-        : state.serverStatus?.recommended_tier || "mid";
+        : state.serverStatus?.recommended_tier || "general";
     selectTier(targetTier);
   }
 });
@@ -232,12 +234,12 @@ dom.btnResetPrefs?.addEventListener("click", () => {
   if (!state.resultBlob) {
     state.exportFormat = prefs.defaultFormat;
     applyBackdrop(prefs.defaultBackdrop);
-    selectTier(state.serverStatus?.recommended_tier || "mid");
+    selectTier(state.serverStatus?.recommended_tier || "general");
     updateExportTelemetry();
   }
 });
 
-// Left sidebar: Hardware presets, Process button, Edge & Reflection toggles, Shadow Cutoff
+// Left sidebar: Model selector, Process button, Edge & Reflection toggles, Shadow Cutoff
 document.querySelectorAll("#tierSelector .tier-btn").forEach((btn) => {
   btn.addEventListener("click", () => {
     const targetTier = btn.getAttribute("data-tier");
@@ -271,18 +273,6 @@ dom.btnDespill?.addEventListener("click", () => {
   dom.btnDespill.classList.toggle("active", state.despill);
   saveStateToActiveTab();
   syncMenuBarState();
-});
-
-dom.btnMatting?.addEventListener("click", () => {
-  state.matting = !state.matting;
-  dom.btnMatting.classList.toggle("active", state.matting);
-  saveStateToActiveTab();
-  syncMenuBarState();
-});
-dom.btnMatting?.addEventListener("contextmenu", (e) => {
-  e.preventDefault();
-  e.stopPropagation();
-  showModelContextMenu("matting", e.clientX, e.clientY);
 });
 
 dom.shadowCutoffSlider?.addEventListener("input", (e) => {
@@ -769,13 +759,13 @@ window.openBGR = {
     }
   },
   selectPreset: (tierKey) => {
-    if (["low", "mid", "high"].includes(tierKey) && tierKey !== state.tier) {
-      selectTier(tierKey);
+    const norm = normalizeTierKey(tierKey);
+    if (TIER_KEYS.includes(norm) && norm !== state.tier) {
+      selectTier(norm);
     }
   },
   toggleDefringe: () => dom.btnDefringe.click(),
   toggleDespill: () => dom.btnDespill?.click(),
-  toggleMatting: () => dom.btnMatting?.click(),
   rerunSegmentation: () => {
     if (state.sourceFile && !state.isProcessing) runSegmentation();
   },
@@ -957,12 +947,14 @@ window.addEventListener("keyup", (e) => {
     toggleLoupe: () => window.openBGR.toggleLoupe(),
     toggleTheme: () => window.openBGR.toggleTheme(),
     toggleFullscreen: () => window.openBGR.toggleFullscreen(),
-    presetLow: () => window.openBGR.selectPreset("low"),
-    presetMid: () => window.openBGR.selectPreset("mid"),
-    presetHigh: () => window.openBGR.selectPreset("high"),
+    presetLite: () => window.openBGR.selectPreset("lite"),
+    presetGeneral: () => window.openBGR.selectPreset("general"),
+    presetHr: () => window.openBGR.selectPreset("hr"),
+    presetPortrait: () => window.openBGR.selectPreset("portrait"),
+    presetMatting: () => window.openBGR.selectPreset("matting"),
+    presetDynamic: () => window.openBGR.selectPreset("dynamic"),
     toggleDefringe: () => window.openBGR.toggleDefringe(),
     toggleDespill: () => window.openBGR.toggleDespill(),
-    toggleMatting: () => window.openBGR.toggleMatting(),
     rerun: () => window.openBGR.rerunSegmentation(),
     manageModels: () => window.openBGR.openSettings("models"),
     openGithub: () => window.openBGR.openGithub(),

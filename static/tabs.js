@@ -17,6 +17,7 @@ import {
   setError,
   openConfirmModal,
   closeConfirmModal,
+  normalizeTierKey,
   PRESET_NAMES,
 } from "./state.js";
 import { renderStageGeometry, applyZoomTransform } from "./stage.js";
@@ -352,10 +353,9 @@ export async function switchToTab(tabId) {
   state.previewObjectUrl = tab.previewObjectUrl;
   state.naturalWidth = tab.naturalWidth;
   state.naturalHeight = tab.naturalHeight;
-  state.tier = tab.tier;
+  state.tier = normalizeTierKey(tab.tier);
   state.defringe = tab.defringe;
   state.despill = tab.despill ?? true;
-  state.matting = tab.matting ?? false;
   state.shadowCutoff = tab.shadowCutoff ?? 0;
   state.viewMode = tab.viewMode;
   state.splitPercent = tab.splitPercent;
@@ -377,7 +377,6 @@ export async function switchToTab(tabId) {
   });
   dom.btnDefringe.classList.toggle("active", state.defringe);
   dom.btnDespill?.classList.toggle("active", state.despill);
-  dom.btnMatting?.classList.toggle("active", state.matting);
   if (dom.shadowCutoffSlider) {
     dom.shadowCutoffSlider.value = String(state.shadowCutoff);
   }
@@ -536,9 +535,10 @@ export function ingestImageFile(file) {
 }
 
 export function selectTier(tierKey) {
-  state.tier = tierKey;
+  const norm = normalizeTierKey(tierKey);
+  state.tier = norm;
   document.querySelectorAll("#tierSelector .tier-btn").forEach((btn) => {
-    btn.classList.toggle("active", btn.getAttribute("data-tier") === tierKey);
+    btn.classList.toggle("active", btn.getAttribute("data-tier") === norm);
   });
   updateCacheIndicator();
   saveStateToActiveTab();
@@ -591,12 +591,10 @@ export function syncMenuBarState() {
       else if (checkKey === "view:original") checked = state.viewMode === "original";
       else if (checkKey === "loupe") checked = state.loupeEnabled;
       else if (checkKey === "theme:light") checked = prefs.theme === "light";
-      else if (checkKey === "tier:low") checked = state.tier === "low";
-      else if (checkKey === "tier:mid") checked = state.tier === "mid";
-      else if (checkKey === "tier:high") checked = state.tier === "high";
-      else if (checkKey === "defringe") checked = state.defringe;
+      else if (checkKey.startsWith("tier:")) {
+        checked = state.tier === checkKey.slice(5);
+      } else if (checkKey === "defringe") checked = state.defringe;
       else if (checkKey === "despill") checked = state.despill;
-      else if (checkKey === "matting") checked = state.matting;
       checkSpan.textContent = checked ? "✓" : "";
     }
   });
@@ -640,9 +638,7 @@ export function cancelProcessing() {
 export async function runSegmentation() {
   if (!state.sourceFile) return;
 
-  const tierInfo = state.matting
-    ? state.serverStatus?.matting
-    : state.serverStatus?.tiers?.[state.tier];
+  const tierInfo = state.serverStatus?.tiers?.[state.tier];
   if (tierInfo && !tierInfo.cached && !navigator.onLine) {
     setError("Selected model is not cached on disk and device is currently offline.");
     return;
@@ -665,9 +661,7 @@ export async function runSegmentation() {
   syncMenuBarState();
 
   const isCached = tierInfo ? tierInfo.cached : true;
-  const presetName = state.matting
-    ? "MATTING"
-    : PRESET_NAMES[state.tier] || state.tier.toUpperCase();
+  const presetName = PRESET_NAMES[state.tier] || state.tier.toUpperCase();
   const qualityDesc =
     state.exportWidth > 0 || state.exportHeight > 0
       ? `${state.exportWidth || "AUTO"}×${state.exportHeight || "AUTO"}`
@@ -679,7 +673,7 @@ export async function runSegmentation() {
     ? "PROCESSING IMAGE"
     : "PROCESSING IMAGE — FETCHING MODEL WEIGHTS";
   dom.busySub.textContent =
-    `Exporting to ${destDesc} using ${presetName} preset ` +
+    `Exporting to ${destDesc} using ${presetName} model ` +
     `at ${qualityDesc} quality.` +
     (isCached
       ? ""
@@ -690,7 +684,6 @@ export async function runSegmentation() {
   formData.append("tier", state.tier);
   formData.append("defringe", state.defringe ? "true" : "false");
   formData.append("despill", state.despill ? "true" : "false");
-  formData.append("matting", state.matting ? "true" : "false");
 
   try {
     const response = await fetch("/api/remove-bg", {

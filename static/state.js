@@ -15,17 +15,34 @@ export const TIER_STATUS_SHORT = {
   unavailable: "NOT CACHED — DEVICE OFFLINE",
 };
 
-export const TIER_META = {
-  low: "LITE 1K — BiRefNet_lite · Swin-T @1024px · ~110 MB. Fastest on CPU & integrated GPUs.",
-  mid: "FULL 1K — BiRefNet · Swin-L @1024px · ~440 MB. Studio hair, fur & soft alpha.",
-  high: "ULTRA 2K — BiRefNet_HR · Swin-L @2K HR. Max detail for 4K/8K photography.",
-  matting: "MATTING — BiRefNet-matting. True alpha for glass, smoke & sheer fabric.",
+export const TIER_KEYS = [
+  "lite",
+  "general",
+  "hr",
+  "portrait",
+  "matting",
+  "dynamic",
+];
+
+const TIER_ALIASES = {
+  low: "lite",
+  mid: "general",
+  full: "general",
+  high: "hr",
 };
 
+export function normalizeTierKey(key) {
+  const cleaned = String(key || "").trim().toLowerCase();
+  return TIER_ALIASES[cleaned] || cleaned;
+}
+
 export const PRESET_NAMES = {
-  low: "LITE 1K",
-  mid: "FULL 1K",
-  high: "ULTRA 2K",
+  lite: "LITE 1K",
+  general: "GENERAL 1K",
+  hr: "ULTRA HR 2K",
+  portrait: "PORTRAIT 1K",
+  matting: "MATTING 2K",
+  dynamic: "DYNAMIC",
 };
 
 export const FORMAT_EXT = {
@@ -63,7 +80,10 @@ const PREF_SCHEMA = {
   theme: { values: ["dark", "light"], fallback: "dark" },
   accent: { values: ["default", ...Object.keys(ACCENTS)], fallback: "default" },
   density: { values: ["comfortable", "compact"], fallback: "comfortable" },
-  defaultTier: { values: ["auto", "low", "mid", "high"], fallback: "auto" },
+  defaultTier: {
+    values: ["auto", ...TIER_KEYS],
+    fallback: "auto",
+  },
   defaultFormat: { values: ["png", "webp", "jpg", "mask"], fallback: "png" },
   defaultBackdrop: {
     values: ["checker", "#ffffff", "#000000", "#18181b"],
@@ -75,7 +95,10 @@ const PREF_SCHEMA = {
 function sanitizePrefs(stored) {
   const clean = {};
   for (const [key, rule] of Object.entries(PREF_SCHEMA)) {
-    const v = stored[key];
+    let v = stored[key];
+    if (key === "defaultTier" && typeof v === "string" && v !== "auto") {
+      v = normalizeTierKey(v);
+    }
     if (rule.type === "boolean") {
       clean[key] = typeof v === "boolean" ? v : rule.fallback;
     } else {
@@ -114,10 +137,9 @@ export const state = {
   tabs: [],
   activeTabId: null,
   confirmCloseTab: prefs.confirmClose,
-  tier: prefs.defaultTier !== "auto" ? prefs.defaultTier : "mid",
+  tier: prefs.defaultTier !== "auto" ? prefs.defaultTier : "general",
   defringe: true,
   despill: true,
-  matting: false,
   shadowCutoff: 0,
   viewMode: "split",
   splitPercent: 50,
@@ -225,7 +247,6 @@ export const dom = {
   btnDownload: document.getElementById("btnDownload"),
   btnDefringe: document.getElementById("btnDefringe"),
   btnDespill: document.getElementById("btnDespill"),
-  btnMatting: document.getElementById("btnMatting"),
   shadowCutoffSlider: document.getElementById("shadowCutoffSlider"),
   shadowCutoffLabel: document.getElementById("shadowCutoffLabel"),
 
@@ -274,7 +295,6 @@ export function createTabRecord(overrides = {}) {
     tier: state.tier,
     defringe: state.defringe,
     despill: state.despill,
-    matting: state.matting,
     shadowCutoff: state.shadowCutoff,
     viewMode: "split",
     splitPercent: 50,
@@ -312,7 +332,6 @@ export function saveStateToActiveTab() {
   tab.tier = state.tier;
   tab.defringe = state.defringe;
   tab.despill = state.despill;
-  tab.matting = state.matting;
   tab.shadowCutoff = state.shadowCutoff;
   tab.viewMode = state.viewMode;
   tab.splitPercent = state.splitPercent;

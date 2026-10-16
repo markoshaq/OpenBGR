@@ -405,7 +405,6 @@ export async function runBatch(tab) {
     tier: tab.tier ?? state.tier,
     defringe: tab.defringe ?? state.defringe,
     despill: tab.despill ?? state.despill,
-    matting: tab.matting ?? state.matting,
     format: tab.exportFormat ?? state.exportFormat,
     scale: tab.exportScale ?? state.exportScale,
     exportWidth: tab.exportWidth ?? 0,
@@ -414,9 +413,7 @@ export async function runBatch(tab) {
     shadowCutoff: tab.shadowCutoff ?? state.shadowCutoff,
   };
 
-  const tierInfo = snap.matting
-    ? state.serverStatus?.matting
-    : state.serverStatus?.tiers?.[snap.tier];
+  const tierInfo = state.serverStatus?.tiers?.[snap.tier];
   if (tierInfo && tierInfo.cached === false && !navigator.onLine) {
     setError("Selected model is not cached on disk and device is currently offline.");
     return;
@@ -452,9 +449,7 @@ export async function runBatch(tab) {
   dom.busyOverlay.classList.add("active");
   const isCached = tierInfo ? tierInfo.cached !== false : true;
 
-  const presetName = snap.matting
-    ? "MATTING"
-    : PRESET_NAMES[snap.tier] || snap.tier.toUpperCase();
+  const presetName = PRESET_NAMES[snap.tier] || snap.tier.toUpperCase();
   const qualityDesc =
     snap.exportWidth > 0 || snap.exportHeight > 0
       ? `${snap.exportWidth || "AUTO"}×${snap.exportHeight || "AUTO"}`
@@ -463,7 +458,7 @@ export async function runBatch(tab) {
     ? outputDir
     : "browser downloads (openbgr-cutouts.zip)";
   const batchDesc =
-    `Exporting to ${destDesc} using ${presetName} preset ` +
+    `Exporting to ${destDesc} using ${presetName} model ` +
     `at ${qualityDesc} quality.` +
     (isCached ? "" : " Fetching model weights (first run).");
 
@@ -491,7 +486,6 @@ export async function runBatch(tab) {
       fd.append("tier", snap.tier);
       fd.append("defringe", snap.defringe ? "true" : "false");
       fd.append("despill", snap.despill ? "true" : "false");
-      fd.append("matting", snap.matting ? "true" : "false");
 
       const response = await fetch("/api/remove-bg", {
         method: "POST",

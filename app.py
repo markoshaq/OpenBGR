@@ -140,51 +140,111 @@ SYSTEM_MEMORY_GB: float = get_system_memory_gb()
 # pyramids; on 8 GB systems, 1536x1536 (2.25x pixel density of 1024x1024) prevents swap thrashing.
 HR_RESOLUTION: int = 2048 if SYSTEM_MEMORY_GB >= 14.0 else 1536
 
-# Supported Hugging Face model repositories — each tier maps to a distinct trained model,
-# plus `ZhengPeng7/BiRefNet-matting` for trimap-free alpha matting of glass/water/sheer materials.
+# Supported Hugging Face model repositories — each key maps to a distinct official
+# BiRefNet checkpoint from ZhengPeng7.
 MODELS: dict[str, str] = {
-    "lite": "ZhengPeng7/BiRefNet_lite",         # Swin-T backbone trained at 1024x1024
-    "full": "ZhengPeng7/BiRefNet",              # Swin-L backbone trained at 1024x1024
-    "hr": "ZhengPeng7/BiRefNet_HR",             # Swin-L high-res backbone (1536px / 2048px)
-    "matting": "ZhengPeng7/BiRefNet-matting",   # Swin-L alpha matting backbone for glass/sheer/water
+    "lite": "ZhengPeng7/BiRefNet_lite",         # Swin-T @ 1024x1024 (~170 MB -> ~85 MB FP16)
+    "general": "ZhengPeng7/BiRefNet",           # Swin-L @ 1024x1024 (~424 MB FP16)
+    "hr": "ZhengPeng7/BiRefNet_HR",             # Swin-L @ 2048x2048 (~424 MB FP16)
+    "portrait": "ZhengPeng7/BiRefNet-portrait", # Swin-L @ 1024x1024 (~844 MB -> ~424 MB FP16)
+    "matting": "ZhengPeng7/BiRefNet_HR-matting",# Swin-L @ 2048x2048 (~424 MB FP16)
+    "dynamic": "ZhengPeng7/BiRefNet_dynamic",   # Swin-L @ dynamic native aspect ratio (~424 MB FP16)
 }
 
-# Hardware execution tiers. Each tier loads a dedicated BiRefNet checkpoint.
+LEGACY_MATTING_REPO = "ZhengPeng7/BiRefNet-matting"
+
+TIER_ALIASES: dict[str, str] = {
+    "low": "lite",
+    "mid": "general",
+    "full": "general",
+    "high": "hr",
+}
+
+
+def normalize_tier_key(tier: str) -> str:
+    """Resolves legacy preset names (`low`, `mid`, `high`) to canonical model keys."""
+    cleaned = (tier or "").strip().lower()
+    return TIER_ALIASES.get(cleaned, cleaned)
+
+
+# Selectable BiRefNet models exposed in the UI and `/api/status`.
 TIERS: dict[str, dict[str, Any]] = {
-    "low": {
-        "key": "low",
-        "label": "Low-End",
-        "sublabel": "Lite / 1024px Swin-T",
+    "lite": {
+        "key": "lite",
+        "label": "Lite",
+        "sublabel": "1K · Fast",
         "model_key": "lite",
         "repo_id": MODELS["lite"],
         "resolution": 1024,
+        "dynamic": False,
         "description": (
-            "Lightweight BiRefNet_lite (Swin-T) at 1024x1024 (~110 MB in FP16). "
-            "Fastest inference for CPU-only machines and integrated graphics."
+            "BiRefNet_lite (Swin-T @ 1024px). Fast general cutouts for quick batches, "
+            "CPUs, and integrated graphics."
         ),
     },
-    "mid": {
-        "key": "mid",
-        "label": "Mid-Range",
-        "sublabel": "Full / 1024px Swin-L",
-        "model_key": "full",
-        "repo_id": MODELS["full"],
+    "general": {
+        "key": "general",
+        "label": "General",
+        "sublabel": "1K · Studio",
+        "model_key": "general",
+        "repo_id": MODELS["general"],
         "resolution": 1024,
+        "dynamic": False,
         "description": (
-            "Full BiRefNet (Swin-L) at 1024x1024 (~440 MB in FP16). Default for Apple "
-            "Silicon and GPUs, delivering studio-grade hair, fur, and soft edge matting."
+            "BiRefNet (Swin-L @ 1024px). All-round flagship for products, objects, "
+            "animals, and everyday photography."
         ),
     },
-    "high": {
-        "key": "high",
-        "label": "High-End",
-        "sublabel": f"Ultra HR / {HR_RESOLUTION}px Swin-L",
+    "hr": {
+        "key": "hr",
+        "label": "Ultra HR",
+        "sublabel": f"2K · {HR_RESOLUTION}px",
         "model_key": "hr",
         "repo_id": MODELS["hr"],
         "resolution": HR_RESOLUTION,
+        "dynamic": False,
         "description": (
-            f"High-Resolution BiRefNet_HR (Swin-L) evaluated at {HR_RESOLUTION}x{HR_RESOLUTION} "
-            "for high-megapixel commercial photography and micro-strand detail."
+            f"BiRefNet_HR (Swin-L @ {HR_RESOLUTION}px). Native 2K inference for 4K/8K "
+            "photography and intricate micro-edge detail."
+        ),
+    },
+    "portrait": {
+        "key": "portrait",
+        "label": "Portrait",
+        "sublabel": "1K · People",
+        "model_key": "portrait",
+        "repo_id": MODELS["portrait"],
+        "resolution": 1024,
+        "dynamic": False,
+        "description": (
+            "BiRefNet-portrait (Swin-L @ 1024px). Fine-tuned for human subjects, "
+            "headshots, flyaway hair strands, eyelashes, and clothing."
+        ),
+    },
+    "matting": {
+        "key": "matting",
+        "label": "Matting",
+        "sublabel": "2K · Alpha",
+        "model_key": "matting",
+        "repo_id": MODELS["matting"],
+        "resolution": HR_RESOLUTION,
+        "dynamic": False,
+        "description": (
+            f"BiRefNet_HR-matting (Swin-L @ {HR_RESOLUTION}px). High-resolution soft alpha "
+            "matting for glass, smoke, veils, sheer fabric, and fine hair."
+        ),
+    },
+    "dynamic": {
+        "key": "dynamic",
+        "label": "Dynamic",
+        "sublabel": "Native Ratio",
+        "model_key": "dynamic",
+        "repo_id": MODELS["dynamic"],
+        "resolution": HR_RESOLUTION,
+        "dynamic": True,
+        "description": (
+            "BiRefNet_dynamic (Swin-L). Preserves native aspect ratio up to 2K without "
+            "square distortion — ideal for panoramas and vertical banners."
         ),
     },
 }
@@ -236,21 +296,21 @@ def format_device_label(device: torch.device) -> str:
 
 def select_recommended_tier(device: torch.device) -> str:
     """
-    Heuristically chooses the default hardware preset at startup:
-    - CPU hosts default to 'low' (1024x1024 BiRefNet_lite) for responsive latency.
-    - Dedicated CUDA GPUs with >= 16 GB VRAM default to 'high' (2048x2048 BiRefNet_HR).
-    - All other GPU/MPS accelerators default to 'mid' (1024x1024 Full BiRefNet Swin-L).
+    Heuristically chooses the default model at startup:
+    - CPU hosts default to 'lite' (1024x1024 BiRefNet_lite) for responsive latency.
+    - Dedicated CUDA GPUs with >= 16 GB VRAM default to 'hr' (2048x2048 BiRefNet_HR).
+    - All other GPU/MPS accelerators default to 'general' (1024x1024 BiRefNet Swin-L).
     """
     if device.type == "cpu":
-        return "low"
+        return "lite"
     if device.type == "cuda":
         try:
             vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
             if vram_gb >= 16.0:
-                return "high"
+                return "hr"
         except Exception:
             pass
-    return "mid"
+    return "general"
 
 
 DEVICE: torch.device = detect_compute_device()
@@ -262,27 +322,52 @@ DTYPE: torch.dtype = torch.float16 if DEVICE.type in ("mps", "cuda") else torch.
 PRECISION_LABEL: str = "FP16" if DTYPE == torch.float16 else "FP32"
 RECOMMENDED_TIER: str = select_recommended_tier(DEVICE)
 
-# Cache compiled torchvision transform pipelines keyed by target resolution.
-_TRANSFORM_CACHE: dict[int, transforms.Compose] = {}
+# Cache compiled torchvision transform pipelines keyed by target (height, width).
+_TRANSFORM_CACHE: dict[tuple[int, int], transforms.Compose] = {}
 
 
-def get_preprocess_transform(resolution: int) -> transforms.Compose:
+def get_preprocess_transform(
+    resolution: int | tuple[int, int],
+) -> transforms.Compose:
     """
     Returns a cached torchvision preprocessing pipeline that resizes an RGB PIL
-    image to `(resolution, resolution)` and applies ImageNet normalization.
+    image to `(height, width)` and applies ImageNet normalization.
     """
-    if resolution not in _TRANSFORM_CACHE:
-        _TRANSFORM_CACHE[resolution] = transforms.Compose(
+    size_hw = (
+        (resolution, resolution)
+        if isinstance(resolution, int)
+        else (int(resolution[0]), int(resolution[1]))
+    )
+    if size_hw not in _TRANSFORM_CACHE:
+        _TRANSFORM_CACHE[size_hw] = transforms.Compose(
             [
                 transforms.Resize(
-                    (resolution, resolution),
+                    size_hw,
                     interpolation=transforms.InterpolationMode.BILINEAR,
                 ),
                 transforms.ToTensor(),
                 transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD),
             ]
         )
-    return _TRANSFORM_CACHE[resolution]
+    return _TRANSFORM_CACHE[size_hw]
+
+
+def compute_dynamic_size(orig_w: int, orig_h: int, max_side: int) -> tuple[int, int]:
+    """
+    Computes a `(height, width)` pair for `BiRefNet_dynamic` that preserves the
+    source image's aspect ratio within `[256, max_side]` while rounding both axes
+    to multiples of 32 (required by the 4-stage Swin-L window/patch hierarchy).
+    """
+    long_side = max(1, orig_w, orig_h)
+    if long_side > max_side:
+        scale = max_side / float(long_side)
+    elif long_side < 512:
+        scale = 512.0 / float(long_side)
+    else:
+        scale = 1.0
+    target_w = max(256, min(max_side, int(round((orig_w * scale) / 32.0)) * 32))
+    target_h = max(256, min(max_side, int(round((orig_h * scale) / 32.0)) * 32))
+    return (target_h, target_w)
 
 
 def get_model_cache_dir(repo_id: str) -> Path:
@@ -608,7 +693,7 @@ def suppress_color_spill(
 
 def segment_foreground(
     raw_image: Image.Image,
-    tier: str = "mid",
+    tier: str = "general",
     defringe: bool = True,
     despill: bool = True,
     matting: bool = False,
@@ -621,17 +706,12 @@ def segment_foreground(
     if job_epoch is None:
         job_epoch = MANAGER.cancel_epoch
 
-    if tier not in TIERS:
-        tier = RECOMMENDED_TIER
+    norm_tier = "matting" if matting else normalize_tier_key(tier)
+    if norm_tier not in TIERS:
+        norm_tier = RECOMMENDED_TIER
 
-    tier_cfg = dict(TIERS[tier])
-    if matting:
-        model_key = "matting"
-        internal_res = 1024
-        tier_cfg["sublabel"] = "Matting / 1024px Glass & Sheer"
-    else:
-        model_key = tier_cfg["model_key"]
-        internal_res = tier_cfg["resolution"]
+    tier_cfg = dict(TIERS[norm_tier])
+    model_key = tier_cfg["model_key"]
 
     # Serialize GPU/MPS execution so cancelling and starting a new job never
     # causes two concurrent forward passes or mid-pass model eviction.
@@ -648,7 +728,14 @@ def segment_foreground(
         if oriented_image is not raw_image:
             oriented_image.close()
 
-        preprocess = get_preprocess_transform(internal_res)
+        if tier_cfg.get("dynamic"):
+            dyn_h, dyn_w = compute_dynamic_size(
+                orig_w, orig_h, int(tier_cfg["resolution"])
+            )
+            preprocess = get_preprocess_transform((dyn_h, dyn_w))
+            tier_cfg["sublabel"] = f"Dynamic / {dyn_w}x{dyn_h}"
+        else:
+            preprocess = get_preprocess_transform(int(tier_cfg["resolution"]))
         input_tensor: Optional[torch.Tensor] = None
         outputs: Any = None
         pred_logits: Optional[torch.Tensor] = None
@@ -741,7 +828,7 @@ def api_cancel() -> dict[str, Any]:
 def api_status() -> dict[str, Any]:
     """
     Returns detected compute hardware, floating-point precision mode,
-    recommended preset, and local offline cache availability and disk usage for each model.
+    recommended model, and local offline cache availability and disk usage for each model.
     """
     tiers_status = {}
     total_cache_bytes = 0
@@ -755,9 +842,9 @@ def api_status() -> dict[str, Any]:
             "size_bytes": size_bytes,
         }
 
-    matting_repo = MODELS["matting"]
-    matting_bytes = get_model_disk_bytes(matting_repo)
-    total_cache_bytes += matting_bytes
+    # Include any leftover legacy 1K matting cache in total disk usage so Uninstall All
+    # accurately reflects and reclaims it if present.
+    total_cache_bytes += get_model_disk_bytes(LEGACY_MATTING_REPO)
 
     cache_path = Path(HF_HUB_CACHE)
     try:
@@ -775,22 +862,15 @@ def api_status() -> dict[str, Any]:
         "total_cache_bytes": total_cache_bytes,
         "cache_dir": cache_display,
         "tiers": tiers_status,
-        "matting": {
-            "key": "matting",
-            "model_key": "matting",
-            "repo_id": matting_repo,
-            "cached": is_model_cached_locally(matting_repo),
-            "active": MANAGER.active_model_key == "matting",
-            "size_bytes": matting_bytes,
-        },
+        "matting": tiers_status["matting"],
     }
 
 
 @app.post("/api/models/uninstall")
 def api_uninstall_model(target: str = Form(...)) -> dict[str, Any]:
     """
-    Deletes cached Hugging Face weights for the requested preset (`low`, `mid`,
-    `high`, `matting`, or `all`) and unloads the model from memory if active.
+    Deletes cached Hugging Face weights for the requested model (`lite`, `general`,
+    `hr`, `portrait`, `matting`, `dynamic`, or `all`) and unloads it if active.
     """
     if MANAGER.inference_lock.locked():
         raise HTTPException(
@@ -798,25 +878,26 @@ def api_uninstall_model(target: str = Form(...)) -> dict[str, Any]:
             detail="Cannot uninstall model weights while processing is running.",
         )
 
-    target_map: dict[str, list[str]] = {
-        "low": ["lite"],
-        "lite": ["lite"],
-        "mid": ["full"],
-        "full": ["full"],
-        "high": ["hr"],
-        "hr": ["hr"],
-        "matting": ["matting"],
-        "all": list(MODELS.keys()),
-    }
-    model_keys = target_map.get(target.strip().lower())
+    cleaned = target.strip().lower()
+    if cleaned == "all":
+        model_keys = list(MODELS.keys())
+    else:
+        norm = normalize_tier_key(cleaned)
+        model_keys = [norm] if norm in MODELS else []
+
     if not model_keys:
         raise HTTPException(status_code=400, detail=f"Unknown model target '{target}'.")
 
-    freed_bytes = 0
+    repos_to_remove: list[str] = []
     for m_key in model_keys:
         if MANAGER.active_model_key == m_key:
             MANAGER.unload()
-        repo_id = MODELS[m_key]
+        repos_to_remove.append(MODELS[m_key])
+        if m_key == "matting":
+            repos_to_remove.append(LEGACY_MATTING_REPO)
+
+    freed_bytes = 0
+    for repo_id in repos_to_remove:
         folder = get_model_cache_dir(repo_id)
         freed_bytes += get_model_disk_bytes(repo_id)
         if folder.exists():
@@ -866,7 +947,7 @@ async def api_save(
 @app.post("/api/remove-bg")
 async def api_remove_bg(
     file: UploadFile = File(...),
-    tier: str = Form("mid"),
+    tier: str = Form("general"),
     defringe: bool = Form(True),
     despill: bool = Form(True),
     matting: bool = Form(False),
@@ -875,8 +956,9 @@ async def api_remove_bg(
     Accepts an uploaded image file and returns a full-resolution, lossless
     32-bit RGBA PNG along with performance telemetry HTTP headers.
     """
-    if tier not in TIERS:
-        raise HTTPException(status_code=400, detail=f"Invalid hardware preset '{tier}'.")
+    norm_tier = "matting" if matting else normalize_tier_key(tier)
+    if norm_tier not in TIERS:
+        raise HTTPException(status_code=400, detail=f"Invalid model preset '{tier}'.")
 
     job_epoch = MANAGER.cancel_epoch
     raw_bytes = await file.read()
@@ -1518,13 +1600,15 @@ def build_native_menus(window: Any) -> list[Any]:
     model_menu = Menu(
         "Model",
         [
-            MenuAction("Low-End — Lite 1K", call("selectPreset('low')")),
-            MenuAction("Mid-Range — Full 1K", call("selectPreset('mid')")),
-            MenuAction("High-End — Ultra 2K", call("selectPreset('high')")),
+            MenuAction("Lite — 1K Fast", call("selectPreset('lite')")),
+            MenuAction("General — 1K Studio", call("selectPreset('general')")),
+            MenuAction("Ultra HR — 2K Detail", call("selectPreset('hr')")),
+            MenuAction("Portrait — 1K People", call("selectPreset('portrait')")),
+            MenuAction("Matting — 2K Soft Alpha", call("selectPreset('matting')")),
+            MenuAction("Dynamic — Native Ratio", call("selectPreset('dynamic')")),
             MenuSeparator(),
             MenuAction("Toggle Defringe Edges", call("toggleDefringe()")),
             MenuAction("Toggle Suppress Color Spill", call("toggleDespill()")),
-            MenuAction("Toggle Glass and Sheer Matting", call("toggleMatting()")),
             MenuSeparator(),
             MenuAction("Re-Run Segmentation", call("rerunSegmentation()")),
             MenuSeparator(),

@@ -8,10 +8,11 @@ import {
   dom,
   prefs,
   DOT_TOOLTIPS,
+  TIER_KEYS,
   TIER_STATUS_SHORT,
-  TIER_META,
   PRESET_NAMES,
   ACCENTS,
+  normalizeTierKey,
   setError,
 } from "./state.js";
 
@@ -27,10 +28,12 @@ const PREFS_SECTION_MAP = {
 };
 
 const MODEL_CTX_LABELS = {
-  low: "LITE 1K",
-  mid: "FULL 1K",
-  high: "ULTRA 2K",
-  matting: "GLASS & SHEER MATTING",
+  lite: "LITE 1K",
+  general: "GENERAL 1K",
+  hr: "ULTRA HR 2K",
+  portrait: "PORTRAIT 1K",
+  matting: "MATTING 2K",
+  dynamic: "DYNAMIC",
 };
 
 export function formatDiskBytes(bytes) {
@@ -44,8 +47,8 @@ export function formatDiskBytes(bytes) {
 }
 
 function getTierInfo(key) {
-  if (key === "matting") return state.serverStatus?.matting || null;
-  return state.serverStatus?.tiers?.[key] || null;
+  const norm = normalizeTierKey(key);
+  return state.serverStatus?.tiers?.[norm] || null;
 }
 
 function getTierAvailability(tierInfo) {
@@ -71,17 +74,11 @@ export function updateCacheIndicator() {
   const tiers = state.serverStatus?.tiers;
   if (!tiers) return;
 
-  const inventory = {
-    low: tiers.low,
-    mid: tiers.mid,
-    high: tiers.high,
-    matting: state.serverStatus?.matting,
-  };
-
   let installedCount = 0;
   let totalBytes = 0;
 
-  Object.entries(inventory).forEach(([key, tierInfo]) => {
+  TIER_KEYS.forEach((key) => {
+    const tierInfo = tiers[key];
     const status = getTierAvailability(tierInfo);
     const sizeBytes = Number(tierInfo?.size_bytes) || 0;
     const isInstalled = Boolean(tierInfo?.cached || sizeBytes > 0);
@@ -100,16 +97,7 @@ export function updateCacheIndicator() {
       `#tierSelector .tier-btn[data-tier="${key}"]`
     );
     if (tierBtn) {
-      const tip = `${TIER_META[key] || ""} ${statusDetail}`.trim();
-      tierBtn.setAttribute("data-tooltip", tip);
-    }
-
-    if (key === "matting") {
-      const matBtn = document.getElementById("btnMatting");
-      if (matBtn) {
-        const tip = `${TIER_META.matting} ${statusDetail}`.trim();
-        matBtn.setAttribute("data-tooltip", tip);
-      }
+      tierBtn.setAttribute("data-tooltip", statusDetail);
     }
 
     const sizeEl = document.getElementById(`syssize-${key}`);
@@ -140,7 +128,7 @@ export function updateCacheIndicator() {
 
   const serverTotal = state.serverStatus?.total_cache_bytes;
   const finalTotal = typeof serverTotal === "number" ? serverTotal : totalBytes;
-  const totalSummary = `${formatDiskBytes(finalTotal)} (${installedCount} OF 4 INSTALLED)`;
+  const totalSummary = `${formatDiskBytes(finalTotal)} (${installedCount} OF ${TIER_KEYS.length} INSTALLED)`;
 
   const totalEl = document.getElementById("modelsTotalSize");
   if (totalEl) totalEl.textContent = totalSummary;
@@ -272,7 +260,7 @@ export async function syncServerStatus(isInitialLoad = false, onSelectTier = nul
       const targetTier =
         prefs.defaultTier && prefs.defaultTier !== "auto"
           ? prefs.defaultTier
-          : recommended_tier || "mid";
+          : recommended_tier || "general";
       onSelectTier(targetTier);
     }
     updateCacheIndicator();

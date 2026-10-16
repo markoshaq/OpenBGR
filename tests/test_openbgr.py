@@ -37,15 +37,22 @@ class TestOpenBGR(unittest.TestCase):
         self.assertEqual(status["version"], "0.02")
         self.assertIn("total_cache_bytes", status)
         self.assertIn("cache_dir", status)
-        for key in ("low", "mid", "high"):
+        for key in ("lite", "general", "hr", "portrait", "matting", "dynamic"):
             self.assertIn(key, status["tiers"])
             tier = status["tiers"][key]
             self.assertIn("cached", tier)
             self.assertIn("active", tier)
             self.assertIn("size_bytes", tier)
             self.assertIsInstance(tier["size_bytes"], int)
-        self.assertIn("matting", status)
-        self.assertIn("size_bytes", status["matting"])
+        # Legacy aliases resolve to canonical model keys
+        self.assertEqual(openbgr_app.normalize_tier_key("low"), "lite")
+        self.assertEqual(openbgr_app.normalize_tier_key("mid"), "general")
+        self.assertEqual(openbgr_app.normalize_tier_key("high"), "hr")
+        # Dynamic sizing preserves aspect ratio and rounds to multiples of 32
+        dyn_h, dyn_w = openbgr_app.compute_dynamic_size(1920, 1080, 2048)
+        self.assertEqual(dyn_w % 32, 0)
+        self.assertEqual(dyn_h % 32, 0)
+        self.assertGreater(dyn_w, dyn_h)
 
     def test_icon_squircle_geometry(self) -> None:
         img = icon_render.render_icon(256)
