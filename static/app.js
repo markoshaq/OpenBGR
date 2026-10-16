@@ -2402,14 +2402,27 @@ async function runSegmentation() {
   syncMenuBarState();
 
   const isCached = tierInfo ? tierInfo.cached : true;
-  const modeLabel = state.matting ? "GLASS & SHEER MATTING" : `${state.tier.toUpperCase()} PRESET`;
+  const presetName = state.matting
+    ? "MATTING"
+    : { low: "LITE 1K", mid: "FULL 1K", high: "ULTRA 2K" }[state.tier] ||
+      state.tier.toUpperCase();
+  const qualityDesc =
+    state.exportWidth > 0 || state.exportHeight > 0
+      ? `${state.exportWidth || "AUTO"}×${state.exportHeight || "AUTO"}`
+      : `${Math.round((state.exportScale || 1) * 100)}%`;
+  const destDesc =
+    state.outputDir ||
+    (window.pywebview ? "save dialog" : "browser downloads");
 
   dom.busyTitle.textContent = isCached
-    ? `PROCESSING // ${modeLabel}`
-    : `DOWNLOADING MODEL WEIGHTS (ONE-TIME) // ${modeLabel}`;
-  dom.busySub.textContent = isCached
-    ? "Executing local BiRefNet segmentation at full native resolution."
-    : "Fetching model weights from Hugging Face Hub (~1 min). All future runs execute 100% offline.";
+    ? "PROCESSING IMAGE"
+    : "PROCESSING IMAGE — FETCHING MODEL WEIGHTS";
+  dom.busySub.textContent =
+    `Exporting to ${destDesc} using ${presetName} preset ` +
+    `at ${qualityDesc} quality.` +
+    (isCached
+      ? ""
+      : " One-time download from Hugging Face Hub — all future runs are fully offline.");
 
   const formData = new FormData();
   formData.append("file", state.sourceFile);
