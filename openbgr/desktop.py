@@ -312,6 +312,13 @@ class DesktopApi:
             "path": str(cache_path),
         }
 
+    def open_logs_dir(self) -> dict[str, Any]:
+        """Opens `~/.openbgr/` (containing `openbgr.log`) in the system file manager."""
+        return {
+            "opened": open_folder_in_file_manager(APP_CONFIG_DIR),
+            "path": str(APP_CONFIG_DIR),
+        }
+
     def set_window_theme(self, theme: str) -> dict[str, Any]:
         """Synchronizes the native OS window frame appearance with Dark or Light mode."""
         if platform.system() == "Darwin" and self.window is not None:

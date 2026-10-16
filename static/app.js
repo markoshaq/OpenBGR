@@ -43,9 +43,11 @@ import {
   syncServerStatus,
   selectPrefsPane,
   openPrefsDialog,
+  closePrefsDialog,
   applyPreferences,
   uninstallModel,
   openCacheFolder,
+  openLogsFolder,
   showModelContextMenu,
   syncQuickActionConfigToServer,
   toggleQuickActionInstall,
@@ -132,14 +134,10 @@ dom.confirmModal.addEventListener("click", (e) => {
 
 // Preferences modal controls
 dom.btnInfo.addEventListener("click", () => openPrefsDialog());
-dom.btnInfoClose.addEventListener("click", () =>
-  dom.infoModal.classList.remove("active")
-);
-dom.btnPrefsCloseX?.addEventListener("click", () =>
-  dom.infoModal.classList.remove("active")
-);
+dom.btnInfoClose.addEventListener("click", () => closePrefsDialog());
+dom.btnPrefsCloseX?.addEventListener("click", () => closePrefsDialog());
 dom.infoModal.addEventListener("click", (e) => {
-  if (e.target === dom.infoModal) dom.infoModal.classList.remove("active");
+  if (e.target === dom.infoModal) closePrefsDialog();
 });
 dom.infoModal.querySelectorAll(".prefs-nav-item").forEach((item) => {
   item.addEventListener("click", () =>
@@ -159,6 +157,7 @@ document
   ?.addEventListener("click", () => uninstallModel("all"));
 
 dom.btnOpenCacheDir?.addEventListener("click", () => openCacheFolder());
+dom.btnOpenLogsDir?.addEventListener("click", () => openLogsFolder());
 
 dom.infoModal.querySelectorAll(".model-row[data-model-key]").forEach((row) => {
   row.addEventListener("contextmenu", (e) => {
@@ -762,7 +761,9 @@ async function pullPendingFiles() {
     } else {
       ingestImageFile(files[0]);
     }
-  } catch (_) {}
+  } catch (err) {
+    console.warn("[OpenBGR] Failed to pull pending files:", err);
+  }
 }
 
 window.openBGR = {
@@ -859,7 +860,7 @@ window.addEventListener("keydown", (e) => {
     if (dom.menuBar?.querySelector(".menu-root.open")) {
       closeAllMenus();
     } else if (dom.infoModal.classList.contains("active")) {
-      dom.infoModal.classList.remove("active");
+      closePrefsDialog();
     } else if (dom.confirmModal.classList.contains("active")) {
       closeConfirmModal();
     } else if (state.isProcessing) {

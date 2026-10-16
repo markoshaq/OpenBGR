@@ -23,6 +23,7 @@ from PIL import Image
 
 from . import desktop
 from .config import (
+    APP_CONFIG_DIR,
     APP_VERSION,
     DEVICE,
     DEVICE_LABEL,
@@ -247,6 +248,20 @@ def api_open_cache_dir() -> dict[str, Any]:
             detail="Could not open the cache folder in file manager.",
         )
     return {"ok": True, "path": str(cache_path)}
+
+
+@app.post("/api/open-logs-dir")
+def api_open_logs_dir() -> dict[str, Any]:
+    """Opens `~/.openbgr/` (containing `openbgr.log`) in the system file manager."""
+    logs_dir: Path = _resolve_app_symbol("APP_CONFIG_DIR", APP_CONFIG_DIR)
+    open_fn = _resolve_app_symbol("open_folder_in_file_manager", open_folder_in_file_manager)
+    opened = open_fn(logs_dir)
+    if not opened:
+        raise HTTPException(
+            status_code=500,
+            detail="Could not open the logs folder in file manager.",
+        )
+    return {"ok": True, "path": str(logs_dir)}
 
 
 @app.post("/api/models/uninstall")

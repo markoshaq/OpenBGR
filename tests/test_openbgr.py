@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import plistlib
 import re
 import tarfile
 import tempfile
@@ -443,6 +444,74 @@ class TestOpenBGR(unittest.TestCase):
 
             openbgr_app.queue_open_files([str(script_path), str(missing_img)])
             self.assertEqual(bridge.take_pending_files(), {"files": []})
+
+    def test_version_single_sourced_from_pyproject(self) -> None:
+        """`APP_VERSION` and `build_release.APP_VERSION` match `pyproject.toml`."""
+        pyproject_text = (ROOT_DIR / "pyproject.toml").read_text(encoding="utf-8")
+        m = re.search(r'^version\s*=\s*"([^"]+)"', pyproject_text, re.MULTILINE)
+        self.assertIsNotNone(m)
+        expected = m.group(1) if m else ""
+        self.assertEqual(openbgr_app.APP_VERSION, expected)
+        self.assertEqual(build_release.APP_VERSION, expected)
+
+    def test_api_open_logs_dir(self) -> None:
+        """`/api/open-logs-dir` opens `APP_CONFIG_DIR` and returns HTTP 500 on failure."""
+        with patch.object(openbgr_app, "open_folder_in_file_manager", return_value=True) as mock_fn:
+            res = openbgr_app.api_open_logs_dir()
+            self.assertTrue(res["ok"])
+            mock_fn.assert_called_once_with(openbgr_app.APP_CONFIG_DIR)
+
+        with (
+            patch.object(openbgr_app, "open_folder_in_file_manager", return_value=False),
+            self.assertRaises(HTTPException) as ctx,
+        ):
+            openbgr_app.api_open_logs_dir()
+        self.assertEqual(ctx.exception.status_code, 500)
+
+    def test_macos_notifier_strips_asset_catalog_icon(self) -> None:
+        """`ensure_macos_notifier_app` removes `CFBundleIconName` and `Assets.car` so `.icns` wins."""
+        import openbgr.quick_action as qa_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            notifier_app = tmp_dir / "OpenBGRNotifier.app"
+            notifier_icns = tmp_dir / "OpenBGR.icns"
+            notifier_icns.write_bytes(b"fake-icns-bytes")
+
+            def _fake_run(cmd: list[str], **_kwargs: object) -> object:
+                if cmd and cmd[0] == "osacompile":
+                    macos_dir = notifier_app / "Contents" / "MacOS"
+                    res_dir = notifier_app / "Contents" / "Resources"
+                    macos_dir.mkdir(parents=True, exist_ok=True)
+                    res_dir.mkdir(parents=True, exist_ok=True)
+                    (macos_dir / "droplet").write_bytes(b"droplet-bin")
+                    (res_dir / "Assets.car").write_bytes(b"script-editor-scroll")
+                    with open(notifier_app / "Contents" / "Info.plist", "wb") as fh:
+                        plistlib.dump(
+                            {
+                                "CFBundleIconFile": "applet",
+                                "CFBundleIconName": "applet",
+                            },
+                            fh,
+                        )
+                return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+            with (
+                patch.object(qa_mod.platform, "system", return_value="Darwin"),
+                patch.object(qa_mod, "APP_CONFIG_DIR", tmp_dir),
+                patch.object(qa_mod, "NOTIFIER_APP_PATH", notifier_app),
+                patch.object(qa_mod, "NOTIFIER_ICNS_PATH", notifier_icns),
+                patch.object(qa_mod.subprocess, "run", side_effect=_fake_run),
+            ):
+                built = qa_mod.ensure_macos_notifier_app()
+                self.assertEqual(built, notifier_app)
+                self.assertFalse((notifier_app / "Contents" / "Resources" / "Assets.car").exists())
+                self.assertTrue((notifier_app / "Contents" / "Resources" / "applet.icns").is_file())
+                with open(notifier_app / "Contents" / "Info.plist", "rb") as fh:
+                    plist = plistlib.load(fh)
+                self.assertNotIn("CFBundleIconName", plist)
+                self.assertEqual(plist["CFBundleIconFile"], "applet")
+                self.assertTrue(plist["LSUIElement"])
 
 
 if __name__ == "__main__":

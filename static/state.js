@@ -263,6 +263,7 @@ export const dom = {
   qaInstallStatusDesc: document.getElementById("qaInstallStatusDesc"),
   btnQaInstallToggle: document.getElementById("btnQaInstallToggle"),
   btnOpenCacheDir: document.getElementById("btnOpenCacheDir"),
+  btnOpenLogsDir: document.getElementById("btnOpenLogsDir"),
 
   fileInput: document.getElementById("fileInput"),
   btnOpen: document.getElementById("btnOpen"),
@@ -407,6 +408,8 @@ export function setError(message) {
   dom.errorToast.classList.add("visible");
 }
 
+let lastConfirmFocus = null;
+
 /** Opens the destructive-action confirm modal and stashes its confirm callback. */
 export function openConfirmModal(opts, onConfirm) {
   const cfg = typeof opts === "string" ? { message: opts } : opts;
@@ -423,7 +426,12 @@ export function openConfirmModal(opts, onConfirm) {
   }
   state.pendingConfirmFn = onConfirm;
   state.pendingAltFn = cfg.altFn || null;
+  lastConfirmFocus =
+    document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
   dom.confirmModal.classList.add("active");
+  dom.btnModalConfirm?.focus?.();
 }
 
 /** Dismisses the confirm modal and drops the pending callback. */
@@ -431,6 +439,10 @@ export function closeConfirmModal() {
   state.pendingConfirmFn = null;
   state.pendingAltFn = null;
   dom.confirmModal.classList.remove("active");
+  if (lastConfirmFocus && document.contains(lastConfirmFocus)) {
+    lastConfirmFocus.focus?.();
+  }
+  lastConfirmFocus = null;
 }
 
 /** Programmatically clicks the hidden file input (or the native dialog via `openBGR.openImage`). */

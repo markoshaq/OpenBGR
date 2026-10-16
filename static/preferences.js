@@ -189,6 +189,22 @@ export async function openCacheFolder() {
   }
 }
 
+/** Opens `~/.openbgr/` (containing `openbgr.log`) in the OS file manager. */
+export async function openLogsFolder() {
+  try {
+    if (window.pywebview?.api?.open_logs_dir) {
+      const res = await window.pywebview.api.open_logs_dir();
+      if (res?.opened) return;
+    }
+    const response = await fetch("/api/open-logs-dir", { method: "POST" });
+    if (!response.ok) {
+      throw new Error("Could not open logs folder.");
+    }
+  } catch (err) {
+    setError(err?.message || "Could not open logs folder.");
+  }
+}
+
 /** Uninstalls a checkpoint via `/api/models/uninstall` and refreshes indicators/status. */
 export async function uninstallModel(target) {
   if (state.isProcessing) {
@@ -356,7 +372,9 @@ export async function syncQuickActionConfigToServer() {
       }
       updateQuickActionInstallStatus();
     }
-  } catch (_) {}
+  } catch (err) {
+    console.warn("[OpenBGR] Quick Action config sync failed:", err);
+  }
 }
 
 /** Updates the Quick Action system-integration status text and install/uninstall button. */
@@ -452,11 +470,27 @@ export function selectPrefsPane(paneId) {
   });
 }
 
+let lastPrefsFocus = null;
+
 /** Shows the Settings modal on a given pane (default: preferences). */
 export function openPrefsDialog(section) {
+  lastPrefsFocus =
+    document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
   dom.infoModal.classList.add("active");
   const paneId = PREFS_SECTION_MAP[section] || "settings-preferences";
   selectPrefsPane(paneId);
+  dom.btnPrefsCloseX?.focus?.();
+}
+
+/** Dismisses the Settings modal and restores keyboard focus to the trigger. */
+export function closePrefsDialog() {
+  dom.infoModal.classList.remove("active");
+  if (lastPrefsFocus && document.contains(lastPrefsFocus)) {
+    lastPrefsFocus.focus?.();
+  }
+  lastPrefsFocus = null;
 }
 
 /** Pushes stored prefs into the live UI (theme, swatch, toggles, format, model selection). */
