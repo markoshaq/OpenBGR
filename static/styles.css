@@ -343,7 +343,10 @@ body {
   background: var(--border);
 }
 
+/* Pinned to grid column 3 — auto-placement would shift it into the 1fr
+ * column whenever .topbar-center is display:none (blank/batch states) */
 .hardware-readout {
+  grid-column: 3;
   display: flex;
   align-items: center;
   justify-content: flex-end;

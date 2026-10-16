@@ -945,6 +945,15 @@ async def api_remove_bg(
     )
 
 
+@app.middleware("http")
+async def no_cache_static(request, call_next):
+    """Forces revalidation on the page shell so fresh edits reach the WebView."""
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 @app.get("/")
 def serve_index() -> FileResponse:
     """Serves the single-page studio interface."""
