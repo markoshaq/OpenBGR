@@ -268,6 +268,12 @@
       <!-- Left Sidebar: Settings, Presets, Defringe & Matte Backdrop -->
       <aside class="sidebar sidebar-left">
         <div class="sidebar-section">
+          <div class="section-header">SOURCE IMAGE</div>
+          <button type="button" class="action-btn full-width" id="btnOpen">OPEN IMAGE FILE</button>
+          <input type="file" id="fileInput" accept="image/*" multiple />
+        </div>
+
+        <div class="sidebar-section">
           <div class="section-header">HARDWARE PRESET</div>
           <div class="tier-row" id="tierSelector">
             <button
@@ -347,13 +353,6 @@
           </div>
         </div>
 
-        <div class="sidebar-section">
-          <div class="section-header">SOURCE IMAGE</div>
-          <button type="button" class="action-btn full-width" id="btnOpen">OPEN IMAGE FILE</button>
-          <button type="button" class="action-btn primary full-width disabled" id="btnProcess">PROCESS IMAGE</button>
-          <input type="file" id="fileInput" accept="image/*" multiple />
-        </div>
-
         <div class="sidebar-section requires-image">
           <div class="section-header-row">
             <span class="section-header">SHADOW / REFLECTION CUTOFF</span>
@@ -381,6 +380,10 @@
             <input type="color" id="colorPicker" value="#00ff66" class="swatch" style="padding:0; background:none;" title="Custom Matte Color" />
           </div>
           <div class="field-hint">Solid colors are composited into exports.</div>
+        </div>
+
+        <div class="sidebar-section">
+          <button type="button" class="action-btn primary full-width disabled" id="btnProcess">PROCESS IMAGE</button>
         </div>
       </aside>
 
