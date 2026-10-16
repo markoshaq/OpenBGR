@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -461,19 +462,23 @@ def _choose_output_folder_native(
 
 def ensure_macos_notifier_app() -> Optional[Path]:
     """
-    Builds (once) a lightweight background AppleScript applet bundle in
+    Builds (once) a lightweight background AppleScript droplet bundle in
     `~/.openbgr/OpenBGRNotifier.app` stamped with the OpenBGR squircle `.icns`
     and `LSUIElement=True` so macOS Notification Center banners display the
     OpenBGR title and rounded squircle icon without bouncing in the Dock.
+
+    The notification text is delivered as a temp file opened with the droplet
+    (`on open argv`): `open --args` -> `on run argv` never reaches the run
+    handler on recent macOS releases, while the odoc/droplet path still works.
     """
     if platform.system() != "Darwin":
         return None
     try:
-        applet_bin = NOTIFIER_APP_PATH / "Contents" / "MacOS" / "applet"
+        droplet_bin = NOTIFIER_APP_PATH / "Contents" / "MacOS" / "droplet"
         applet_icns = (
             NOTIFIER_APP_PATH / "Contents" / "Resources" / "applet.icns"
         )
-        if applet_bin.is_file() and applet_icns.is_file():
+        if droplet_bin.is_file() and applet_icns.is_file():
             return NOTIFIER_APP_PATH
 
         APP_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -531,10 +536,20 @@ def ensure_macos_notifier_app() -> Optional[Path]:
             shutil.rmtree(NOTIFIER_APP_PATH)
 
         osa_src = (
-            "on run argv\n"
-            "  if (count of argv) > 0 then\n"
-            '    display notification (item 1 of argv) with title "OpenBGR"\n'
-            "  end if\n"
+            "on open argv\n"
+            "  repeat with f in argv\n"
+            "    try\n"
+            "      set fp to POSIX path of f\n"
+            '      set msg to do shell script "cat " & quoted form of fp\n'
+            '      display notification msg with title "OpenBGR"\n'
+            '      do shell script "rm -f " & quoted form of fp\n'
+            "    end try\n"
+            "  end repeat\n"
+            "end open\n"
+            "on run\n"
+            "  try\n"
+            '    do shell script "open -b com.markoshaq.openbgr || open -b com.openbgr.dev || true"\n'
+            "  end try\n"
             "end run\n"
         )
         subprocess.run(
@@ -553,8 +568,16 @@ def ensure_macos_notifier_app() -> Optional[Path]:
         plist["CFBundleDisplayName"] = "OpenBGR"
         plist["CFBundleIdentifier"] = "com.markoshaq.openbgr.notifier"
         plist["LSUIElement"] = True
+        plist["CFBundleIconFile"] = "applet"
+        # CFBundleIconName resolves the banner icon from Assets.car, which
+        # osacompile builds with the generic Script Editor scroll — drop both
+        # so macOS falls back to applet.icns (the OpenBGR squircle).
+        plist.pop("CFBundleIconName", None)
         with open(plist_path, "wb") as fh:
             plistlib.dump(plist, fh)
+        assets_car = NOTIFIER_APP_PATH / "Contents" / "Resources" / "Assets.car"
+        if assets_car.exists():
+            assets_car.unlink()
 
         subprocess.run(
             [
@@ -608,12 +631,32 @@ def send_openbgr_notification(message: str) -> None:
         if sys_name == "Darwin":
             notifier = ensure_macos_notifier_app()
             if notifier is not None and notifier.exists():
-                subprocess.run(
-                    ["open", "-a", str(notifier), "--args", message],
-                    check=False,
-                    capture_output=True,
-                    timeout=10,
-                )
+                # Prune message files left behind by notifications that never
+                # posted (droplet launch failed); 60s guards in-flight posts.
+                cutoff = time.time() - 60
+                for stale in APP_CONFIG_DIR.glob(".notify-*.txt"):
+                    try:
+                        if stale.stat().st_mtime < cutoff:
+                            stale.unlink()
+                    except OSError:
+                        pass
+                try:
+                    fd, msg_path = tempfile.mkstemp(
+                        prefix=".notify-", suffix=".txt", dir=APP_CONFIG_DIR
+                    )
+                    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                        fh.write(message)
+                    subprocess.run(
+                        ["open", "-a", str(notifier), msg_path],
+                        check=False,
+                        capture_output=True,
+                        timeout=10,
+                    )
+                except Exception:
+                    try:
+                        Path(msg_path).unlink(missing_ok=True)
+                    except (UnboundLocalError, OSError):
+                        pass
                 return
             subprocess.run(
                 [
