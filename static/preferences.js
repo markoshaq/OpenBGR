@@ -120,40 +120,38 @@ export function updateCacheIndicator() {
 
     const sizeEl = document.getElementById(`syssize-${key}`);
     if (sizeEl) {
-      sizeEl.textContent = isInstalled ? sizeLabel : "0 MB";
+      sizeEl.textContent = isInstalled
+        ? sizeLabel
+        : formatDiskBytes(expectedBytes);
       sizeEl.classList.toggle("dim", !isInstalled);
-    }
-
-    const badge = document.getElementById(`sysbadge-${key}`);
-    if (badge) {
-      const isActive = Boolean(tierInfo?.active);
-      badge.textContent = isActive
-        ? "ACTIVE"
-        : status === "ready"
-          ? "CACHED"
-          : status === "downloadable"
-            ? "ON DEMAND"
-            : "OFFLINE";
-      badge.classList.toggle("on", isActive);
     }
 
     const uninstallBtn = document.getElementById(`sysbtn-${key}`);
     if (uninstallBtn) {
-      uninstallBtn.disabled =
-        !isInstalled || state.isProcessing || Boolean(installingModelKey);
-      uninstallBtn.textContent = "UNINSTALL";
+      if (isInstalled) {
+        uninstallBtn.disabled =
+          state.isProcessing || Boolean(installingModelKey);
+        uninstallBtn.textContent = "UNINSTALL";
+      } else {
+        uninstallBtn.disabled = true;
+        uninstallBtn.textContent =
+          installingModelKey === key ? "INSTALLING…" : "NOT INSTALLED";
+      }
     }
   });
 
   const serverTotal = state.serverStatus?.total_cache_bytes;
-  const finalTotal = typeof serverTotal === "number" ? serverTotal : totalBytes;
-  const totalSummary = `${formatDiskBytes(finalTotal)} (${installedCount} OF ${TIER_KEYS.length} INSTALLED)`;
+  const modelBytes = typeof serverTotal === "number" ? serverTotal : totalBytes;
+  const appBytes = Number(state.serverStatus?.app_size_bytes) || 0;
+  const totalDisk =
+    Number(state.serverStatus?.total_disk_bytes) || modelBytes + appBytes;
+  const totalSummary =
+    appBytes > 0
+      ? `${formatDiskBytes(totalDisk)} (${formatDiskBytes(appBytes)} APP + ${formatDiskBytes(modelBytes)} MODELS)`
+      : `${formatDiskBytes(modelBytes)} (${installedCount} OF ${TIER_KEYS.length} INSTALLED)`;
 
   const totalEl = document.getElementById("modelsTotalSize");
   if (totalEl) totalEl.textContent = totalSummary;
-
-  const sysSummaryEl = document.getElementById("sysCacheSummary");
-  if (sysSummaryEl) sysSummaryEl.textContent = totalSummary;
 
   const cacheDirEl = document.getElementById("modelsCacheDir");
   if (cacheDirEl && state.serverStatus?.cache_dir) {
@@ -163,8 +161,23 @@ export function updateCacheIndicator() {
   const uninstallAllBtn = document.getElementById("btnUninstallAllModels");
   if (uninstallAllBtn) {
     uninstallAllBtn.disabled =
-      (installedCount === 0 && finalTotal === 0) || state.isProcessing;
+      (installedCount === 0 && modelBytes === 0) || state.isProcessing;
     uninstallAllBtn.textContent = "UNINSTALL ALL";
+  }
+}
+
+export async function openCacheFolder() {
+  try {
+    if (window.pywebview?.api?.open_cache_dir) {
+      const res = await window.pywebview.api.open_cache_dir();
+      if (res?.opened) return;
+    }
+    const response = await fetch("/api/open-cache-dir", { method: "POST" });
+    if (!response.ok) {
+      throw new Error("Could not open cache folder.");
+    }
+  } catch (err) {
+    setError(err?.message || "Could not open cache folder.");
   }
 }
 
@@ -316,18 +329,18 @@ export async function syncServerStatus(isInitialLoad = false, onSelectTier = nul
     const response = await fetch("/api/status");
     state.serverStatus = await response.json();
 
-    const { device_label, precision, recommended_tier, version } = state.serverStatus;
+    const { device_label, precision, ram_label, ram_gb, recommended_tier, version } =
+      state.serverStatus;
     dom.hwCompute.textContent = (device_label || "LOCAL ENGINE").toUpperCase();
     if (dom.hwPrecision) dom.hwPrecision.textContent = (precision || "—").toUpperCase();
+    if (dom.hwMemory) {
+      const memText = ram_label || (ram_gb ? `${ram_gb} GB` : "—");
+      dom.hwMemory.textContent = String(memText).toUpperCase();
+    }
     const verLabel = version ? `V${version}` : "V—";
     if (dom.prefsVersion) dom.prefsVersion.textContent = verLabel;
     if (dom.sysVersion) dom.sysVersion.textContent = verLabel;
     if (dom.aboutVersion) dom.aboutVersion.textContent = verLabel;
-    if (dom.emptyVersion) {
-      dom.emptyVersion.textContent = version
-        ? `LOCAL STUDIO — V${version} · ${(device_label || "").toUpperCase()}`
-        : "LOCAL BACKGROUND REMOVAL STUDIO";
-    }
 
     if (isInitialLoad && onSelectTier) {
       const targetTier =
@@ -360,7 +373,6 @@ export function openPrefsDialog(section) {
 export function applyPreferences(onSyncMenu) {
   const root = document.documentElement;
   root.classList.toggle("theme-light", prefs.theme === "light");
-  root.classList.toggle("density-compact", prefs.density === "compact");
 
   const accent = ACCENTS[prefs.accent];
   if (prefs.accent !== "default" && accent) {
@@ -373,8 +385,6 @@ export function applyPreferences(onSyncMenu) {
 
   dom.prefThemeDark?.classList.toggle("active", prefs.theme !== "light");
   dom.prefThemeLight?.classList.toggle("active", prefs.theme === "light");
-  dom.prefDensityComfortable?.classList.toggle("active", prefs.density !== "compact");
-  dom.prefDensityCompact?.classList.toggle("active", prefs.density === "compact");
   document.querySelectorAll("#accentSwatches .swatch").forEach((s) => {
     s.classList.toggle("active", s.getAttribute("data-accent") === prefs.accent);
   });

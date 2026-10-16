@@ -45,6 +45,7 @@ import {
   openPrefsDialog,
   applyPreferences,
   uninstallModel,
+  openCacheFolder,
   showModelContextMenu,
 } from "./preferences.js";
 import {
@@ -155,6 +156,8 @@ document
   .getElementById("btnUninstallAllModels")
   ?.addEventListener("click", () => uninstallModel("all"));
 
+dom.btnOpenCacheDir?.addEventListener("click", () => openCacheFolder());
+
 dom.infoModal.querySelectorAll(".model-row[data-model-key]").forEach((row) => {
   row.addEventListener("contextmenu", (e) => {
     e.preventDefault();
@@ -181,16 +184,6 @@ dom.prefThemeDark?.addEventListener("click", () => {
 });
 dom.prefThemeLight?.addEventListener("click", () => {
   prefs.theme = "light";
-  savePrefs();
-  applyPreferences(syncMenuBarState);
-});
-dom.prefDensityComfortable?.addEventListener("click", () => {
-  prefs.density = "comfortable";
-  savePrefs();
-  applyPreferences(syncMenuBarState);
-});
-dom.prefDensityCompact?.addEventListener("click", () => {
-  prefs.density = "compact";
   savePrefs();
   applyPreferences(syncMenuBarState);
 });
@@ -904,6 +897,10 @@ window.addEventListener("keyup", (e) => {
           : spec
               .replace("Shift+Mod+", "Ctrl+Shift+")
               .replace("Mod+", "Ctrl+");
+    });
+    document.querySelectorAll("[data-shortcut-chip]").forEach((el) => {
+      const spec = el.getAttribute("data-shortcut-chip") || "";
+      el.textContent = spec.replace("Mod+", "CTRL+");
     });
   }
 

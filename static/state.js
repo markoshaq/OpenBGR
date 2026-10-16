@@ -4,9 +4,9 @@
  */
 
 export const DOT_TOOLTIPS = {
-  ready: "READY OFFLINE — Model weights are cached on disk",
-  downloadable: "CAN BE DOWNLOADED — Model will download on 1st run",
-  unavailable: "UNAVAILABLE OFFLINE — Model is not cached and device is offline",
+  ready: "READY OFFLINE: Model weights are cached on disk",
+  downloadable: "ON DEMAND: Model downloads on first run",
+  unavailable: "OFFLINE: Model is not cached and device is offline",
 };
 
 export const TIER_KEYS = [
@@ -62,7 +62,6 @@ export function getDefaultPrefs() {
   return {
     theme: "dark",
     accent: "default",
-    density: "comfortable",
     defaultTier: "auto",
     defaultFormat: "png",
     defaultBackdrop: "checker",
@@ -73,7 +72,6 @@ export function getDefaultPrefs() {
 const PREF_SCHEMA = {
   theme: { values: ["dark", "light"], fallback: "dark" },
   accent: { values: ["default", ...Object.keys(ACCENTS)], fallback: "default" },
-  density: { values: ["comfortable", "compact"], fallback: "comfortable" },
   defaultTier: {
     values: ["auto", ...TIER_KEYS],
     fallback: "auto",
@@ -188,7 +186,6 @@ export const dom = {
   tabBar: document.getElementById("tabBar"),
   viewport: document.getElementById("viewport"),
   emptyState: document.getElementById("emptyState"),
-  emptyVersion: document.getElementById("emptyVersion"),
   stage: document.getElementById("stage"),
   stageSizerImg: document.getElementById("stageSizerImg"),
   beforeImg: document.getElementById("beforeImg"),
@@ -224,12 +221,11 @@ export const dom = {
   btnToggleConfirmClose: document.getElementById("btnToggleConfirmClose"),
   prefThemeDark: document.getElementById("prefThemeDark"),
   prefThemeLight: document.getElementById("prefThemeLight"),
-  prefDensityComfortable: document.getElementById("prefDensityComfortable"),
-  prefDensityCompact: document.getElementById("prefDensityCompact"),
   accentSwatches: document.getElementById("accentSwatches"),
   prefDefaultTier: document.getElementById("prefDefaultTier"),
   prefDefaultFormat: document.getElementById("prefDefaultFormat"),
   prefDefaultBackdrop: document.getElementById("prefDefaultBackdrop"),
+  btnOpenCacheDir: document.getElementById("btnOpenCacheDir"),
 
   fileInput: document.getElementById("fileInput"),
   btnOpen: document.getElementById("btnOpen"),
@@ -257,6 +253,7 @@ export const dom = {
 
   hwCompute: document.getElementById("hwCompute"),
   hwPrecision: document.getElementById("hwPrecision"),
+  hwMemory: document.getElementById("hwMemory"),
   prefsVersion: document.getElementById("prefsVersion"),
   sysVersion: document.getElementById("sysVersion"),
   aboutVersion: document.getElementById("aboutVersion"),

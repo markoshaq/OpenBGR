@@ -111,19 +111,38 @@ if os.cpu_count():
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 
-def get_system_memory_gb() -> float:
-    """Estimates total system or GPU memory in GiB to prevent swap thrashing on 2K tensors."""
-    if torch.cuda.is_available():
-        try:
-            return torch.cuda.get_device_properties(0).total_memory / (1024**3)
-        except Exception:
-            pass
-    if platform.system() == "Darwin":
+def get_host_ram_gb() -> float:
+    """Detects total physical system RAM in GiB across macOS, Linux, and Windows."""
+    sys_name = platform.system()
+    if sys_name == "Darwin":
         try:
             mem_bytes = int(
                 subprocess.check_output(["sysctl", "-n", "hw.memsize"], text=True).strip()
             )
             return mem_bytes / (1024**3)
+        except Exception:
+            pass
+    elif sys_name == "Windows":
+        try:
+            import ctypes
+
+            class _MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            stat = _MEMORYSTATUSEX()
+            stat.dwLength = ctypes.sizeof(_MEMORYSTATUSEX)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):  # type: ignore[attr-defined]
+                return stat.ullTotalPhys / (1024**3)
         except Exception:
             pass
     try:
@@ -136,6 +155,17 @@ def get_system_memory_gb() -> float:
     return 16.0
 
 
+def get_system_memory_gb() -> float:
+    """Estimates total GPU or system memory in GiB to prevent swap thrashing on 2K tensors."""
+    if torch.cuda.is_available():
+        try:
+            return torch.cuda.get_device_properties(0).total_memory / (1024**3)
+        except Exception:
+            pass
+    return get_host_ram_gb()
+
+
+HOST_RAM_GB: float = get_host_ram_gb()
 SYSTEM_MEMORY_GB: float = get_system_memory_gb()
 # Evaluating BiRefNet_HR at 2048x2048 allocates >6 GB of intermediate attention feature
 # pyramids; on 8 GB systems, 1536x1536 (2.25x pixel density of 1024x1024) prevents swap thrashing.
@@ -866,10 +896,89 @@ def api_cancel() -> dict[str, Any]:
     return {"cancelled": True, "epoch": epoch}
 
 
+_APP_DISK_CACHE: tuple[float, int] = (0.0, 0)
+_APP_DISK_LOCK = threading.Lock()
+
+
+def _dir_tree_bytes(root: Path, skip_top_dirs: set[str] | None = None) -> int:
+    """Recursively sums regular file sizes under `root` using fast `os.scandir`."""
+    total = 0
+    stack: list[tuple[Path, bool]] = [(root, True)]
+    while stack:
+        current, is_top = stack.pop()
+        try:
+            with os.scandir(current) as it:
+                for entry in it:
+                    try:
+                        if entry.is_symlink():
+                            continue
+                        if entry.is_dir(follow_symlinks=False):
+                            if is_top and skip_top_dirs and entry.name in skip_top_dirs:
+                                continue
+                            stack.append((Path(entry.path), False))
+                        elif entry.is_file(follow_symlinks=False):
+                            total += entry.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return total
+
+
+def get_app_disk_bytes() -> int:
+    """
+    Returns total disk usage of the OpenBGR application and its Python runtime
+    environment (`BASE_DIR` including `.venv`, plus `~/.openbgr`). Cached for
+    60 seconds so `/api/status` remains sub-millisecond.
+    """
+    global _APP_DISK_CACHE
+    now = time.monotonic()
+    with _APP_DISK_LOCK:
+        cached_at, cached_val = _APP_DISK_CACHE
+        if cached_val > 0 and (now - cached_at) < 60.0:
+            return cached_val
+
+    total = _dir_tree_bytes(BASE_DIR, skip_top_dirs={".git", "dist"})
+    cfg_dir = Path.home() / ".openbgr"
+    if cfg_dir.exists():
+        total += _dir_tree_bytes(cfg_dir)
+
+    with _APP_DISK_LOCK:
+        _APP_DISK_CACHE = (now, total)
+    return total
+
+
+def open_folder_in_file_manager(folder: Path) -> bool:
+    """Opens `folder` in the native OS file manager (Finder / Explorer / xdg-open)."""
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        resolved = str(folder.resolve())
+        sys_name = platform.system()
+        if sys_name == "Darwin":
+            subprocess.Popen(["open", resolved])
+            return True
+        if sys_name == "Windows":
+            if hasattr(os, "startfile"):
+                os.startfile(resolved)  # type: ignore[attr-defined]
+            else:
+                subprocess.Popen(["explorer", resolved])
+            return True
+        for cmd in ("xdg-open", "gio"):
+            if shutil.which(cmd):
+                args = [cmd, "open", resolved] if cmd == "gio" else [cmd, resolved]
+                subprocess.Popen(
+                    args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+                return True
+    except Exception:
+        return False
+    return False
+
+
 @app.get("/api/status")
 def api_status() -> dict[str, Any]:
     """
-    Returns detected compute hardware, floating-point precision mode,
+    Returns detected compute hardware, floating-point precision mode, system RAM,
     recommended model, and local offline cache availability and disk usage for each model.
     """
     tiers_status = {}
@@ -887,6 +996,8 @@ def api_status() -> dict[str, Any]:
     # Include any leftover legacy 1K matting cache in total disk usage so Uninstall All
     # accurately reflects and reclaims it if present.
     total_cache_bytes += get_model_disk_bytes(LEGACY_MATTING_REPO)
+    app_size_bytes = get_app_disk_bytes()
+    total_disk_bytes = total_cache_bytes + app_size_bytes
 
     cache_path = Path(HF_HUB_CACHE)
     try:
@@ -894,18 +1005,35 @@ def api_status() -> dict[str, Any]:
     except ValueError:
         cache_display = str(cache_path)
 
+    ram_gb_int = max(1, int(round(HOST_RAM_GB)))
     return {
         "device": DEVICE.type,
         "device_label": DEVICE_LABEL,
         "precision": PRECISION_LABEL,
+        "ram_gb": ram_gb_int,
+        "ram_label": f"{ram_gb_int} GB",
         "recommended_tier": RECOMMENDED_TIER,
         "active_model": MANAGER.active_model_key,
         "version": APP_VERSION,
         "total_cache_bytes": total_cache_bytes,
+        "app_size_bytes": app_size_bytes,
+        "total_disk_bytes": total_disk_bytes,
         "cache_dir": cache_display,
         "tiers": tiers_status,
         "matting": tiers_status["matting"],
     }
+
+
+@app.post("/api/open-cache-dir")
+def api_open_cache_dir() -> dict[str, Any]:
+    """Opens the Hugging Face Hub model cache directory in the system file manager."""
+    cache_path = Path(HF_HUB_CACHE)
+    opened = open_folder_in_file_manager(cache_path)
+    if not opened:
+        raise HTTPException(
+            status_code=500, detail="Could not open the cache folder in file manager."
+        )
+    return {"ok": True, "path": str(cache_path)}
 
 
 @app.post("/api/models/uninstall")
@@ -1432,6 +1560,11 @@ class DesktopApi:
             return {"opened": True}
         return {"opened": False}
 
+    def open_cache_dir(self) -> dict[str, Any]:
+        """Opens the Hugging Face model cache directory in the system file manager."""
+        cache_path = Path(HF_HUB_CACHE)
+        return {"opened": open_folder_in_file_manager(cache_path), "path": str(cache_path)}
+
     def set_window_theme(self, theme: str) -> dict[str, Any]:
         """Synchronizes the native OS window frame appearance with Dark or Light mode."""
         if platform.system() == "Darwin" and self.window is not None:
@@ -1715,10 +1848,11 @@ def build_native_menus(window: Any) -> list[Any]:
             MenuSeparator(),
             MenuAction("Zoom In", call("zoomIn()")),
             MenuAction("Zoom Out", call("zoomOut()")),
-            MenuAction("Actual Size — 100%", call("zoomReset()")),
+            MenuAction("Actual Size", call("zoomReset()")),
             MenuSeparator(),
-            MenuAction("Toggle Loupe 4x", call("toggleLoupe()")),
+            MenuAction("Toggle 4x Loupe", call("toggleLoupe()")),
             MenuSeparator(),
+            MenuAction("Light Mode", call("toggleTheme()")),
             MenuAction("Toggle Full Screen", toggle_fs),
         ],
     )
@@ -1726,15 +1860,15 @@ def build_native_menus(window: Any) -> list[Any]:
     model_menu = Menu(
         "Model",
         [
-            MenuAction("Lite — 1K Fast", call("selectPreset('lite')")),
-            MenuAction("General — 1K Studio", call("selectPreset('general')")),
-            MenuAction("Ultra HR — 2K Detail", call("selectPreset('hr')")),
-            MenuAction("Portrait — 1K People", call("selectPreset('portrait')")),
-            MenuAction("Matting — 2K Soft Alpha", call("selectPreset('matting')")),
-            MenuAction("Dynamic — Native Ratio", call("selectPreset('dynamic')")),
+            MenuAction("Lite - 1K Fast", call("selectPreset('lite')")),
+            MenuAction("General - 1K Studio", call("selectPreset('general')")),
+            MenuAction("Ultra HR - 2K Detail", call("selectPreset('hr')")),
+            MenuAction("Portrait - 1K People", call("selectPreset('portrait')")),
+            MenuAction("Matting - 2K Soft Alpha", call("selectPreset('matting')")),
+            MenuAction("Dynamic - Native Ratio", call("selectPreset('dynamic')")),
             MenuSeparator(),
-            MenuAction("Toggle Defringe Edges", call("toggleDefringe()")),
-            MenuAction("Toggle Suppress Color Spill", call("toggleDespill()")),
+            MenuAction("Defringe Edges", call("toggleDefringe()")),
+            MenuAction("Suppress Color Spill", call("toggleDespill()")),
             MenuSeparator(),
             MenuAction("Re-Run Segmentation", call("rerunSegmentation()")),
             MenuSeparator(),
@@ -1745,7 +1879,7 @@ def build_native_menus(window: Any) -> list[Any]:
     help_menu = Menu(
         "Help",
         [
-            MenuAction("Preferences and System Info…", call("openSettings('preferences')")),
+            MenuAction("Preferences…", call("openSettings('preferences')")),
             MenuAction("About OpenBGR…", call("openSettings('about')")),
             MenuSeparator(),
             MenuAction(
@@ -1834,7 +1968,7 @@ def configure_macos_native_window_and_menus(window: Any) -> None:
                         "Original Only": ("3", cmd_mask),
                         "Zoom In": ("+", cmd_mask),
                         "Zoom Out": ("-", cmd_mask),
-                        "Actual Size — 100%": ("0", cmd_mask),
+                        "Actual Size": ("0", cmd_mask),
                         "Re-Run Segmentation": ("r", cmd_mask),
                         "Toggle Full Screen": ("f", ctrl_cmd),
                     }

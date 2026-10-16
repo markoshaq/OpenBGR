@@ -12,7 +12,6 @@
       try {
         var p = JSON.parse(localStorage.getItem("openbgr_prefs") || "{}");
         if (p.theme === "light") document.documentElement.classList.add("theme-light");
-        if (p.density === "compact") document.documentElement.classList.add("density-compact");
         var ACCENTS = {
           white: ["#fafafa", "#09090b"], green: ["#34d399", "#052e1b"],
           blue: ["#60a5fa", "#0b1c3a"], amber: ["#fbbf24", "#3a2a05"],
@@ -131,19 +130,19 @@
               </button>
               <button type="button" class="menu-item" data-cmd="zoomReset" data-requires="image">
                 <span class="menu-check"></span>
-                <span class="menu-label">Actual Size — 100%</span>
+                <span class="menu-label">Actual Size</span>
                 <span class="menu-kbd" data-shortcut="Mod+0">⌘0</span>
               </button>
               <div class="menu-sep"></div>
               <button type="button" class="menu-item" data-cmd="toggleLoupe" data-check="loupe" data-requires="image">
                 <span class="menu-check"></span>
-                <span class="menu-label">Toggle 4× Loupe</span>
+                <span class="menu-label">Toggle 4x Loupe</span>
                 <span class="menu-kbd">Z</span>
               </button>
               <div class="menu-sep"></div>
               <button type="button" class="menu-item" data-cmd="toggleTheme" data-check="theme:light">
                 <span class="menu-check"></span>
-                <span class="menu-label">Light Appearance</span>
+                <span class="menu-label">Light Mode</span>
                 <span class="menu-kbd"></span>
               </button>
               <button type="button" class="menu-item" data-cmd="toggleFullscreen">
@@ -159,32 +158,32 @@
             <div class="menu-dropdown">
               <button type="button" class="menu-item" data-cmd="presetLite" data-check="tier:lite">
                 <span class="menu-check"></span>
-                <span class="menu-label">Lite — 1K Fast (BiRefNet_lite)</span>
+                <span class="menu-label">Lite - 1K Fast (BiRefNet_lite)</span>
                 <span class="menu-kbd"></span>
               </button>
               <button type="button" class="menu-item" data-cmd="presetGeneral" data-check="tier:general">
                 <span class="menu-check">✓</span>
-                <span class="menu-label">General — 1K Studio (BiRefNet)</span>
+                <span class="menu-label">General - 1K Studio (BiRefNet)</span>
                 <span class="menu-kbd"></span>
               </button>
               <button type="button" class="menu-item" data-cmd="presetHr" data-check="tier:hr">
                 <span class="menu-check"></span>
-                <span class="menu-label">Ultra HR — 2K Detail (BiRefNet_HR)</span>
+                <span class="menu-label">Ultra HR - 2K Detail (BiRefNet_HR)</span>
                 <span class="menu-kbd"></span>
               </button>
               <button type="button" class="menu-item" data-cmd="presetPortrait" data-check="tier:portrait">
                 <span class="menu-check"></span>
-                <span class="menu-label">Portrait — 1K People (BiRefNet-portrait)</span>
+                <span class="menu-label">Portrait - 1K People (BiRefNet-portrait)</span>
                 <span class="menu-kbd"></span>
               </button>
               <button type="button" class="menu-item" data-cmd="presetMatting" data-check="tier:matting">
                 <span class="menu-check"></span>
-                <span class="menu-label">Matting — 2K Soft Alpha (BiRefNet_HR-matting)</span>
+                <span class="menu-label">Matting - 2K Soft Alpha (BiRefNet_HR-matting)</span>
                 <span class="menu-kbd"></span>
               </button>
               <button type="button" class="menu-item" data-cmd="presetDynamic" data-check="tier:dynamic">
                 <span class="menu-check"></span>
-                <span class="menu-label">Dynamic — Native Ratio (BiRefNet_dynamic)</span>
+                <span class="menu-label">Dynamic - Native Ratio (BiRefNet_dynamic)</span>
                 <span class="menu-kbd"></span>
               </button>
               <div class="menu-sep"></div>
@@ -258,9 +257,9 @@
           type="button"
           class="seg-btn loupe-btn"
           id="btnLoupe"
-          title="Toggle 4× Circle Magnifier Loupe (Shortcut: Z)"
+          title="Toggle 4x Circle Magnifier Loupe (Shortcut: Z)"
         >
-          LOUPE 4×
+          LOUPE 4x
         </button>
       </div>
 
@@ -439,31 +438,20 @@
             <div class="empty-head">
               <img class="empty-logo" src="/favicon.ico" alt="OpenBGR" />
               <div>
-                <div class="empty-title">WELCOME TO OPENBGR</div>
-                <div class="empty-tagline" id="emptyVersion">LOCAL BACKGROUND REMOVAL STUDIO</div>
+                <div class="empty-title">Welcome to OpenBGR!</div>
               </div>
             </div>
             <div class="empty-desc">
-              A free, open-source utility powered by the BiRefNet model
-              family — six specialized checkpoints, from a fast CPU-friendly
-              Lite to 2K portrait and alpha matting. After a one-time model
-              download, everything runs 100% offline on this machine:
-              no uploads, no telemetry, no accounts, no subscriptions.
-              Edit as many images as you want — they never leave your device.
-            </div>
-            <div class="empty-badges">
-              <span class="empty-badge">100% LOCAL</span>
-              <span class="empty-badge">NO TELEMETRY</span>
-              <span class="empty-badge">FULL-RES PNG</span>
-              <span class="empty-badge">FREE &amp; OPEN SOURCE</span>
+              A free, open-source utility powered by the BiRefNet model family.
+              After a one-time model download, everything runs 100% offline.
+              No uploads, no telemetry, no accounts, no subscriptions.
             </div>
             <div class="empty-shortcuts">
-              <span class="kbd">⌘O OPEN IMAGE</span>
+              <span class="kbd" data-shortcut-chip="Mod+O OPEN IMAGE">⌘O OPEN IMAGE</span>
               <span class="kbd">DRAG &amp; DROP</span>
-              <span class="kbd">⌘V PASTE</span>
-              <span class="kbd">⌘B BATCH</span>
+              <span class="kbd" data-shortcut-chip="Mod+V PASTE">⌘V PASTE</span>
+              <span class="kbd" data-shortcut-chip="Mod+B BATCH">⌘B BATCH</span>
             </div>
-            <div class="empty-hint">First process downloads the selected model once — every run after that is fully offline.</div>
           </div>
 
           <!-- Split-Plane Comparison Stage -->
@@ -474,7 +462,7 @@
               <img id="beforeImg" class="stage-layer" alt="Original Source" />
             </div>
             <div class="stage-label left" id="lblLeft">ORIGINAL</div>
-            <div class="stage-label right" id="lblRight">PNG • 100%</div>
+            <div class="stage-label right" id="lblRight">PNG (100%)</div>
             <div class="split-line" id="splitLine" style="left: 50%;">
               <div class="split-handle">↔</div>
             </div>
@@ -521,19 +509,19 @@
         <div class="sidebar-section">
           <div class="section-header">OUTPUT FORMAT</div>
           <div class="tier-row" id="formatRow">
-            <button type="button" class="tier-btn fmt-btn has-tooltip active" data-format="png" data-tooltip="PNG — Uncompressed 32-bit RGBA with full alpha transparency.">
+            <button type="button" class="tier-btn fmt-btn has-tooltip active" data-format="png" data-tooltip="Uncompressed 32-bit RGBA with full alpha transparency.">
               <span class="tier-label">PNG</span>
               <span class="tier-sub">RGBA</span>
             </button>
-            <button type="button" class="tier-btn fmt-btn has-tooltip" data-format="webp" data-tooltip="WEBP — High-efficiency alpha transparency, ~40% smaller files.">
+            <button type="button" class="tier-btn fmt-btn has-tooltip" data-format="webp" data-tooltip="High-efficiency alpha transparency, ~40% smaller files.">
               <span class="tier-label">WEBP</span>
               <span class="tier-sub">SMALL</span>
             </button>
-            <button type="button" class="tier-btn fmt-btn has-tooltip" data-format="jpg" data-tooltip="JPG — Lossy, composited onto the active Matte backdrop color.">
+            <button type="button" class="tier-btn fmt-btn has-tooltip" data-format="jpg" data-tooltip="Lossy, composited onto the active Matte backdrop color.">
               <span class="tier-label">JPG</span>
               <span class="tier-sub">MATTE</span>
             </button>
-            <button type="button" class="tier-btn fmt-btn has-tooltip" data-format="mask" data-tooltip="MASK — 8-bit grayscale alpha matte (white = foreground, black = background).">
+            <button type="button" class="tier-btn fmt-btn has-tooltip" data-format="mask" data-tooltip="8-bit grayscale alpha matte (white = foreground, black = background).">
               <span class="tier-label">MASK</span>
               <span class="tier-sub">ALPHA</span>
             </button>
@@ -609,7 +597,7 @@
       </div>
       <div class="status-group status-right">
         <a href="https://github.com/markoshaq" target="_blank" rel="noopener noreferrer" class="credit-link">
-          MADE BY MARKOSHAQ ↗
+          MADE BY MARKOSHAQ
         </a>
       </div>
     </footer>
@@ -632,70 +620,24 @@
     <!-- Tab Bar Context Menu (right-click / merge gestures) -->
     <div class="tab-context-menu" id="tabContextMenu" style="display:none"></div>
 
-    <!-- Preferences & System Info Modal (sidebar navigation layout) -->
+    <!-- Preferences & System Info Modal -->
     <div class="modal-backdrop" id="infoModal">
       <div class="modal-dialog prefs-dialog" role="dialog" aria-modal="true" aria-labelledby="infoModalTitle">
         <div class="prefs-header">
           <div class="prefs-title-group">
-            <svg class="prefs-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <circle cx="12" cy="12" r="3"></circle>
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.26.6.86 1 1.51 1H21a2 2 0 1 1 0 4h-.09c-.65 0-1.25.4-1.51 1z"></path>
-            </svg>
-            <div class="prefs-title-stack">
-              <div class="modal-title" id="infoModalTitle">PREFERENCES</div>
-              <div class="prefs-subtitle">OPENBGR <span id="prefsVersion">V—</span> · LOCAL ENGINE</div>
-            </div>
+            <span class="modal-title" id="infoModalTitle">PREFERENCES</span>
+            <span class="prefs-subtitle">OPENBGR <span id="prefsVersion">V0.02</span></span>
           </div>
-          <button type="button" class="prefs-close" id="btnPrefsCloseX" aria-label="Close preferences">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
-              <line x1="5" y1="5" x2="19" y2="19"></line>
-              <line x1="19" y1="5" x2="5" y2="19"></line>
-            </svg>
-          </button>
+          <button type="button" class="prefs-close" id="btnPrefsCloseX" aria-label="Close preferences">×</button>
         </div>
 
         <div class="prefs-body">
           <nav class="prefs-nav" aria-label="Preference sections">
-            <button type="button" class="prefs-nav-item active" data-pane="settings-preferences">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <circle cx="12" cy="12" r="9"></circle>
-                <path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor" stroke="none"></path>
-              </svg>
-              APPEARANCE
-            </button>
-            <button type="button" class="prefs-nav-item" data-pane="settings-general">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <line x1="4" y1="8" x2="20" y2="8"></line>
-                <line x1="4" y1="16" x2="20" y2="16"></line>
-                <circle cx="9" cy="8" r="2" fill="var(--surface)"></circle>
-                <circle cx="15" cy="16" r="2" fill="var(--surface)"></circle>
-              </svg>
-              GENERAL
-            </button>
-            <button type="button" class="prefs-nav-item" data-pane="settings-models">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <ellipse cx="12" cy="5" rx="8" ry="3"></ellipse>
-                <path d="M4 5v6c0 1.66 3.58 3 8 3s8-1.34 8-3V5"></path>
-                <path d="M4 11v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6"></path>
-              </svg>
-              MODELS
-            </button>
-            <button type="button" class="prefs-nav-item" data-pane="settings-system">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <rect x="6" y="6" width="12" height="12" rx="1"></rect>
-                <rect x="10" y="10" width="4" height="4"></rect>
-                <path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3"></path>
-              </svg>
-              SYSTEM
-            </button>
-            <button type="button" class="prefs-nav-item" data-pane="settings-about">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <circle cx="12" cy="12" r="9"></circle>
-                <line x1="12" y1="11" x2="12" y2="16"></line>
-                <circle cx="12" cy="8" r="0.6" fill="currentColor"></circle>
-              </svg>
-              ABOUT
-            </button>
+            <button type="button" class="prefs-nav-item active" data-pane="settings-preferences">APPEARANCE</button>
+            <button type="button" class="prefs-nav-item" data-pane="settings-general">GENERAL</button>
+            <button type="button" class="prefs-nav-item" data-pane="settings-models">MODELS</button>
+            <button type="button" class="prefs-nav-item" data-pane="settings-system">SYSTEM</button>
+            <button type="button" class="prefs-nav-item" data-pane="settings-about">ABOUT</button>
           </nav>
 
           <div class="prefs-content">
@@ -706,7 +648,7 @@
                 <div class="pref-row">
                   <div class="pref-text">
                     <span class="pref-label">THEME</span>
-                    <span class="pref-desc">Interface color scheme for the studio workspace.</span>
+                    <span class="pref-desc">Interface color scheme for the workspace.</span>
                   </div>
                   <div class="segmented pref-segmented">
                     <button type="button" class="seg-btn" id="prefThemeDark">DARK</button>
@@ -727,16 +669,6 @@
                     <button type="button" class="swatch" data-accent="violet" style="--dot:#a78bfa" title="Violet"></button>
                   </div>
                 </div>
-                <div class="pref-row">
-                  <div class="pref-text">
-                    <span class="pref-label">UI DENSITY</span>
-                    <span class="pref-desc">Spacing and control size across the studio.</span>
-                  </div>
-                  <div class="segmented pref-segmented">
-                    <button type="button" class="seg-btn" id="prefDensityComfortable">COMFORTABLE</button>
-                    <button type="button" class="seg-btn" id="prefDensityCompact">COMPACT</button>
-                  </div>
-                </div>
               </div>
             </section>
 
@@ -747,9 +679,9 @@
                 <button type="button" class="pref-switch-row" id="btnToggleConfirmClose">
                   <span class="pref-switch-text">
                     <span class="pref-label">CONFIRM BEFORE CLOSING TAB</span>
-                    <span class="pref-desc">Ask for confirmation when pressing X on an open image tab.</span>
+                    <span class="pref-desc">Ask for confirmation when closing an open image tab.</span>
                   </span>
-                  <span class="pref-switch" aria-hidden="true"><span class="pref-switch-knob"></span></span>
+                  <span class="toggle-switch" aria-hidden="true"><span class="toggle-knob"></span></span>
                 </button>
                 <div class="pref-row">
                   <div class="pref-text">
@@ -757,13 +689,13 @@
                     <span class="pref-desc">Model selected when the app launches.</span>
                   </div>
                   <select class="studio-select pref-select" id="prefDefaultTier">
-                    <option value="auto">Auto — Hardware Recommended</option>
-                    <option value="lite">Lite — 1K Fast</option>
-                    <option value="general">General — 1K Studio</option>
-                    <option value="hr">Ultra HR — 2K Detail</option>
-                    <option value="portrait">Portrait — 1K People</option>
-                    <option value="matting">Matting — 2K Soft Alpha</option>
-                    <option value="dynamic">Dynamic — Native Ratio</option>
+                    <option value="auto">Auto (Recommended)</option>
+                    <option value="lite">Lite (BiRefNet_lite)</option>
+                    <option value="general">General (BiRefNet)</option>
+                    <option value="hr">Ultra HR (BiRefNet_HR)</option>
+                    <option value="portrait">Portrait (BiRefNet-portrait)</option>
+                    <option value="matting">Matting (BiRefNet_HR-matting)</option>
+                    <option value="dynamic">Dynamic (BiRefNet_dynamic)</option>
                   </select>
                 </div>
                 <div class="pref-row">
@@ -772,10 +704,10 @@
                     <span class="pref-desc">File type preselected for every export.</span>
                   </div>
                   <select class="studio-select pref-select" id="prefDefaultFormat">
-                    <option value="png">PNG — 32-Bit Lossless RGBA</option>
-                    <option value="webp">WEBP — Transparent WebP</option>
-                    <option value="jpg">JPG — Matte Composited</option>
-                    <option value="mask">MASK — 8-Bit Alpha Matte</option>
+                    <option value="png">.png</option>
+                    <option value="webp">.webp</option>
+                    <option value="jpg">.jpg</option>
+                    <option value="mask">.mask</option>
                   </select>
                 </div>
                 <div class="pref-row">
@@ -803,12 +735,19 @@
                 </div>
                 <div class="spec-row">
                   <span class="spec-key">CACHE LOCATION</span>
-                  <span class="spec-val" id="modelsCacheDir">~/.cache/huggingface/hub</span>
+                  <span class="spec-val spec-val-action">
+                    <span id="modelsCacheDir">~/.cache/huggingface/hub</span>
+                    <button type="button" class="cache-folder-btn" id="btnOpenCacheDir" title="Open cache folder" aria-label="Open cache folder">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M1.5 3.5h4.2l1.6 1.8h7.2v7.2h-13z"></path>
+                      </svg>
+                    </button>
+                  </span>
                 </div>
                 <div class="pref-row">
                   <div class="pref-text">
                     <span class="pref-label">CLEAR MODEL CACHE</span>
-                    <span class="pref-desc">Uninstall all downloaded checkpoints. Any preset re-downloads automatically when run.</span>
+                    <span class="pref-desc">Uninstall all downloaded checkpoints. Models re-download automatically when run.</span>
                   </div>
                   <button type="button" class="action-btn model-uninstall-btn" id="btnUninstallAllModels" disabled>UNINSTALL ALL</button>
                 </div>
@@ -819,73 +758,67 @@
                 <div class="model-row" id="sysModel-lite" data-model-key="lite">
                   <span class="tier-dot" id="sysdot-lite"></span>
                   <div class="model-meta">
-                    <span class="model-name">LITE — 1K FAST</span>
-                    <span class="model-desc">BiRefNet_lite (Swin-T) — fast general cutouts for quick batches &amp; CPUs.</span>
+                    <span class="model-name">LITE <span class="model-tech">BiRefNet_lite</span></span>
+                    <span class="model-desc">Fast general cutouts for quick batches and CPUs.</span>
                   </div>
                   <div class="model-actions">
                     <span class="model-size" id="syssize-lite">—</span>
-                    <span class="model-badge" id="sysbadge-lite">—</span>
-                    <button type="button" class="action-btn model-uninstall-btn" data-uninstall-model="lite" id="sysbtn-lite" disabled>UNINSTALL</button>
+                    <button type="button" class="action-btn model-uninstall-btn" data-uninstall-model="lite" id="sysbtn-lite" disabled>NOT INSTALLED</button>
                   </div>
                 </div>
                 <div class="model-row" id="sysModel-general" data-model-key="general">
                   <span class="tier-dot" id="sysdot-general"></span>
                   <div class="model-meta">
-                    <span class="model-name">GENERAL — 1K STUDIO</span>
-                    <span class="model-desc">BiRefNet (Swin-L) — all-round flagship for products, objects &amp; everyday photos.</span>
+                    <span class="model-name">GENERAL <span class="model-tech">BiRefNet</span></span>
+                    <span class="model-desc">All-round model for products, objects, and everyday photos.</span>
                   </div>
                   <div class="model-actions">
                     <span class="model-size" id="syssize-general">—</span>
-                    <span class="model-badge" id="sysbadge-general">—</span>
-                    <button type="button" class="action-btn model-uninstall-btn" data-uninstall-model="general" id="sysbtn-general" disabled>UNINSTALL</button>
+                    <button type="button" class="action-btn model-uninstall-btn" data-uninstall-model="general" id="sysbtn-general" disabled>NOT INSTALLED</button>
                   </div>
                 </div>
                 <div class="model-row" id="sysModel-hr" data-model-key="hr">
                   <span class="tier-dot" id="sysdot-hr"></span>
                   <div class="model-meta">
-                    <span class="model-name">ULTRA HR — 2K DETAIL</span>
-                    <span class="model-desc">BiRefNet_HR (Swin-L) — native 2048px for 4K/8K photos &amp; intricate edges.</span>
+                    <span class="model-name">ULTRA HR <span class="model-tech">BiRefNet_HR</span></span>
+                    <span class="model-desc">Native 2048px model for 4K/8K photos and fine edge detail.</span>
                   </div>
                   <div class="model-actions">
                     <span class="model-size" id="syssize-hr">—</span>
-                    <span class="model-badge" id="sysbadge-hr">—</span>
-                    <button type="button" class="action-btn model-uninstall-btn" data-uninstall-model="hr" id="sysbtn-hr" disabled>UNINSTALL</button>
+                    <button type="button" class="action-btn model-uninstall-btn" data-uninstall-model="hr" id="sysbtn-hr" disabled>NOT INSTALLED</button>
                   </div>
                 </div>
                 <div class="model-row" id="sysModel-portrait" data-model-key="portrait">
                   <span class="tier-dot" id="sysdot-portrait"></span>
                   <div class="model-meta">
-                    <span class="model-name">PORTRAIT — 1K PEOPLE</span>
-                    <span class="model-desc">BiRefNet-portrait (Swin-L) — tuned for people, headshots, flyaway hair &amp; eyelashes.</span>
+                    <span class="model-name">PORTRAIT <span class="model-tech">BiRefNet-portrait</span></span>
+                    <span class="model-desc">Tuned for people, headshots, flyaway hair, and eyelashes.</span>
                   </div>
                   <div class="model-actions">
                     <span class="model-size" id="syssize-portrait">—</span>
-                    <span class="model-badge" id="sysbadge-portrait">—</span>
-                    <button type="button" class="action-btn model-uninstall-btn" data-uninstall-model="portrait" id="sysbtn-portrait" disabled>UNINSTALL</button>
+                    <button type="button" class="action-btn model-uninstall-btn" data-uninstall-model="portrait" id="sysbtn-portrait" disabled>NOT INSTALLED</button>
                   </div>
                 </div>
                 <div class="model-row" id="sysModel-matting" data-model-key="matting">
                   <span class="tier-dot" id="sysdot-matting"></span>
                   <div class="model-meta">
-                    <span class="model-name">MATTING — 2K SOFT ALPHA</span>
-                    <span class="model-desc">BiRefNet_HR-matting (Swin-L) — soft alpha for glass, smoke, sheer fabric &amp; fine hair.</span>
+                    <span class="model-name">MATTING <span class="model-tech">BiRefNet_HR-matting</span></span>
+                    <span class="model-desc">Soft alpha matting for glass, smoke, sheer fabric, and fine hair.</span>
                   </div>
                   <div class="model-actions">
                     <span class="model-size" id="syssize-matting">—</span>
-                    <span class="model-badge" id="sysbadge-matting">—</span>
-                    <button type="button" class="action-btn model-uninstall-btn" data-uninstall-model="matting" id="sysbtn-matting" disabled>UNINSTALL</button>
+                    <button type="button" class="action-btn model-uninstall-btn" data-uninstall-model="matting" id="sysbtn-matting" disabled>NOT INSTALLED</button>
                   </div>
                 </div>
                 <div class="model-row" id="sysModel-dynamic" data-model-key="dynamic">
                   <span class="tier-dot" id="sysdot-dynamic"></span>
                   <div class="model-meta">
-                    <span class="model-name">DYNAMIC — NATIVE RATIO</span>
-                    <span class="model-desc">BiRefNet_dynamic (Swin-L) — preserves native aspect ratio up to 2K without distortion.</span>
+                    <span class="model-name">DYNAMIC <span class="model-tech">BiRefNet_dynamic</span></span>
+                    <span class="model-desc">Preserves native aspect ratio up to 2K for panoramas and banners.</span>
                   </div>
                   <div class="model-actions">
                     <span class="model-size" id="syssize-dynamic">—</span>
-                    <span class="model-badge" id="sysbadge-dynamic">—</span>
-                    <button type="button" class="action-btn model-uninstall-btn" data-uninstall-model="dynamic" id="sysbtn-dynamic" disabled>UNINSTALL</button>
+                    <button type="button" class="action-btn model-uninstall-btn" data-uninstall-model="dynamic" id="sysbtn-dynamic" disabled>NOT INSTALLED</button>
                   </div>
                 </div>
               </div>
@@ -904,55 +837,36 @@
                   <span class="spec-val" id="hwPrecision">—</span>
                 </div>
                 <div class="spec-row">
-                  <span class="spec-key">MODEL STORAGE</span>
-                  <span class="spec-val" id="sysCacheSummary">—</span>
+                  <span class="spec-key">RAM</span>
+                  <span class="spec-val" id="hwMemory">—</span>
                 </div>
                 <div class="spec-row">
                   <span class="spec-key">VERSION</span>
                   <span class="spec-val" id="sysVersion">—</span>
                 </div>
               </div>
-
-              <div class="pane-subheading">PIPELINE CAPABILITIES</div>
-              <div class="pref-card">
-                <div class="spec-row">
-                  <span class="spec-key">DEFRINGE</span>
-                  <span class="spec-val spec-desc">Removes background color bleed along semi-transparent hair &amp; borders.</span>
-                </div>
-                <div class="spec-row">
-                  <span class="spec-key">SPILL SUPPRESSION</span>
-                  <span class="spec-val spec-desc">Neutralizes rim reflections and color bounce on edges and glass.</span>
-                </div>
-                <div class="spec-row">
-                  <span class="spec-key">SHADOW CUTOFF</span>
-                  <span class="spec-val spec-desc">Alpha threshold that clips floor reflections and faint drop shadows.</span>
-                </div>
-              </div>
             </section>
 
             <!-- ABOUT PANE -->
             <section class="prefs-pane" id="settings-about">
+              <div class="pane-heading">ABOUT</div>
               <div class="about-mark">
                 <span class="about-word">OPENBGR</span>
-                <span class="about-ver" id="aboutVersion">V—</span>
+                <span class="about-ver" id="aboutVersion">V0.02</span>
               </div>
               <p class="about-blurb">
-                Local AI background removal studio powered by BiRefNet.
-                100% offline after the initial model download — no uploads,
-                no telemetry, no subscriptions.
+                A free, open-source utility powered by BiRefNet models. After a
+                one-time model download, everything runs 100% offline. No
+                uploads, no telemetry, no accounts, no subscriptions.
               </p>
               <div class="pref-card">
                 <div class="spec-row">
-                  <span class="spec-key">PRIVACY</span>
-                  <span class="spec-val spec-desc">Images never leave this machine. Inference runs fully on-device.</span>
-                </div>
-                <div class="spec-row">
                   <span class="spec-key">LICENSE</span>
-                  <span class="spec-val spec-desc">MIT — free for personal and commercial use.</span>
+                  <span class="spec-val">MIT License</span>
                 </div>
                 <div class="spec-row">
-                  <span class="spec-key">SOURCE</span>
-                  <span class="spec-val spec-desc">github.com/markoshaq/OpenBGR</span>
+                  <span class="spec-key">GITHUB</span>
+                  <a href="https://github.com/markoshaq/OpenBGR" target="_blank" rel="noopener noreferrer" class="spec-val spec-link">github.com/markoshaq/OpenBGR ↗</a>
                 </div>
               </div>
             </section>
@@ -961,7 +875,7 @@
 
         <div class="info-footer prefs-footer">
           <a href="https://github.com/markoshaq" target="_blank" rel="noopener noreferrer" class="credit-link">
-            MADE BY MARKOSHAQ ↗
+            MADE BY MARKOSHAQ
           </a>
           <div class="info-footer-actions">
             <button type="button" class="action-btn" id="btnResetPrefs">RESET DEFAULTS</button>

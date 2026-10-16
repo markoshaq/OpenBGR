@@ -36,6 +36,16 @@ class TestOpenBGR(unittest.TestCase):
         status = openbgr_app.api_status()
         self.assertEqual(status["version"], "0.02")
         self.assertIn("total_cache_bytes", status)
+        self.assertIn("app_size_bytes", status)
+        self.assertIn("total_disk_bytes", status)
+        self.assertGreater(status["app_size_bytes"], 0)
+        self.assertEqual(
+            status["total_disk_bytes"],
+            status["total_cache_bytes"] + status["app_size_bytes"],
+        )
+        self.assertIn("ram_gb", status)
+        self.assertIn("ram_label", status)
+        self.assertGreater(status["ram_gb"], 0)
         self.assertIn("cache_dir", status)
         for key in ("lite", "general", "hr", "portrait", "matting", "dynamic"):
             self.assertIn(key, status["tiers"])
