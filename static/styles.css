@@ -96,18 +96,45 @@ body {
   width: 100vw;
 }
 
-/* Grey out all image-dependent options when no source image is loaded */
-.app-shell.no-image .topbar-center,
-.app-shell.no-image .status-center {
-  opacity: 0.3;
-  pointer-events: none;
-  user-select: none;
+/* Progressive disclosure across the 4 workspace states:
+ * 0. Blank (no-image, not batch-active): hide sidebars, topbar-center, and status-center; 1-column dropzone
+ * 1. Image loaded, unprocessed (no-result, not no-image): show left sidebar (without post-process controls), zoom/loupe, and file/dimensions; 2-column layout
+ * 2. Image processed: full 3-column studio layout with view switcher, export sidebar, and all telemetry
+ * 3. Batch tab (batch-active): 3-column layout with both sidebars unlocked, topbar-center hidden, file + elapsed shown
+ */
+.app-shell.no-image .topbar-center {
+  display: none;
 }
 
-/* Result-dependent controls stay locked until processing produces a cutout */
-.app-shell.no-result .requires-image,
-.app-shell.no-result .sidebar-right {
-  opacity: 0.3;
+.app-shell.no-image:not(.batch-active) .studio-body {
+  grid-template-columns: 1fr;
+}
+
+.app-shell.no-image:not(.batch-active) .sidebar-left,
+.app-shell.no-image:not(.batch-active) .sidebar-right,
+.app-shell.no-image:not(.batch-active) .status-center {
+  display: none;
+}
+
+.app-shell.no-result:not(.no-image):not(.batch-active) .studio-body {
+  grid-template-columns: 264px 1fr;
+}
+
+.app-shell.no-result:not(.batch-active) .requires-image,
+.app-shell.no-result:not(.batch-active) .sidebar-right,
+.app-shell.no-result .view-cluster,
+.app-shell.no-result:not(.batch-active):not(.is-processing) .status-kv-time {
+  display: none;
+}
+
+.app-shell.batch-active .status-kv-dim {
+  display: none;
+}
+
+.app-shell.is-processing .sidebar-left,
+.app-shell.is-processing .sidebar-right,
+.app-shell.is-processing .topbar-center {
+  opacity: 0.45;
   pointer-events: none;
   user-select: none;
 }
@@ -2104,16 +2131,6 @@ input[type="file"] {
   letter-spacing: 0.12em;
   color: var(--muted);
   padding: 5px 10px 3px;
-}
-
-.app-shell.batch-active.no-result .sidebar-right {
-  opacity: 1;
-  pointer-events: auto;
-  user-select: auto;
-}
-
-.app-shell.batch-active.no-image .status-center {
-  opacity: 1;
 }
 
 .app-shell.batch-active .batch-hide {

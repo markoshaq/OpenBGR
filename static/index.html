@@ -228,14 +228,14 @@
       </div>
 
       <div class="topbar-center">
-        <span class="cluster-label">VIEW</span>
-        <div class="segmented">
+        <span class="cluster-label view-cluster">VIEW</span>
+        <div class="segmented view-cluster">
           <button type="button" class="seg-btn active" id="viewSplit">SPLIT</button>
           <button type="button" class="seg-btn" id="viewCutout">CUTOUT</button>
           <button type="button" class="seg-btn" id="viewOriginal">ORIGINAL</button>
         </div>
 
-        <div class="divider-v"></div>
+        <div class="divider-v view-cluster"></div>
 
         <span class="cluster-label">ZOOM</span>
         <div class="segmented">
@@ -383,7 +383,7 @@
           <div class="field-hint">Solid colors are composited into exports.</div>
         </div>
 
-        <div class="sidebar-section">
+        <div class="sidebar-section batch-hide">
           <button type="button" class="action-btn primary full-width disabled" id="btnProcess">PROCESS IMAGE</button>
         </div>
       </aside>
@@ -545,9 +545,9 @@
     <footer class="statusbar">
       <div class="status-spacer"></div>
       <div class="status-group status-center">
-        <div class="status-kv">FILE: <span id="statFile">NONE</span></div>
-        <div class="status-kv">DIMENSIONS: <span id="statDim">—</span></div>
-        <div class="status-kv">ELAPSED: <span id="statTime">—</span></div>
+        <div class="status-kv status-kv-file">FILE: <span id="statFile">NONE</span></div>
+        <div class="status-kv status-kv-dim">DIMENSIONS: <span id="statDim">—</span></div>
+        <div class="status-kv status-kv-time">ELAPSED: <span id="statTime">—</span></div>
       </div>
       <div class="status-group status-right">
         <a href="https://github.com/markoshaq" target="_blank" rel="noopener noreferrer" class="credit-link">

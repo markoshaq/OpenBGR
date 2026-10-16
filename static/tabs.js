@@ -399,9 +399,24 @@ export async function switchToTab(tabId) {
 
   dom.emptyState.style.display = "none";
   dom.stage.classList.add("visible");
+  dom.beforeImg.onload = () => {
+    if (dom.beforeImg.naturalWidth > 0 && dom.beforeImg.naturalHeight > 0) {
+      if (!state.naturalWidth || !state.naturalHeight) {
+        state.naturalWidth = dom.beforeImg.naturalWidth;
+        state.naturalHeight = dom.beforeImg.naturalHeight;
+        tab.naturalWidth = state.naturalWidth;
+        tab.naturalHeight = state.naturalHeight;
+      }
+      dom.statDim.textContent = `${state.naturalWidth}×${state.naturalHeight} PX`;
+    }
+  };
   dom.stageSizerImg.src = state.originalObjectUrl;
   dom.beforeImg.src = state.originalObjectUrl;
   dom.statFile.textContent = tab.name.toUpperCase();
+  dom.statDim.textContent =
+    state.naturalWidth > 0 && state.naturalHeight > 0
+      ? `${state.naturalWidth}×${state.naturalHeight} PX`
+      : "—";
   dom.statTime.textContent = tab.elapsedText || "—";
 
   if (state.resultBlob && state.resultObjectUrl) {
@@ -469,6 +484,18 @@ export function ingestImageFile(file) {
   dom.btnCopy.classList.add("disabled");
 
   dom.stageSizerImg.src = state.originalObjectUrl;
+  dom.beforeImg.onload = () => {
+    if (dom.beforeImg.naturalWidth > 0 && dom.beforeImg.naturalHeight > 0) {
+      state.naturalWidth = dom.beforeImg.naturalWidth;
+      state.naturalHeight = dom.beforeImg.naturalHeight;
+      dom.statDim.textContent = `${state.naturalWidth}×${state.naturalHeight} PX`;
+      const active = getActiveTab();
+      if (active && active.kind !== "batch") {
+        active.naturalWidth = state.naturalWidth;
+        active.naturalHeight = state.naturalHeight;
+      }
+    }
+  };
   dom.beforeImg.src = state.originalObjectUrl;
   dom.afterImg.src = state.originalObjectUrl;
 
@@ -549,6 +576,8 @@ export function syncMenuBarState() {
     }
   });
 
+  dom.appShell?.classList.toggle("is-processing", isBusy);
+
   if (dom.btnProcess) {
     dom.btnProcess.classList.toggle("disabled", !hasImage || isBusy);
     dom.btnProcess.textContent = isBusy
@@ -602,7 +631,9 @@ export async function runSegmentation() {
   state.abortController = controller;
   state.isProcessing = true;
 
-  dom.appShell?.classList.add("no-result");
+  if (!state.resultBlob) {
+    dom.appShell?.classList.add("no-result");
+  }
   setError(null);
   dom.busyOverlay.classList.add("active");
   dom.statTime.textContent = "PROCESSING...";
