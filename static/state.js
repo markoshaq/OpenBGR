@@ -188,6 +188,7 @@ export const dom = {
   tabBar: document.getElementById("tabBar"),
   viewport: document.getElementById("viewport"),
   emptyState: document.getElementById("emptyState"),
+  emptyVersion: document.getElementById("emptyVersion"),
   stage: document.getElementById("stage"),
   stageSizerImg: document.getElementById("stageSizerImg"),
   beforeImg: document.getElementById("beforeImg"),

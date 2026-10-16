@@ -323,6 +323,11 @@ export async function syncServerStatus(isInitialLoad = false, onSelectTier = nul
     if (dom.prefsVersion) dom.prefsVersion.textContent = verLabel;
     if (dom.sysVersion) dom.sysVersion.textContent = verLabel;
     if (dom.aboutVersion) dom.aboutVersion.textContent = verLabel;
+    if (dom.emptyVersion) {
+      dom.emptyVersion.textContent = version
+        ? `LOCAL STUDIO — V${version} · ${(device_label || "").toUpperCase()}`
+        : "LOCAL BACKGROUND REMOVAL STUDIO";
+    }
 
     if (isInitialLoad && onSelectTier) {
       const targetTier =

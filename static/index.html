@@ -434,14 +434,36 @@
         <main class="viewport checkerboard-canvas" id="viewport">
           <div class="error-toast" id="errorToast"></div>
 
-          <!-- Empty / Dropzone State -->
+          <!-- Empty / Dropzone State — doubles as the welcome splash -->
           <div class="empty-state" id="emptyState">
-            <div class="empty-title">Drop image file, click to browse, or paste</div>
-            <div class="empty-shortcuts">
-              <span class="kbd">CLICK TO BROWSE</span>
-              <span class="kbd">DRAG &amp; DROP</span>
-              <span class="kbd">⌘V / CTRL+V PASTE</span>
+            <div class="empty-head">
+              <img class="empty-logo" src="/favicon.ico" alt="OpenBGR" />
+              <div>
+                <div class="empty-title">WELCOME TO OPENBGR</div>
+                <div class="empty-tagline" id="emptyVersion">LOCAL BACKGROUND REMOVAL STUDIO</div>
+              </div>
             </div>
+            <div class="empty-desc">
+              A free, open-source utility powered by the BiRefNet model
+              family — six specialized checkpoints, from a fast CPU-friendly
+              Lite to 2K portrait and alpha matting. After a one-time model
+              download, everything runs 100% offline on this machine:
+              no uploads, no telemetry, no accounts, no subscriptions.
+              Edit as many images as you want — they never leave your device.
+            </div>
+            <div class="empty-badges">
+              <span class="empty-badge">100% LOCAL</span>
+              <span class="empty-badge">NO TELEMETRY</span>
+              <span class="empty-badge">FULL-RES PNG</span>
+              <span class="empty-badge">FREE &amp; OPEN SOURCE</span>
+            </div>
+            <div class="empty-shortcuts">
+              <span class="kbd">⌘O OPEN IMAGE</span>
+              <span class="kbd">DRAG &amp; DROP</span>
+              <span class="kbd">⌘V PASTE</span>
+              <span class="kbd">⌘B BATCH</span>
+            </div>
+            <div class="empty-hint">First process downloads the selected model once — every run after that is fully offline.</div>
           </div>
 
           <!-- Split-Plane Comparison Stage -->
