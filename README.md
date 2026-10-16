@@ -95,6 +95,8 @@ python3 scripts/build_release.py
 
 Pushing a version tag (e.g. `git tag v0.02 && git push origin v0.02`) triggers `.github/workflows/release.yml` to build and attach `OpenBGR-macOS.dmg`, `OpenBGR-Windows.zip`, and `OpenBGR-Linux.tar.gz` to a GitHub Release automatically.
 
+> **macOS Gatekeeper note:** Because release builds are ad-hoc signed rather than Apple-notarized, macOS may prompt on first launch when opening `OpenBGR.app` from a downloaded `.dmg`. Right-click `OpenBGR.app` → **Open** (once), or run `xattr -cr /Applications/OpenBGR.app`.
+
 ## License
 
 [MIT](./LICENSE)

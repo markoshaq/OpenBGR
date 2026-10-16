@@ -1,0 +1,178 @@
+"""
+Automated test suite for OpenBGR backend endpoints, image refinement pipeline,
+FP16 cache compaction, icon rendering, and frontend ES module / DOM integrity.
+
+Run with:
+    python -m unittest discover -s tests -v
+"""
+
+from __future__ import annotations
+
+import asyncio
+import io
+import re
+import tarfile
+import tempfile
+import unittest
+import zipfile
+from pathlib import Path
+from unittest.mock import patch
+
+import numpy as np
+import torch
+from fastapi import HTTPException, UploadFile
+from PIL import Image
+
+import app as openbgr_app
+import icon_render
+from scripts import build_release
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+STATIC_DIR = ROOT_DIR / "static"
+
+
+class TestOpenBGR(unittest.TestCase):
+    def test_version_and_status_contract(self) -> None:
+        status = openbgr_app.api_status()
+        self.assertEqual(status["version"], "0.02")
+        self.assertIn("total_cache_bytes", status)
+        self.assertIn("cache_dir", status)
+        for key in ("low", "mid", "high"):
+            self.assertIn(key, status["tiers"])
+            tier = status["tiers"][key]
+            self.assertIn("cached", tier)
+            self.assertIn("active", tier)
+            self.assertIn("size_bytes", tier)
+            self.assertIsInstance(tier["size_bytes"], int)
+        self.assertIn("matting", status)
+        self.assertIn("size_bytes", status["matting"])
+
+    def test_icon_squircle_geometry(self) -> None:
+        img = icon_render.render_icon(256)
+        self.assertEqual(img.mode, "RGBA")
+        self.assertEqual(img.size, (256, 256))
+        # Outer corner pixel must be transparent outside the squircle mask; center must be opaque.
+        self.assertEqual(img.getpixel((2, 2))[3], 0)
+        self.assertEqual(img.getpixel((128, 128))[3], 255)
+
+    def test_edge_refinement_pipeline(self) -> None:
+        rgb = Image.fromarray(np.full((32, 32, 3), (40, 200, 60), dtype=np.uint8), mode="RGB")
+        alpha = np.zeros((32, 32), dtype=np.uint8)
+        alpha[8:24, 8:24] = 255
+        alpha[7, 8:24] = 128
+
+        defringed = openbgr_app.decontaminate_edge_colors(rgb, alpha)
+        self.assertEqual(defringed.shape, (32, 32, 3))
+        self.assertEqual(defringed.dtype, np.uint8)
+
+        mask_pil = Image.fromarray(alpha, mode="L")
+        despilled = openbgr_app.suppress_color_spill(
+            defringed, mask_pil, alpha.astype(np.float32) / 255.0
+        )
+        self.assertEqual(despilled.shape, (32, 32, 3))
+        self.assertEqual(despilled.dtype, np.uint8)
+
+    def test_api_save_sanitizes_and_renames_collisions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            up1 = UploadFile(filename="cutout.png", file=io.BytesIO(b"png-bytes-1"))
+            res1 = asyncio.run(
+                openbgr_app.api_save(
+                    directory=tmp, filename="../../evil/cutout.png", file=up1
+                )
+            )
+            self.assertTrue(res1["ok"])
+            self.assertEqual(res1["name"], "cutout.png")
+            self.assertEqual((Path(tmp) / "cutout.png").read_bytes(), b"png-bytes-1")
+
+            up2 = UploadFile(filename="cutout.png", file=io.BytesIO(b"png-bytes-2"))
+            res2 = asyncio.run(
+                openbgr_app.api_save(directory=tmp, filename="cutout.png", file=up2)
+            )
+            self.assertEqual(res2["name"], "cutout-1.png")
+            self.assertEqual((Path(tmp) / "cutout-1.png").read_bytes(), b"png-bytes-2")
+
+    def test_api_uninstall_validation(self) -> None:
+        with self.assertRaises(HTTPException) as ctx:
+            openbgr_app.api_uninstall_model(target="invalid-tier")
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_fp16_cache_compaction(self) -> None:
+        from safetensors import safe_open
+        from safetensors.torch import save_file
+
+        with tempfile.TemporaryDirectory() as tmp:
+            sf_path = Path(tmp) / "model.safetensors"
+            save_file(
+                {"weight": torch.randn(128, 128, dtype=torch.float32)},
+                str(sf_path),
+                metadata={"format": "pt"},
+            )
+            size_before = sf_path.stat().st_size
+            with patch.object(
+                openbgr_app, "try_to_load_from_cache", return_value=str(sf_path)
+            ):
+                saved = openbgr_app.compact_model_cache_fp16("dummy/repo")
+                self.assertGreater(saved, 0)
+                self.assertLess(sf_path.stat().st_size, size_before)
+                # Second call is a no-op once already FP16
+                self.assertEqual(openbgr_app.compact_model_cache_fp16("dummy/repo"), 0)
+
+            with safe_open(str(sf_path), framework="pt", device="cpu") as f:
+                self.assertEqual(f.get_tensor("weight").dtype, torch.float16)
+
+    def test_frontend_modules_and_dom_ids(self) -> None:
+        expected_modules = [
+            "state.js",
+            "stage.js",
+            "export.js",
+            "preferences.js",
+            "batch.js",
+            "tabs.js",
+            "app.js",
+        ]
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        html_ids = set(re.findall(r'\bid="([^"]+)"', html))
+
+        for mod_name in expected_modules:
+            mod_path = STATIC_DIR / mod_name
+            self.assertTrue(mod_path.is_file(), f"Missing ES module: {mod_name}")
+            src = mod_path.read_text(encoding="utf-8")
+            for ref_id in re.findall(r'getElementById\("([^"$]+)"\)', src):
+                self.assertIn(
+                    ref_id,
+                    html_ids,
+                    f"#{ref_id} referenced in {mod_name} does not exist in index.html",
+                )
+
+    def test_release_archives_contain_all_modules(self) -> None:
+        win_zip = build_release.build_windows_release()
+        linux_tar = build_release.build_linux_release()
+
+        required_entries = {
+            "OpenBGR/app.py",
+            "OpenBGR/icon_render.py",
+            "OpenBGR/start.sh",
+            "OpenBGR/start.bat",
+            "OpenBGR/scripts/make_dev_bundle.py",
+            "OpenBGR/static/index.html",
+            "OpenBGR/static/styles.css",
+            "OpenBGR/static/app.js",
+            "OpenBGR/static/state.js",
+            "OpenBGR/static/stage.js",
+            "OpenBGR/static/export.js",
+            "OpenBGR/static/preferences.js",
+            "OpenBGR/static/batch.js",
+            "OpenBGR/static/tabs.js",
+        }
+
+        with zipfile.ZipFile(win_zip, "r") as zf:
+            zip_names = {n.replace("\\", "/") for n in zf.namelist()}
+            self.assertTrue(required_entries.issubset(zip_names))
+
+        with tarfile.open(linux_tar, "r:gz") as tf:
+            tar_names = set(tf.getnames())
+            self.assertTrue(required_entries.issubset(tar_names))
+
+
+if __name__ == "__main__":
+    unittest.main()

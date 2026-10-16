@@ -93,6 +93,7 @@ export function createBatchTab(files) {
   });
   state.tabs.push(tab);
   switchToTab(tab.id);
+  return tab;
 }
 
 export function addFilesToBatchTab(tab, files) {

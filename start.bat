@@ -29,12 +29,12 @@ if not exist ".venv" (
         echo [1/2] Creating virtual environment with uv...
         uv venv .venv --python 3.12
     ) else (
-        where python >nul 2>nul
+        python -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)" >nul 2>nul
         if !errorlevel! equ 0 (
             echo [1/2] Creating local Python virtual environment ^(.venv^)...
             python -m venv .venv
         ) else (
-            echo [1/2] Python not found. Automatically installing standalone Python via uv...
+            echo [1/2] Python 3.10+ not found. Automatically installing standalone Python via uv...
             powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://astral.sh/uv/install.ps1 | iex"
             set "PATH=%USERPROFILE%\.local\bin;%USERPROFILE%\.cargo\bin;%PATH%"
             uv venv .venv --python 3.12

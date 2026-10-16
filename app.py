@@ -305,6 +305,57 @@ def get_model_disk_bytes(repo_id: str) -> int:
         return 0
 
 
+def compact_model_cache_fp16(repo_id: str) -> int:
+    """
+    Compacts any FP32 `model.safetensors` checkpoint in the local HF cache (such as
+    `BiRefNet-matting` at 844 MB) down to FP16 (~424 MB) in-place on disk.
+    Returns the number of bytes saved, or 0 if already FP16.
+    """
+    try:
+        from safetensors import safe_open
+        from safetensors.torch import load_file, save_file
+
+        cached_path = try_to_load_from_cache(repo_id, "model.safetensors")
+        if not isinstance(cached_path, str) or not os.path.exists(cached_path):
+            return 0
+        blob_path = Path(os.path.realpath(cached_path))
+        if not blob_path.is_file():
+            return 0
+
+        needs_fp16 = False
+        metadata: dict[str, str] = {}
+        with safe_open(str(blob_path), framework="pt", device="cpu") as f:
+            metadata = f.metadata() or {}
+            for k in list(f.keys())[:8]:
+                if f.get_tensor(k).dtype == torch.float32:
+                    needs_fp16 = True
+                    break
+        if not needs_fp16:
+            return 0
+
+        old_size = blob_path.stat().st_size
+        tensors = load_file(str(blob_path), device="cpu")
+        fp16_tensors = {
+            k: (v.half() if v.is_floating_point() and v.dtype == torch.float32 else v)
+            for k, v in tensors.items()
+        }
+        del tensors
+        tmp_path = blob_path.with_suffix(".fp16.tmp")
+        save_file(fp16_tensors, str(tmp_path), metadata=metadata or {"format": "pt"})
+        del fp16_tensors
+        os.replace(tmp_path, blob_path)
+        new_size = blob_path.stat().st_size
+        saved = max(0, old_size - new_size)
+        if saved > 0:
+            print(
+                f"[Model] Compacted {repo_id} cache to FP16 "
+                f"({old_size / 1024**2:.1f} MB -> {new_size / 1024**2:.1f} MB)."
+            )
+        return saved
+    except Exception:
+        return 0
+
+
 def is_model_cached_locally(repo_id: str) -> bool:
     """
     Checks whether a Hugging Face model's weight file (`model.safetensors`) is
@@ -414,6 +465,7 @@ class ModelManager:
                     local_files_only=False,
                 )
                 print(f"[Model] Download complete for {repo_id}.")
+                compact_model_cache_fp16(repo_id)
 
             loaded_model.to(device=DEVICE, dtype=DTYPE)
             loaded_model.eval()
@@ -897,6 +949,15 @@ async def api_remove_bg(
 def serve_index() -> FileResponse:
     """Serves the single-page studio interface."""
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/favicon.ico")
+def serve_favicon() -> Response:
+    """Serves the OpenBGR squircle icon for browser tabs."""
+    icon_path = ensure_app_icon()
+    if icon_path and Path(icon_path).is_file():
+        return FileResponse(icon_path, media_type="image/png")
+    return Response(status_code=204)
 
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

@@ -46,6 +46,12 @@ def copy_project_payload(dest_dir: Path) -> None:
         if src.exists():
             shutil.copy2(src, dest_dir / filename)
 
+    dev_bundle_script = ROOT_DIR / "scripts" / "make_dev_bundle.py"
+    if dev_bundle_script.exists():
+        scripts_dst = dest_dir / "scripts"
+        scripts_dst.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(dev_bundle_script, scripts_dst / "make_dev_bundle.py")
+
     static_src = ROOT_DIR / "static"
     static_dst = dest_dir / "static"
     if static_dst.exists():
@@ -154,7 +160,14 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/.cargo/bin:
 
 if [ ! -f "$VENV_DIR/.installed" ]; then
   osascript -e 'display notification "Setting up local AI engine (one-time setup, ~1-2 min)..." with title "OpenBGR"' >/dev/null 2>&1 || true
-  if ! command -v uv >/dev/null 2>&1 && ! command -v python3 >/dev/null 2>&1; then
+  HAS_PY310=0
+  if command -v python3 >/dev/null 2>&1; then
+    PY_OK=$(python3 -c 'import sys; print(int(sys.version_info >= (3, 10)))' 2>/dev/null || echo 0)
+    if [ "$PY_OK" = "1" ]; then
+      HAS_PY310=1
+    fi
+  fi
+  if ! command -v uv >/dev/null 2>&1 && [ "$HAS_PY310" != "1" ]; then
     curl -LsSf https://astral.sh/uv/install.sh | sh >>"$LOG_FILE" 2>&1
     export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
   fi
@@ -177,6 +190,14 @@ exec "$VENV_DIR/bin/python" "$DIR/app.py" >>"$LOG_FILE" 2>&1
     make_executable(launcher_path)
     make_executable(payload_dir / "start.sh")
     make_executable(payload_dir / "Start Mac.command")
+
+    # Ad-hoc sign the app bundle so macOS Apple Silicon launch services accept it.
+    subprocess.run(
+        ["codesign", "--force", "--deep", "--sign", "-", str(app_bundle)],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
     dmg_path = DIST_DIR / "OpenBGR-macOS.dmg"
     if dmg_path.exists():
@@ -283,7 +304,7 @@ def build_linux_release() -> Path:
 Type=Application
 Name=OpenBGR
 Comment=Local AI Background Removal Studio
-Exec=./start.sh
+Exec=sh -c 'cd "$(dirname "$1")" && exec ./start.sh' _ %k
 Terminal=false
 Categories=Graphics;Photography;
 """

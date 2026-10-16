@@ -3,8 +3,11 @@ name: Build & Publish Desktop Releases
 on:
   workflow_dispatch:
   push:
+    branches:
+      - main
     tags:
       - "v*"
+  pull_request:
 
 permissions:
   contents: write
@@ -20,7 +23,10 @@ jobs:
       - name: Install Pillow for icon generation
         run: pip install pillow
       - name: Build OpenBGR-macOS.dmg
-        run: python scripts/build_release.py
+        run: |
+          python -m py_compile app.py icon_render.py scripts/build_release.py scripts/make_dev_bundle.py
+          bash -n start.sh "Start Mac.command"
+          python scripts/build_release.py
       - uses: actions/upload-artifact@v4
         with:
           name: OpenBGR-macOS-dmg
@@ -34,7 +40,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: Build OpenBGR-Windows.zip (with OpenBGR.exe)
-        run: python scripts/build_release.py
+        run: |
+          python -m py_compile app.py icon_render.py scripts/build_release.py
+          python scripts/build_release.py
       - uses: actions/upload-artifact@v4
         with:
           name: OpenBGR-Windows-zip
@@ -48,7 +56,10 @@ jobs:
         with:
           python-version: "3.12"
       - name: Build OpenBGR-Linux.tar.gz
-        run: python scripts/build_release.py
+        run: |
+          python -m py_compile app.py icon_render.py scripts/build_release.py
+          bash -n start.sh
+          python scripts/build_release.py
       - uses: actions/upload-artifact@v4
         with:
           name: OpenBGR-Linux-tar-gz

@@ -99,7 +99,10 @@ dom.tabBar?.addEventListener("drop", (e) => {
 
 // Dismiss tab context menu on outside click or Escape
 window.addEventListener("click", (e) => {
-  if (dom.tabContextMenu && !dom.tabContextMenu.contains(e.target)) {
+  if (
+    dom.tabContextMenu &&
+    (!(e.target instanceof Node) || !dom.tabContextMenu.contains(e.target))
+  ) {
     hideTabContextMenu();
   }
 });
