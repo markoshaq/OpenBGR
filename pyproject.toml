@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "openbgr"
-version = "0.10"
+version = "0.10.1"
 description = "Self-hosted, zero-telemetry background removal studio powered by BiRefNet"
 readme = "README.md"
 requires-python = ">=3.10"
