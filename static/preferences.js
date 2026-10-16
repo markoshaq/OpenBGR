@@ -277,7 +277,7 @@ export async function installModel(target) {
 export function showModelContextMenu(key, x, y) {
   const menu = dom.tabContextMenu;
   if (!menu) return;
-  menu.innerHTML = "";
+  menu.replaceChildren();
 
   const norm = normalizeTierKey(key);
   const tierInfo = getTierInfo(norm);

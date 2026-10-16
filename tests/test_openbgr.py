@@ -83,9 +83,7 @@ class TestOpenBGR(unittest.TestCase):
         alpha[8:24, 8:24] = 255
         alpha[7, 8:24] = 128
 
-        defringed = openbgr_app.decontaminate_edge_colors(
-            np.array(rgb, dtype=np.uint8), alpha
-        )
+        defringed = openbgr_app.decontaminate_edge_colors(np.array(rgb, dtype=np.uint8), alpha)
         self.assertEqual(defringed.shape, (32, 32, 3))
         self.assertEqual(defringed.dtype, np.uint8)
 
@@ -117,9 +115,7 @@ class TestOpenBGR(unittest.TestCase):
             openbgr_app._LAST_JOB.clear()
             openbgr_app._LAST_JOB.update({"id": 42, "rgb": rgb, "alpha": alpha})
 
-        res = asyncio.run(
-            openbgr_app.api_refine(job_id=42, defringe=True, despill=True)
-        )
+        res = asyncio.run(openbgr_app.api_refine(job_id=42, defringe=True, despill=True))
         self.assertEqual(res.media_type, "image/png")
         self.assertEqual(res.headers["X-Refine-Job-Id"], "42")
         out = Image.open(io.BytesIO(res.body))
@@ -129,9 +125,7 @@ class TestOpenBGR(unittest.TestCase):
 
         # Stale job ids are rejected so an older tab can't refine a newer job
         with self.assertRaises(HTTPException) as ctx:
-            asyncio.run(
-                openbgr_app.api_refine(job_id=41, defringe=True, despill=True)
-            )
+            asyncio.run(openbgr_app.api_refine(job_id=41, defringe=True, despill=True))
         self.assertEqual(ctx.exception.status_code, 409)
 
     def test_api_save_sanitizes_and_renames_collisions(self) -> None:
@@ -139,18 +133,14 @@ class TestOpenBGR(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             up1 = UploadFile(filename="cutout.png", file=io.BytesIO(b"png-bytes-1"))
             res1 = asyncio.run(
-                openbgr_app.api_save(
-                    directory=tmp, filename="../../evil/cutout.png", file=up1
-                )
+                openbgr_app.api_save(directory=tmp, filename="../../evil/cutout.png", file=up1)
             )
             self.assertTrue(res1["ok"])
             self.assertEqual(res1["name"], "cutout.png")
             self.assertEqual((Path(tmp) / "cutout.png").read_bytes(), b"png-bytes-1")
 
             up2 = UploadFile(filename="cutout.png", file=io.BytesIO(b"png-bytes-2"))
-            res2 = asyncio.run(
-                openbgr_app.api_save(directory=tmp, filename="cutout.png", file=up2)
-            )
+            res2 = asyncio.run(openbgr_app.api_save(directory=tmp, filename="cutout.png", file=up2))
             self.assertEqual(res2["name"], "cutout-1.png")
             self.assertEqual((Path(tmp) / "cutout-1.png").read_bytes(), b"png-bytes-2")
 
@@ -176,9 +166,7 @@ class TestOpenBGR(unittest.TestCase):
                 metadata={"format": "pt"},
             )
             size_before = sf_path.stat().st_size
-            with patch.object(
-                openbgr_app, "try_to_load_from_cache", return_value=str(sf_path)
-            ):
+            with patch.object(openbgr_app, "try_to_load_from_cache", return_value=str(sf_path)):
                 saved = openbgr_app.compact_model_cache_fp16("dummy/repo")
                 self.assertGreater(saved, 0)
                 self.assertLess(sf_path.stat().st_size, size_before)
@@ -256,9 +244,7 @@ class TestOpenBGR(unittest.TestCase):
         self.assertEqual(msg_single, 'Background removed for "image.png"')
         self.assertNotIn("—", msg_single or "")
 
-        msg_multi = openbgr_app.format_quick_action_notification(
-            ["a.png", "b.png", "c.png"], 0
-        )
+        msg_multi = openbgr_app.format_quick_action_notification(["a.png", "b.png", "c.png"], 0)
         self.assertEqual(msg_multi, "Background removed for 3 images.")
         self.assertNotIn("—", msg_multi or "")
 
@@ -310,9 +296,7 @@ class TestOpenBGR(unittest.TestCase):
             openbgr_app._with_output_suffix(Path("/tmp/out.webp"), "png"),
             Path("/tmp/out.webp"),
         )
-        self.assertEqual(
-            openbgr_app._osascript_quote('a"b\\c'), 'a\\"b\\\\c'
-        )
+        self.assertEqual(openbgr_app._osascript_quote('a"b\\c'), 'a\\"b\\\\c')
         self.assertEqual(openbgr_app._powershell_quote("it's"), "it''s")
 
         # Verify all 4 Quick Action export formats encode cleanly
@@ -342,18 +326,14 @@ class TestOpenBGR(unittest.TestCase):
                 return [logits]
 
         dummy_model = _DummyBiRefNet()
-        with patch.object(
-            openbgr_app.MANAGER, "get_or_load", return_value=dummy_model
-        ):
+        with patch.object(openbgr_app.MANAGER, "get_or_load", return_value=dummy_model):
             src_img = Image.new("RGB", (64, 48), (30, 200, 50))
             try:
-                out_img, elapsed_ms, tier_cfg, job_id = (
-                    openbgr_app.segment_foreground(
-                        src_img,
-                        tier="dynamic",
-                        defringe=True,
-                        despill=True,
-                    )
+                out_img, elapsed_ms, tier_cfg, job_id = openbgr_app.segment_foreground(
+                    src_img,
+                    tier="dynamic",
+                    defringe=True,
+                    despill=True,
                 )
                 self.assertEqual(out_img.mode, "RGBA")
                 self.assertEqual(out_img.size, (64, 48))
@@ -367,16 +347,12 @@ class TestOpenBGR(unittest.TestCase):
             # Cancelled epoch raises InterruptedError
             stale_epoch = openbgr_app.MANAGER.cancel_epoch - 1
             with self.assertRaises(InterruptedError):
-                openbgr_app.segment_foreground(
-                    Image.new("RGB", (16, 16)), job_epoch=stale_epoch
-                )
+                openbgr_app.segment_foreground(Image.new("RGB", (16, 16)), job_epoch=stale_epoch)
 
             # End-to-end /api/remove-bg HTTP handler test
             buf = io.BytesIO()
             Image.new("RGB", (40, 30), (120, 80, 200)).save(buf, format="PNG")
-            upload = UploadFile(
-                filename="sample.png", file=io.BytesIO(buf.getvalue())
-            )
+            upload = UploadFile(filename="sample.png", file=io.BytesIO(buf.getvalue()))
             res = asyncio.run(
                 openbgr_app.api_remove_bg(
                     file=upload,
@@ -428,7 +404,12 @@ class TestOpenBGR(unittest.TestCase):
                 self.assertTrue(cutout_1.is_file())
 
                 openbgr_app.save_quick_action_config(
-                    {"tier": "general", "save_mode": "same_folder", "format": "webp", "notify": False}
+                    {
+                        "tier": "general",
+                        "save_mode": "same_folder",
+                        "format": "webp",
+                        "notify": False,
+                    }
                 )
                 qa_res = openbgr_app.run_quick_action([str(src_path)])
                 self.assertTrue(qa_res["ok"])

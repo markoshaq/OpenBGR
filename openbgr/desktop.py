@@ -17,7 +17,7 @@ import threading
 import time
 import webbrowser
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from huggingface_hub.constants import HF_HUB_CACHE
 from PIL import Image
@@ -26,25 +26,24 @@ from .config import (
     APP_CONFIG_DIR,
     APP_VERSION,
     WINDOW_STATE_PATH,
+    logger,
     open_folder_in_file_manager,
 )
 from .models import MANAGER
 from .quick_action import copy_png_bytes_to_clipboard
 
 # File types accepted from OS open-file events and clipboard path drops.
-_IMAGE_EXTENSIONS = frozenset(
-    {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
-)
+_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"})
 
 # Image paths handed to the app by the OS (argv / macOS 'odoc' AppleEvent) that
 # the frontend should ingest into tabs once the window is ready.
 _PENDING_OPEN_LOCK = threading.Lock()
 _PENDING_OPEN_FILES: list[str] = []
-_DESKTOP_API: Optional["DesktopApi"] = None
+_DESKTOP_API: DesktopApi | None = None
 _OPEN_FILES_RECEIVED = 0
 
 
-def set_desktop_api(bridge: Optional["DesktopApi"]) -> None:
+def set_desktop_api(bridge: DesktopApi | None) -> None:
     """Registers the active `DesktopApi` bridge instance for OS-delivered file events."""
     global _DESKTOP_API
     _DESKTOP_API = bridge
@@ -66,8 +65,7 @@ def queue_open_files(paths: Any) -> None:
     file_list = [
         str(p)
         for p in paths
-        if Path(str(p)).is_file()
-        and Path(str(p)).suffix.lower() in _IMAGE_EXTENSIONS
+        if Path(str(p)).is_file() and Path(str(p)).suffix.lower() in _IMAGE_EXTENSIONS
     ]
     if not file_list:
         return
@@ -170,11 +168,7 @@ class DesktopApi:
             if not result:
                 return {"cancelled": True}
 
-            paths = (
-                list(result)
-                if isinstance(result, (list, tuple))
-                else [str(result)]
-            )
+            paths = list(result) if isinstance(result, (list, tuple)) else [str(result)]
             payload = self._payload_for_paths([Path(p_str) for p_str in paths])
             if not payload.get("files") and "error" not in payload:
                 return {"cancelled": True}
@@ -182,9 +176,7 @@ class DesktopApi:
         except Exception as exc:
             return {"cancelled": True, "error": str(exc)}
 
-    def save_file(
-        self, data_base64: str, default_filename: str
-    ) -> dict[str, Any]:
+    def save_file(self, data_base64: str, default_filename: str) -> dict[str, Any]:
         """Opens a native OS Save dialog and writes the base64-encoded image to disk."""
         if self.window is None:
             return {
@@ -201,9 +193,7 @@ class DesktopApi:
             if not dest:
                 return {"saved": False, "cancelled": True}
 
-            target_path = (
-                dest[0] if isinstance(dest, (list, tuple)) else str(dest)
-            )
+            target_path = dest[0] if isinstance(dest, (list, tuple)) else str(dest)
             raw_bytes = base64.b64decode(data_base64)
             Path(target_path).write_bytes(raw_bytes)
             return {"saved": True, "path": target_path}
@@ -217,14 +207,10 @@ class DesktopApi:
         try:
             import webview
 
-            result = self.window.create_file_dialog(
-                self._dialog_mode(webview, "FOLDER")
-            )
+            result = self.window.create_file_dialog(self._dialog_mode(webview, "FOLDER"))
             if not result:
                 return {"cancelled": True}
-            path = (
-                result[0] if isinstance(result, (list, tuple)) else str(result)
-            )
+            path = result[0] if isinstance(result, (list, tuple)) else str(result)
             return {"cancelled": False, "path": str(path)}
         except Exception as exc:
             return {"cancelled": True, "error": str(exc)}
@@ -256,9 +242,7 @@ class DesktopApi:
                     return {
                         "has_image": True,
                         "name": "CLIPBOARD.PNG",
-                        "data_b64": base64.b64encode(buf.getvalue()).decode(
-                            "ascii"
-                        ),
+                        "data_b64": base64.b64encode(buf.getvalue()).decode("ascii"),
                     }
                 finally:
                     buf.close()
@@ -273,9 +257,7 @@ class DesktopApi:
                             return {
                                 "has_image": True,
                                 "name": p.name,
-                                "data_b64": base64.b64encode(data).decode(
-                                    "ascii"
-                                ),
+                                "data_b64": base64.b64encode(data).decode("ascii"),
                             }
         except Exception:
             pass
@@ -298,9 +280,7 @@ class DesktopApi:
                             return {
                                 "has_image": True,
                                 "name": "CLIPBOARD.PNG",
-                                "data_b64": base64.b64encode(
-                                    proc.stdout
-                                ).decode("ascii"),
+                                "data_b64": base64.b64encode(proc.stdout).decode("ascii"),
                             }
                     except Exception:
                         pass
@@ -350,9 +330,7 @@ class DesktopApi:
                             if theme == "light"
                             else AppKit.NSAppearanceNameDarkAqua
                         )
-                        appearance = AppKit.NSAppearance.appearanceNamed_(
-                            appearance_name
-                        )
+                        appearance = AppKit.NSAppearance.appearanceNamed_(appearance_name)
                         if appearance is not None:
                             ns_win.setAppearance_(appearance)
                     except Exception:
@@ -403,7 +381,7 @@ def attach_window_state_persistence(window: Any) -> None:
     Saves the window's position and size to `~/.openbgr/window.json` whenever it
     is moved or resized (debounced), so the app restores its frame on next launch.
     """
-    debounce_timer: list[Optional[threading.Timer]] = [None]
+    debounce_timer: list[threading.Timer | None] = [None]
 
     def _persist() -> None:
         """Writes the current window frame to disk, ignoring IO failures."""
@@ -427,9 +405,10 @@ def attach_window_state_persistence(window: Any) -> None:
         """Debounces move/resize events so rapid drags collapse into one write."""
         if debounce_timer[0] is not None:
             debounce_timer[0].cancel()
-        debounce_timer[0] = threading.Timer(0.4, _persist)
-        debounce_timer[0].daemon = True
-        debounce_timer[0].start()
+        timer = threading.Timer(0.4, _persist)
+        timer.daemon = True
+        timer.start()
+        debounce_timer[0] = timer
 
     try:
         window.events.resized += lambda *a, **k: _schedule()
@@ -454,10 +433,7 @@ def ensure_window_on_screen(window: Any) -> None:
             ww, wh = int(window.width), int(window.height)
             screens = getattr(webview, "screens", [])
             on_screen = any(
-                wx < s.x + s.width
-                and wx + ww > s.x
-                and wy < s.y + s.height
-                and wy + wh > s.y
+                wx < s.x + s.width and wx + ww > s.x and wy < s.y + s.height and wy + wh > s.y
                 for s in screens
             )
             if not on_screen and screens:
@@ -609,9 +585,7 @@ def build_native_menus(window: Any) -> list[Any]:
             MenuAction("General - 1K Studio", call("selectPreset('general')")),
             MenuAction("Ultra HR - 2K Detail", call("selectPreset('hr')")),
             MenuAction("Portrait - 1K People", call("selectPreset('portrait')")),
-            MenuAction(
-                "Matting - 2K Soft Alpha", call("selectPreset('matting')")
-            ),
+            MenuAction("Matting - 2K Soft Alpha", call("selectPreset('matting')")),
             MenuAction("Dynamic - Native Ratio", call("selectPreset('dynamic')")),
             MenuSeparator(),
             MenuAction("Defringe Edges", call("toggleDefringe()")),
@@ -657,17 +631,15 @@ def configure_macos_native_window_and_menus(window: Any) -> None:
         """Deferred post-show enhancement; imports Cocoa lazily and fails soft."""
         try:
             import AppKit  # type: ignore
-            from PyObjCTools import AppHelper  # type: ignore
             import webview.platforms.cocoa as cocoa_mod  # type: ignore
+            from PyObjCTools import AppHelper  # type: ignore
 
             def _on_main() -> None:
                 """Applies dark appearance, gesture config, and menu shortcuts on the main run loop."""
                 try:
                     ns_win = getattr(window, "native", None)
                     if ns_win is not None:
-                        dark = AppKit.NSAppearance.appearanceNamed_(
-                            AppKit.NSAppearanceNameDarkAqua
-                        )
+                        dark = AppKit.NSAppearance.appearanceNamed_(AppKit.NSAppearanceNameDarkAqua)
                         if dark is not None:
                             ns_win.setAppearance_(dark)
 
@@ -696,9 +668,7 @@ def configure_macos_native_window_and_menus(window: Any) -> None:
                             except Exception:
                                 pass
 
-                    main_menu = (
-                        AppKit.NSApplication.sharedApplication().mainMenu()
-                    )
+                    main_menu = AppKit.NSApplication.sharedApplication().mainMenu()
                     if main_menu is None:
                         return
 
@@ -786,7 +756,7 @@ def install_macos_open_documents_handler() -> None:
         key_direct_object = int.from_bytes(b"----", "big")
         type_file_url = int.from_bytes(b"furl", "big")
 
-        def _desc_to_path(desc: Any) -> Optional[str]:
+        def _desc_to_path(desc: Any) -> str | None:
             """Extracts a filesystem path from an odoc descriptor (alias/furl/URL)."""
             if desc is None:
                 return None
@@ -816,20 +786,18 @@ def install_macos_open_documents_handler() -> None:
         class _OpenDocsHandler(Foundation.NSObject):  # type: ignore
             def handleOpenDocuments_withReplyEvent_(self, event, reply):
                 paths: list[str] = []
-                print("[Desktop] odoc AppleEvent received")
+                logger.info("[Desktop] odoc AppleEvent received")
                 try:
                     direct = event.paramDescriptorForKeyword_(key_direct_object)
-                    count = (
-                        int(direct.numberOfItems()) if direct is not None else 0
-                    )
+                    count = int(direct.numberOfItems()) if direct is not None else 0
                     for i in range(1, count + 1):
                         p = _desc_to_path(direct.descriptorAtIndex_(i))
                         if p:
                             paths.append(p)
                 except Exception as exc:
-                    print(f"[Desktop] odoc parse failed ({exc})")
+                    logger.warning("[Desktop] odoc parse failed (%s)", exc)
                 if paths:
-                    print(f"[Desktop] odoc paths: {paths}")
+                    logger.info("[Desktop] odoc paths: %s", paths)
                     queue_open_files(paths)
 
         mgr = Foundation.NSAppleEventManager.sharedAppleEventManager()
@@ -864,9 +832,9 @@ def install_macos_open_documents_handler() -> None:
             "NSApplicationDidFinishLaunchingNotification",
             None,
         )
-        print("[Desktop] Open-Documents handler installed.")
+        logger.info("[Desktop] Open-Documents handler installed.")
     except Exception as exc:
-        print(f"[Desktop] Open-Documents handler unavailable ({exc}).")
+        logger.warning("[Desktop] Open-Documents handler unavailable (%s).", exc)
 
 
 def install_macos_open_files_delegate() -> None:
@@ -893,16 +861,14 @@ def install_macos_open_files_delegate() -> None:
                 return True
 
             def application_openURLs_(self, _app, urls):
-                paths = [
-                    str(u.path()) for u in urls if getattr(u, "path", None)
-                ]
+                paths = [str(u.path()) for u in urls if getattr(u, "path", None)]
                 if paths:
                     queue_open_files(paths)
 
-        cocoa_mod.BrowserView.AppDelegate = _OpenFilesDelegate
-        print("[Desktop] Open-Files delegate installed.")
+        cocoa_mod.BrowserView.AppDelegate = _OpenFilesDelegate  # type: ignore[misc]
+        logger.info("[Desktop] Open-Files delegate installed.")
     except Exception as exc:
-        print(f"[Desktop] Open-Files delegate unavailable ({exc}).")
+        logger.warning("[Desktop] Open-Files delegate unavailable (%s).", exc)
 
 
 def wait_for_server(host: str, port: int, timeout_s: float = 15.0) -> bool:

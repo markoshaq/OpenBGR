@@ -82,9 +82,7 @@ def build_document_wflow() -> dict:
                         "Container": "List",
                         "Types": ["com.apple.cocoa.string"],
                     },
-                    "ActionBundlePath": (
-                        "/System/Library/Automator/Run Shell Script.action"
-                    ),
+                    "ActionBundlePath": ("/System/Library/Automator/Run Shell Script.action"),
                     "ActionName": "Run Shell Script",
                     "ActionParameters": {
                         "COMMAND_STRING": SHELL_COMMAND,

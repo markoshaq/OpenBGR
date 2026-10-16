@@ -139,7 +139,7 @@ export function renderBatchPanel(tab) {
     ? `OUTPUT → ${tab.outputDir}`
     : "Drop more images onto this window to add them.";
 
-  dom.batchList.innerHTML = "";
+  dom.batchList.replaceChildren();
   if (n === 0) {
     const hint = document.createElement("div");
     hint.className = "batch-empty-hint";
@@ -335,7 +335,7 @@ export function moveBatchItemToBatch(item, targetTab) {
 export function showTabContextMenu(tab, x, y, onRequestCloseTab) {
   const menu = dom.tabContextMenu;
   if (!menu) return;
-  menu.innerHTML = "";
+  menu.replaceChildren();
 
   const addItem = (label, fn, disabled = false) => {
     const b = document.createElement("button");

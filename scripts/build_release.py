@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import platform
+import re
 import shutil
 import stat
 import subprocess
@@ -26,9 +27,27 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DIST_DIR = ROOT_DIR / "dist"
 
+
+def _read_version() -> str:
+    try:
+        m = re.search(
+            r'^version\s*=\s*"([^"]+)"',
+            (ROOT_DIR / "pyproject.toml").read_text(encoding="utf-8"),
+            re.MULTILINE,
+        )
+        if m:
+            return m.group(1)
+    except OSError:
+        pass
+    return "0.10.1"
+
+
+APP_VERSION = _read_version()
+
 APP_FILES = [
     "app.py",
     "icon_render.py",
+    "pyproject.toml",
     "requirements.txt",
     "start.sh",
     "start.bat",
@@ -92,8 +111,9 @@ def generate_macos_icns(icns_path: Path) -> None:
         import sys
 
         sys.path.insert(0, str(ROOT_DIR))
-        import icon_render
         from PIL import Image
+
+        import icon_render
     except ImportError:
         return
 
@@ -136,7 +156,7 @@ def build_macos_dmg() -> Path:
     copy_project_payload(payload_dir)
     generate_macos_icns(resources_dir / "OpenBGR.icns")
 
-    info_plist = """<?xml version="1.0" encoding="UTF-8"?>
+    info_plist = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -170,9 +190,9 @@ def build_macos_dmg() -> Path:
         </dict>
     </array>
     <key>CFBundleShortVersionString</key>
-    <string>0.10</string>
+    <string>{APP_VERSION}</string>
     <key>CFBundleVersion</key>
-    <string>0.10</string>
+    <string>{APP_VERSION}</string>
     <key>LSMinimumSystemVersion</key>
     <string>11.0</string>
     <key>LSArchitecturePriority</key>

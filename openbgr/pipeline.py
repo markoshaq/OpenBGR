@@ -8,7 +8,7 @@ from __future__ import annotations
 import itertools
 import threading
 import time
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import torch
@@ -25,9 +25,7 @@ from .config import (
 from .models import MANAGER, compute_dynamic_size, get_preprocess_transform
 
 
-def decontaminate_edge_colors(
-    rgb_np: np.ndarray, alpha_np: np.ndarray
-) -> np.ndarray:
+def decontaminate_edge_colors(rgb_np: np.ndarray, alpha_np: np.ndarray) -> np.ndarray:
     """
     Removes background color bleed ("halos") from semi-transparent edge pixels.
 
@@ -57,9 +55,7 @@ def decontaminate_edge_colors(
 
     # Dilate nearby solid foreground colors outward and smooth transitions.
     dilated_pil = (
-        Image.fromarray(rgb_np)
-        .filter(ImageFilter.MaxFilter(5))
-        .filter(ImageFilter.BoxBlur(1))
+        Image.fromarray(rgb_np).filter(ImageFilter.MaxFilter(5)).filter(ImageFilter.BoxBlur(1))
     )
     smooth_fg = np.array(dilated_pil, dtype=np.float32)
     dilated_pil.close()
@@ -123,9 +119,7 @@ def suppress_color_spill(
     )
 
     # Build rim + semi-transparent receiver weight map
-    eroded_norm = (
-        np.array(mask_pil.filter(ImageFilter.MinFilter(15)), dtype=np.float32) / 255.0
-    )
+    eroded_norm = np.array(mask_pil.filter(ImageFilter.MinFilter(15)), dtype=np.float32) / 255.0
     solid_rim_weight = np.clip(alpha_norm - eroded_norm, 0.0, 1.0)
     translucent_weight = np.clip(4.0 * alpha_norm * (1.0 - alpha_norm), 0.0, 1.0)
     receiver_weight = np.clip(
@@ -186,7 +180,7 @@ def segment_foreground(
     defringe: bool = True,
     despill: bool = True,
     matting: bool = False,
-    job_epoch: Optional[int] = None,
+    job_epoch: int | None = None,
 ) -> tuple[Image.Image, float, dict[str, Any], int]:
     """
     Executes the full background removal pipeline on a PIL image under a thread-safe
@@ -218,29 +212,23 @@ def segment_foreground(
             oriented_image.close()
 
         if tier_cfg.get("dynamic"):
-            dyn_h, dyn_w = compute_dynamic_size(
-                orig_w, orig_h, int(tier_cfg["resolution"])
-            )
+            dyn_h, dyn_w = compute_dynamic_size(orig_w, orig_h, int(tier_cfg["resolution"]))
             preprocess = get_preprocess_transform((dyn_h, dyn_w))
             tier_cfg["sublabel"] = f"Dynamic / {dyn_w}x{dyn_h}"
         else:
             preprocess = get_preprocess_transform(int(tier_cfg["resolution"]))
-        input_tensor: Optional[torch.Tensor] = None
+        input_tensor: torch.Tensor | None = None
         outputs: Any = None
-        pred_logits: Optional[torch.Tensor] = None
-        alpha_tensor: Optional[torch.Tensor] = None
+        pred_logits: torch.Tensor | None = None
+        alpha_tensor: torch.Tensor | None = None
 
         try:
-            input_tensor = (
-                preprocess(rgb_image).unsqueeze(0).to(device=DEVICE, dtype=DTYPE)
-            )
+            input_tensor = preprocess(rgb_image).unsqueeze(0).to(device=DEVICE, dtype=DTYPE)
             MANAGER.check_cancelled(job_epoch)
 
             with torch.no_grad():
                 outputs = model(input_tensor)
-                pred_logits = (
-                    outputs[-1] if isinstance(outputs, (list, tuple)) else outputs
-                )
+                pred_logits = outputs[-1] if isinstance(outputs, (list, tuple)) else outputs
                 alpha_tensor = pred_logits.float().sigmoid().cpu()
 
             MANAGER.check_cancelled(job_epoch)

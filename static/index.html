@@ -248,9 +248,9 @@
 
         <span class="cluster-label">ZOOM</span>
         <div class="segmented">
-          <button type="button" class="seg-btn" id="btnZoomOut" title="Zoom Out">−</button>
-          <button type="button" class="seg-btn zoom-readout" id="btnZoomReset" title="Reset Zoom to 100%">100%</button>
-          <button type="button" class="seg-btn" id="btnZoomIn" title="Zoom In">+</button>
+          <button type="button" class="seg-btn" id="btnZoomOut" title="Zoom Out" aria-label="Zoom out">−</button>
+          <button type="button" class="seg-btn zoom-readout" id="btnZoomReset" title="Reset Zoom to 100%" aria-label="Reset zoom to 100%">100%</button>
+          <button type="button" class="seg-btn" id="btnZoomIn" title="Zoom In" aria-label="Zoom in">+</button>
         </div>
 
         <button
@@ -258,6 +258,7 @@
           class="seg-btn loupe-btn"
           id="btnLoupe"
           title="Toggle 4x Circle Magnifier Loupe (Shortcut: Z)"
+          aria-label="Toggle 4x magnifier loupe"
         >
           LOUPE 4x
         </button>
@@ -411,12 +412,12 @@
 
         <div class="sidebar-section requires-image">
           <div class="section-header">MATTE BACKDROP</div>
-          <div class="swatches-grid" id="matteSwatches">
-            <button type="button" class="swatch swatch-checker active" data-bg="checker" title="Transparency Grid"></button>
-            <button type="button" class="swatch" data-bg="#ffffff" style="background:#ffffff" title="Pure White"></button>
-            <button type="button" class="swatch" data-bg="#000000" style="background:#000000" title="Pure Black"></button>
-            <button type="button" class="swatch" data-bg="#18181b" style="background:#18181b" title="Studio Dark Gray"></button>
-            <input type="color" id="colorPicker" value="#00ff66" class="swatch" style="padding:0; background:none;" title="Custom Matte Color" />
+          <div class="swatches-grid" id="matteSwatches" role="group" aria-label="Matte backdrop color">
+            <button type="button" class="swatch swatch-checker active" data-bg="checker" title="Transparency Grid" aria-label="Transparency grid"></button>
+            <button type="button" class="swatch" data-bg="#ffffff" style="background:#ffffff" title="Pure White" aria-label="Pure white"></button>
+            <button type="button" class="swatch" data-bg="#000000" style="background:#000000" title="Pure Black" aria-label="Pure black"></button>
+            <button type="button" class="swatch" data-bg="#18181b" style="background:#18181b" title="Studio Dark Gray" aria-label="Studio dark gray"></button>
+            <input type="color" id="colorPicker" value="#00ff66" class="swatch" style="padding:0; background:none;" title="Custom Matte Color" aria-label="Custom matte color" />
           </div>
           <div class="field-hint">Solid colors are composited into exports.</div>
         </div>
@@ -428,10 +429,10 @@
 
       <!-- Center Column: Image Tabs Bar + Interactive Canvas Viewport -->
       <div class="center-column">
-        <div class="tabbar" id="tabBar"></div>
+        <div class="tabbar" id="tabBar" role="tablist" aria-label="Open image tabs"></div>
 
         <main class="viewport checkerboard-canvas" id="viewport">
-          <div class="error-toast" id="errorToast"></div>
+          <div class="error-toast" id="errorToast" role="alert" aria-live="polite"></div>
 
           <!-- Empty / Dropzone State — doubles as the welcome splash -->
           <div class="empty-state" id="emptyState">
@@ -661,13 +662,13 @@
                     <span class="pref-label">ACCENT</span>
                     <span class="pref-desc">Highlight color for active controls and selections.</span>
                   </div>
-                  <div class="accent-dots" id="accentSwatches">
-                    <button type="button" class="swatch active" data-accent="default" style="--dot:#fafafa" title="Mono (Default)"></button>
-                    <button type="button" class="swatch" data-accent="green" style="--dot:#34d399" title="Green"></button>
-                    <button type="button" class="swatch" data-accent="blue" style="--dot:#60a5fa" title="Blue"></button>
-                    <button type="button" class="swatch" data-accent="amber" style="--dot:#fbbf24" title="Amber"></button>
-                    <button type="button" class="swatch" data-accent="red" style="--dot:#f87171" title="Red"></button>
-                    <button type="button" class="swatch" data-accent="violet" style="--dot:#a78bfa" title="Violet"></button>
+                  <div class="accent-dots" id="accentSwatches" role="group" aria-label="Accent color">
+                    <button type="button" class="swatch active" data-accent="default" style="--dot:#fafafa" title="Mono (Default)" aria-label="Mono default accent"></button>
+                    <button type="button" class="swatch" data-accent="green" style="--dot:#34d399" title="Green" aria-label="Green accent"></button>
+                    <button type="button" class="swatch" data-accent="blue" style="--dot:#60a5fa" title="Blue" aria-label="Blue accent"></button>
+                    <button type="button" class="swatch" data-accent="amber" style="--dot:#fbbf24" title="Amber" aria-label="Amber accent"></button>
+                    <button type="button" class="swatch" data-accent="red" style="--dot:#f87171" title="Red" aria-label="Red accent"></button>
+                    <button type="button" class="swatch" data-accent="violet" style="--dot:#a78bfa" title="Violet" aria-label="Violet accent"></button>
                   </div>
                 </div>
               </div>

@@ -28,7 +28,9 @@ SUPERSAMPLE = 4
 SQUIRCLE_EXPONENT = 4.6
 
 
-def _squircle_points(cx: float, cy: float, half: float, samples: int = 720) -> list[tuple[float, float]]:
+def _squircle_points(
+    cx: float, cy: float, half: float, samples: int = 720
+) -> list[tuple[float, float]]:
     """Parametric Lamé/superellipse polygon approximating the macOS squircle."""
     exp = 2.0 / SQUIRCLE_EXPONENT
     pts = []
@@ -67,8 +69,12 @@ def render_icon(size: int = 1024) -> Image.Image:
         for c in range(cols):
             color = (39, 39, 42, 255) if (r + c) % 2 == 0 else (16, 16, 18, 255)
             d.rectangle(
-                (mid + c * tile_w, top + r * tile_h,
-                 mid + (c + 1) * tile_w + 1, top + (r + 1) * tile_h + 1),
+                (
+                    mid + c * tile_w,
+                    top + r * tile_h,
+                    mid + (c + 1) * tile_w + 1,
+                    top + (r + 1) * tile_h + 1,
+                ),
                 fill=color,
             )
 

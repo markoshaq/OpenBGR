@@ -12,7 +12,7 @@ import sys
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
@@ -168,12 +168,12 @@ def api_get_quick_action_config() -> dict[str, Any]:
 
 @app.post("/api/quick-action-config")
 async def api_save_quick_action_config(
-    tier: Optional[str] = Form(None),
-    save_mode: Optional[str] = Form(None),
-    fmt: Optional[str] = Form(None, alias="format"),
-    edge_refine: Optional[bool] = Form(None),
-    copy_clipboard: Optional[bool] = Form(None),
-    notify: Optional[bool] = Form(None),
+    tier: str | None = Form(None),
+    save_mode: str | None = Form(None),
+    fmt: str | None = Form(None, alias="format"),
+    edge_refine: bool | None = Form(None),
+    copy_clipboard: bool | None = Form(None),
+    notify: bool | None = Form(None),
 ) -> dict[str, Any]:
     """Updates and persists the Quick Action configuration to `~/.openbgr/quick_action.json`."""
     current = load_quick_action_config()
@@ -207,9 +207,7 @@ def api_quick_action_install(action: str = Form("install")) -> dict[str, Any]:
         "false",
         "0",
     )
-    install_fn = _resolve_app_symbol(
-        "set_quick_action_installed", set_quick_action_installed
-    )
+    install_fn = _resolve_app_symbol("set_quick_action_installed", set_quick_action_installed)
     ok, detail = install_fn(do_install)
     if not ok:
         raise HTTPException(status_code=500, detail=detail)
@@ -241,9 +239,7 @@ async def api_run_quick_action(files: list[str] = Form(...)) -> dict[str, Any]:
 def api_open_cache_dir() -> dict[str, Any]:
     """Opens the Hugging Face Hub model cache directory in the system file manager."""
     cache_path = Path(HF_HUB_CACHE)
-    open_fn = _resolve_app_symbol(
-        "open_folder_in_file_manager", open_folder_in_file_manager
-    )
+    open_fn = _resolve_app_symbol("open_folder_in_file_manager", open_folder_in_file_manager)
     opened = open_fn(cache_path)
     if not opened:
         raise HTTPException(
@@ -273,9 +269,7 @@ def api_uninstall_model(target: str = Form(...)) -> dict[str, Any]:
         model_keys = [norm] if norm in MODELS else []
 
     if not model_keys:
-        raise HTTPException(
-            status_code=400, detail=f"Unknown model target '{target}'."
-        )
+        raise HTTPException(status_code=400, detail=f"Unknown model target '{target}'.")
 
     repos_to_remove: list[str] = []
     for m_key in model_keys:
@@ -311,15 +305,11 @@ async def api_install_model(target: str = Form(...)) -> dict[str, Any]:
     """
     norm = normalize_tier_key(target)
     if norm not in MODELS:
-        raise HTTPException(
-            status_code=400, detail=f"Unknown model target '{target}'."
-        )
+        raise HTTPException(status_code=400, detail=f"Unknown model target '{target}'.")
 
     repo_id = MODELS[norm]
     dl_fn = _resolve_app_symbol("snapshot_download", snapshot_download)
-    compact_fn = _resolve_app_symbol(
-        "compact_model_cache_fp16", compact_model_cache_fp16
-    )
+    compact_fn = _resolve_app_symbol("compact_model_cache_fp16", compact_model_cache_fp16)
 
     def _download() -> None:
         """Blocking download + FP16 compaction, run in a worker thread."""
@@ -329,9 +319,7 @@ async def api_install_model(target: str = Form(...)) -> dict[str, Any]:
     try:
         await asyncio.to_thread(_download)
     except Exception as exc:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to download {repo_id}: {exc}"
-        ) from exc
+        raise HTTPException(status_code=500, detail=f"Failed to download {repo_id}: {exc}") from exc
 
     return {
         "ok": True,
@@ -352,9 +340,7 @@ async def api_save(
     """
     dest_dir = Path(directory).expanduser()
     if not dest_dir.is_dir():
-        raise HTTPException(
-            status_code=400, detail="Output folder does not exist."
-        )
+        raise HTTPException(status_code=400, detail="Output folder does not exist.")
     safe_name = Path(filename).name.strip()
     if not safe_name or safe_name in (".", ".."):
         raise HTTPException(status_code=400, detail="Invalid filename.")
@@ -386,33 +372,27 @@ async def api_remove_bg(
     """
     norm_tier = "matting" if matting else normalize_tier_key(tier)
     if norm_tier not in TIERS:
-        raise HTTPException(
-            status_code=400, detail=f"Invalid model preset '{tier}'."
-        )
+        raise HTTPException(status_code=400, detail=f"Invalid model preset '{tier}'.")
 
     job_epoch = MANAGER.cancel_epoch
     raw_bytes = await file.read()
     await file.close()
     if not raw_bytes:
-        raise HTTPException(
-            status_code=400, detail="Uploaded image file is empty."
-        )
+        raise HTTPException(status_code=400, detail="Uploaded image file is empty.")
 
-    pil_img: Optional[Image.Image] = None
+    pil_img: Image.Image | None = None
     try:
         pil_img = Image.open(io.BytesIO(raw_bytes))
         pil_img.load()
     except Exception as exc:
         if pil_img is not None:
             pil_img.close()
-        raise HTTPException(
-            status_code=400, detail=f"Unable to decode image file: {exc}"
-        ) from exc
+        raise HTTPException(status_code=400, detail=f"Unable to decode image file: {exc}") from exc
     finally:
         del raw_bytes
 
     seg_fn = _resolve_app_symbol("segment_foreground", segment_foreground)
-    result_img: Optional[Image.Image] = None
+    result_img: Image.Image | None = None
     try:
         result_img, elapsed_ms, tier_cfg, job_id = await asyncio.to_thread(
             seg_fn,
@@ -426,9 +406,7 @@ async def api_remove_bg(
     except InterruptedError as exc:
         raise HTTPException(status_code=499, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(
-            status_code=500, detail=f"Segmentation pipeline failed: {exc}"
-        ) from exc
+        raise HTTPException(status_code=500, detail=f"Segmentation pipeline failed: {exc}") from exc
     finally:
         pil_img.close()
 
@@ -495,14 +473,14 @@ async def api_refine(
 
     try:
         png_bytes, img_w, img_h = await asyncio.to_thread(_render)
-    except LookupError:
+    except LookupError as exc:
         raise HTTPException(
             status_code=409,
             detail=(
                 "This cutout is no longer the latest processed job — "
                 "click PROCESS IMAGE to re-apply edge filters."
             ),
-        )
+        ) from exc
 
     return Response(
         content=png_bytes,
@@ -511,9 +489,7 @@ async def api_refine(
             "X-Refine-Job-Id": str(job_id),
             "X-Image-Width": str(img_w),
             "X-Image-Height": str(img_h),
-            "Access-Control-Expose-Headers": (
-                "X-Refine-Job-Id, X-Image-Width, X-Image-Height"
-            ),
+            "Access-Control-Expose-Headers": ("X-Refine-Job-Id, X-Image-Width, X-Image-Height"),
         },
     )
 

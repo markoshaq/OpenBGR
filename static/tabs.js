@@ -63,7 +63,7 @@ export function hideTabGhost() {
 /** Re-renders the tab strip, wiring click/close/context/drag handlers per tab. */
 export function renderTabBar() {
   if (!dom.tabBar) return;
-  dom.tabBar.innerHTML = "";
+  dom.tabBar.replaceChildren();
 
   if (state.tabs.length === 0) {
     dom.tabBar.classList.remove("visible");
@@ -73,9 +73,12 @@ export function renderTabBar() {
   dom.tabBar.classList.add("visible");
 
   state.tabs.forEach((tab) => {
+    const isActive = tab.id === state.activeTabId;
     const tabEl = document.createElement("div");
-    tabEl.className = `tab-item${tab.id === state.activeTabId ? " active" : ""}${tab.kind === "batch" ? " batch-tab" : ""}`;
+    tabEl.className = `tab-item${isActive ? " active" : ""}${tab.kind === "batch" ? " batch-tab" : ""}`;
     tabEl.setAttribute("data-tab-id", tab.id);
+    tabEl.setAttribute("role", "tab");
+    tabEl.setAttribute("aria-selected", isActive ? "true" : "false");
     tabEl.title = tab.name;
     tabEl.draggable = true;
 
@@ -88,6 +91,7 @@ export function renderTabBar() {
     closeBtn.type = "button";
     closeBtn.className = "tab-close";
     closeBtn.title = "Close image tab";
+    closeBtn.setAttribute("aria-label", `Close ${tab.name}`);
     closeBtn.textContent = "×";
     closeBtn.addEventListener("click", (e) => {
       e.stopPropagation();

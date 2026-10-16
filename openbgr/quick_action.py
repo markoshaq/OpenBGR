@@ -16,7 +16,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from PIL import Image
 
@@ -30,6 +30,7 @@ from .config import (
     RECOMMENDED_TIER,
     TIERS,
     ensure_app_icon,
+    logger,
     normalize_tier_key,
 )
 from .models import MANAGER
@@ -54,9 +55,7 @@ def sanitize_quick_action_config(raw: Any) -> dict[str, Any]:
     else:
         tier_val = "auto"
 
-    save_mode = (
-        str(src.get("save_mode", "same_folder") or "same_folder").strip().lower()
-    )
+    save_mode = str(src.get("save_mode", "same_folder") or "same_folder").strip().lower()
     if save_mode not in ("same_folder", "ask"):
         save_mode = "same_folder"
 
@@ -85,29 +84,25 @@ def sanitize_quick_action_config(raw: Any) -> dict[str, Any]:
 
 def load_quick_action_config() -> dict[str, Any]:
     """Reads `~/.openbgr/quick_action.json` and returns a sanitized Quick Action config."""
-    cfg_path: Path = _resolve_app_symbol(
-        "QUICK_ACTION_CONFIG_PATH", QUICK_ACTION_CONFIG_PATH
-    )
+    cfg_path: Path = _resolve_app_symbol("QUICK_ACTION_CONFIG_PATH", QUICK_ACTION_CONFIG_PATH)
     try:
         if cfg_path.is_file():
             raw = json.loads(cfg_path.read_text(encoding="utf-8"))
             return sanitize_quick_action_config(raw)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("[QuickAction] Failed to read %s: %s", cfg_path, exc)
     return dict(DEFAULT_QUICK_ACTION_CONFIG)
 
 
 def save_quick_action_config(cfg: dict[str, Any]) -> dict[str, Any]:
     """Writes a sanitized Quick Action config to `~/.openbgr/quick_action.json`."""
     clean = sanitize_quick_action_config(cfg)
-    cfg_path: Path = _resolve_app_symbol(
-        "QUICK_ACTION_CONFIG_PATH", QUICK_ACTION_CONFIG_PATH
-    )
+    cfg_path: Path = _resolve_app_symbol("QUICK_ACTION_CONFIG_PATH", QUICK_ACTION_CONFIG_PATH)
     try:
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
         cfg_path.write_text(json.dumps(clean, indent=2), encoding="utf-8")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("[QuickAction] Failed to write %s: %s", cfg_path, exc)
     return clean
 
 
@@ -139,10 +134,7 @@ def is_quick_action_installed() -> bool:
         except Exception:
             return False
     kde = Path.home() / ".local/share/kio/servicemenus/openbgr-removebg.desktop"
-    nautilus = (
-        Path.home()
-        / ".local/share/nautilus/scripts/Remove Background with OpenBGR"
-    )
+    nautilus = Path.home() / ".local/share/nautilus/scripts/Remove Background with OpenBGR"
     return kde.is_file() or nautilus.is_file()
 
 
@@ -156,9 +148,7 @@ def set_quick_action_installed(install: bool = True) -> tuple[bool, str]:
             res = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
             if res.returncode == 0:
                 return True, (
-                    "Installed Finder Quick Action."
-                    if install
-                    else "Removed Finder Quick Action."
+                    "Installed Finder Quick Action." if install else "Removed Finder Quick Action."
                 )
             return False, (
                 res.stderr or res.stdout or "Failed to update Finder Quick Action."
@@ -190,13 +180,9 @@ def set_quick_action_installed(install: bool = True) -> tuple[bool, str]:
         res = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
         if res.returncode == 0:
             return True, (
-                "Installed desktop context menu."
-                if install
-                else "Removed desktop context menu."
+                "Installed desktop context menu." if install else "Removed desktop context menu."
             )
-        return False, (
-            res.stderr or res.stdout or "Failed to update desktop context menu."
-        ).strip()
+        return False, (res.stderr or res.stdout or "Failed to update desktop context menu.").strip()
     except Exception as exc:
         return False, str(exc)
 
@@ -215,9 +201,7 @@ def copy_png_bytes_to_clipboard(raw_bytes: bytes) -> dict[str, Any]:
 
             pb = AppKit.NSPasteboard.generalPasteboard()
             pb.clearContents()
-            ns_data = Foundation.NSData.dataWithBytes_length_(
-                raw_bytes, len(raw_bytes)
-            )
+            ns_data = Foundation.NSData.dataWithBytes_length_(raw_bytes, len(raw_bytes))
             ok = pb.setData_forType_(ns_data, AppKit.NSPasteboardTypePNG)
             return {"copied": bool(ok)}
 
@@ -258,9 +242,7 @@ def copy_png_bytes_to_clipboard(raw_bytes: bytes) -> dict[str, Any]:
             ["xclip", "-selection", "clipboard", "-t", "image/png", "-i"],
         ):
             if shutil.which(cmd[0]):
-                proc = subprocess.run(
-                    cmd, input=raw_bytes, check=False, timeout=4
-                )
+                proc = subprocess.run(cmd, input=raw_bytes, check=False, timeout=4)
                 if proc.returncode == 0:
                     return {"copied": True}
 
@@ -279,9 +261,7 @@ def cutout_filename_for(fmt: str = "png") -> tuple[str, str]:
     return "cutout", "png"
 
 
-def _default_output_path(
-    src: Path, fmt: str = "png", dest_dir: Optional[Path] = None
-) -> Path:
+def _default_output_path(src: Path, fmt: str = "png", dest_dir: Path | None = None) -> Path:
     """Returns `<stem>-cutout.<ext>` in `dest_dir` (or beside `src`), uniquified with `-N`."""
     tag, ext = cutout_filename_for(fmt)
     folder = dest_dir if dest_dir is not None else src.parent
@@ -339,9 +319,7 @@ def _with_output_suffix(path: Path, ext: str) -> Path:
     return path
 
 
-def _choose_save_path_native(
-    default_name: str, start_dir: Path
-) -> Optional[Path]:
+def _choose_save_path_native(default_name: str, start_dir: Path) -> Path | None:
     """Pops a native OS Save-As dialog brought to the foreground."""
     sys_name = platform.system()
     try:
@@ -395,14 +373,12 @@ def _choose_save_path_native(
             )
             chosen = res.stdout.strip()
             return Path(chosen) if res.returncode == 0 and chosen else None
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("[QuickAction] Save dialog failed: %s", exc)
     return None
 
 
-def _choose_output_folder_native(
-    start_dir: Path, count: int
-) -> Optional[Path]:
+def _choose_output_folder_native(start_dir: Path, count: int) -> Path | None:
     """Pops a single native OS Choose-Folder dialog when saving multiple Quick Action cutouts."""
     sys_name = platform.system()
     prompt = f"Choose destination folder for {count} cutouts:"
@@ -455,12 +431,12 @@ def _choose_output_folder_native(
             )
             chosen = res.stdout.strip()
             return Path(chosen) if res.returncode == 0 and chosen else None
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("[QuickAction] Folder dialog failed: %s", exc)
     return None
 
 
-def ensure_macos_notifier_app() -> Optional[Path]:
+def ensure_macos_notifier_app() -> Path | None:
     """
     Builds (once) a lightweight background AppleScript droplet bundle in
     `~/.openbgr/OpenBGRNotifier.app` stamped with the OpenBGR squircle `.icns`
@@ -475,9 +451,7 @@ def ensure_macos_notifier_app() -> Optional[Path]:
         return None
     try:
         droplet_bin = NOTIFIER_APP_PATH / "Contents" / "MacOS" / "droplet"
-        applet_icns = (
-            NOTIFIER_APP_PATH / "Contents" / "Resources" / "applet.icns"
-        )
+        applet_icns = NOTIFIER_APP_PATH / "Contents" / "Resources" / "applet.icns"
         if droplet_bin.is_file() and applet_icns.is_file():
             return NOTIFIER_APP_PATH
 
@@ -486,18 +460,8 @@ def ensure_macos_notifier_app() -> Optional[Path]:
         # Ensure we have the squircle .icns in ~/.openbgr/OpenBGR.icns
         if not NOTIFIER_ICNS_PATH.is_file():
             for cand in (
-                BASE_DIR
-                / ".venv"
-                / "OpenBGR.app"
-                / "Contents"
-                / "Resources"
-                / "OpenBGR.icns",
-                BASE_DIR
-                / "dist"
-                / "OpenBGR.app"
-                / "Contents"
-                / "Resources"
-                / "OpenBGR.icns",
+                BASE_DIR / ".venv" / "OpenBGR.app" / "Contents" / "Resources" / "OpenBGR.icns",
+                BASE_DIR / "dist" / "OpenBGR.app" / "Contents" / "Resources" / "OpenBGR.icns",
                 Path("/Applications/OpenBGR.app/Contents/Resources/OpenBGR.icns"),
             ):
                 if cand.is_file():
@@ -515,9 +479,9 @@ def ensure_macos_notifier_app() -> Optional[Path]:
                     base_img.resize((sz, sz), Image.Resampling.LANCZOS).save(
                         iconset / f"icon_{sz}x{sz}.png"
                     )
-                    base_img.resize(
-                        (sz * 2, sz * 2), Image.Resampling.LANCZOS
-                    ).save(iconset / f"icon_{sz}x{sz}@2x.png")
+                    base_img.resize((sz * 2, sz * 2), Image.Resampling.LANCZOS).save(
+                        iconset / f"icon_{sz}x{sz}@2x.png"
+                    )
                 subprocess.run(
                     [
                         "iconutil",
@@ -593,13 +557,14 @@ def ensure_macos_notifier_app() -> Optional[Path]:
             timeout=30,
         )
         return NOTIFIER_APP_PATH
-    except Exception:
+    except Exception as exc:
+        logger.warning("[QuickAction] Failed to build macOS notifier app: %s", exc)
         return None
 
 
 def format_quick_action_notification(
     succeeded_names: list[str], failed_count: int = 0
-) -> Optional[str]:
+) -> str | None:
     """
     Formats the completion notification message:
     - 1 image  : `Background removed for "image.png"`
@@ -662,12 +627,36 @@ def send_openbgr_notification(message: str) -> None:
                 [
                     "osascript",
                     "-e",
-                    f'display notification "{_osascript_quote(message)}" '
-                    'with title "OpenBGR"',
+                    f'display notification "{_osascript_quote(message)}" with title "OpenBGR"',
                 ],
                 check=False,
                 capture_output=True,
                 timeout=10,
+            )
+            return
+        if sys_name == "Windows":
+            win_icon = ensure_app_icon() or ""
+            ps = (
+                "Add-Type -AssemblyName System.Windows.Forms,System.Drawing; "
+                "$n = New-Object System.Windows.Forms.NotifyIcon; "
+                f"$ico = '{_powershell_quote(win_icon)}'; "
+                "if ($ico -and (Test-Path $ico)) { "
+                "  $bmp = [System.Drawing.Bitmap]::FromFile($ico); "
+                "  $n.Icon = [System.Drawing.Icon]::FromHandle($bmp.GetHicon()) "
+                "} else { "
+                "  $n.Icon = [System.Drawing.SystemIcons]::Application "
+                "}; "
+                "$n.BalloonTipTitle = 'OpenBGR'; "
+                f"$n.BalloonTipText = '{_powershell_quote(message)}'; "
+                "$n.Visible = $true; "
+                "$n.ShowBalloonTip(5000); "
+                "Start-Sleep -Seconds 6; "
+                "$n.Dispose()"
+            )
+            subprocess.Popen(
+                ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
             return
         if sys_name == "Linux" and shutil.which("notify-send"):
@@ -677,21 +666,19 @@ def send_openbgr_notification(message: str) -> None:
                 cmd.append(f"--icon={icon_path}")
             cmd.extend(["OpenBGR", message])
             subprocess.run(cmd, check=False, capture_output=True, timeout=5)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("[QuickAction] Notification failed: %s", exc)
 
 
 def _resolve_cli_output(
-    src: Path, output: Optional[str], input_count: int, fmt: str = "png"
-) -> Optional[Path]:
+    src: Path, output: str | None, input_count: int, fmt: str = "png"
+) -> Path | None:
     """Maps `-o` semantics: omitted → sibling cutout; bare `-o` → Save dialog; else file/dir."""
     tag, ext = cutout_filename_for(fmt)
     if output is None:
         return _default_output_path(src, fmt=fmt)
     if output == "ASK":
-        choose_fn = _resolve_app_symbol(
-            "_choose_save_path_native", _choose_save_path_native
-        )
+        choose_fn = _resolve_app_symbol("_choose_save_path_native", _choose_save_path_native)
         chosen = choose_fn(f"{src.stem}-{tag}.{ext}", src.parent)
         return _with_output_suffix(chosen, ext) if chosen is not None else None
     dest = Path(output).expanduser()
@@ -708,15 +695,9 @@ def run_quick_action(inputs: list[str]) -> dict[str, Any]:
     model preset, save location (same folder or file/folder dialog), output format,
     edge refinement, optional clipboard copy, and native OpenBGR notification.
     """
-    load_cfg_fn = _resolve_app_symbol(
-        "load_quick_action_config", load_quick_action_config
-    )
+    load_cfg_fn = _resolve_app_symbol("load_quick_action_config", load_quick_action_config)
     cfg = load_cfg_fn()
-    tier_key = (
-        RECOMMENDED_TIER
-        if cfg["tier"] == "auto"
-        else normalize_tier_key(cfg["tier"])
-    )
+    tier_key = RECOMMENDED_TIER if cfg["tier"] == "auto" else normalize_tier_key(cfg["tier"])
     use_matting = tier_key == "matting"
     edge_refine = bool(cfg.get("edge_refine", True))
     fmt = str(cfg.get("format", "png") or "png")
@@ -738,14 +719,12 @@ def run_quick_action(inputs: list[str]) -> dict[str, Any]:
 
     # When multiple images are selected and save_mode is "ask", prompt once for
     # the destination folder so the user isn't shown N separate Save dialogs.
-    batch_dest_dir: Optional[Path] = None
+    batch_dest_dir: Path | None = None
     if save_mode == "ask" and len(valid_sources) > 1:
         choose_folder_fn = _resolve_app_symbol(
             "_choose_output_folder_native", _choose_output_folder_native
         )
-        batch_dest_dir = choose_folder_fn(
-            valid_sources[0].parent, len(valid_sources)
-        )
+        batch_dest_dir = choose_folder_fn(valid_sources[0].parent, len(valid_sources))
         if batch_dest_dir is None:
             return {
                 "ok": True,
@@ -758,19 +737,13 @@ def run_quick_action(inputs: list[str]) -> dict[str, Any]:
     succeeded_names: list[str] = []
     outputs_written: list[str] = []
     seg_fn = _resolve_app_symbol("segment_foreground", segment_foreground)
-    choose_save_fn = _resolve_app_symbol(
-        "_choose_save_path_native", _choose_save_path_native
-    )
-    clip_fn = _resolve_app_symbol(
-        "copy_png_bytes_to_clipboard", copy_png_bytes_to_clipboard
-    )
-    notify_fn = _resolve_app_symbol(
-        "send_openbgr_notification", send_openbgr_notification
-    )
+    choose_save_fn = _resolve_app_symbol("_choose_save_path_native", _choose_save_path_native)
+    clip_fn = _resolve_app_symbol("copy_png_bytes_to_clipboard", copy_png_bytes_to_clipboard)
+    notify_fn = _resolve_app_symbol("send_openbgr_notification", send_openbgr_notification)
 
     for src in valid_sources:
-        pil_img: Optional[Image.Image] = None
-        result_img: Optional[Image.Image] = None
+        pil_img: Image.Image | None = None
+        result_img: Image.Image | None = None
         try:
             pil_img = Image.open(src)
             pil_img.load()
@@ -785,9 +758,7 @@ def run_quick_action(inputs: list[str]) -> dict[str, Any]:
             if save_mode == "ask":
                 if len(valid_sources) == 1:
                     tag, ext = cutout_filename_for(fmt)
-                    chosen = choose_save_fn(
-                        f"{src.stem}-{tag}.{ext}", src.parent
-                    )
+                    chosen = choose_save_fn(f"{src.stem}-{tag}.{ext}", src.parent)
                     if chosen is None:
                         return {
                             "ok": True,
@@ -798,9 +769,7 @@ def run_quick_action(inputs: list[str]) -> dict[str, Any]:
                         }
                     out_path = _with_output_suffix(chosen, ext)
                 else:
-                    out_path = _default_output_path(
-                        src, fmt=fmt, dest_dir=batch_dest_dir
-                    )
+                    out_path = _default_output_path(src, fmt=fmt, dest_dir=batch_dest_dir)
             else:
                 out_path = _default_output_path(src, fmt=fmt)
 
@@ -810,16 +779,14 @@ def run_quick_action(inputs: list[str]) -> dict[str, Any]:
 
             if copy_clip and len(valid_sources) == 1:
                 clip_bytes = (
-                    encoded_bytes
-                    if fmt == "png"
-                    else encode_cutout_image(result_img, fmt="png")
+                    encoded_bytes if fmt == "png" else encode_cutout_image(result_img, fmt="png")
                 )
                 clip_fn(clip_bytes)
 
             succeeded_names.append(src.name)
             outputs_written.append(str(out_path))
         except Exception as exc:
-            print(f"[QuickAction] Failed {src.name}: {exc}")
+            logger.warning("[QuickAction] Failed %s: %s", src.name, exc)
             failed += 1
         finally:
             if result_img is not None:
@@ -849,8 +816,8 @@ def run_quick_action(inputs: list[str]) -> dict[str, Any]:
 
 def run_cli(
     inputs: list[str],
-    output: Optional[str],
-    tier: Optional[str],
+    output: str | None,
+    tier: str | None,
     defringe: bool,
     despill: bool,
     matting: bool,
@@ -862,17 +829,17 @@ def run_cli(
     and writes full-resolution cutouts. No server or window.
     """
     if not inputs:
-        print("[CLI] No input files given.")
+        logger.warning("[CLI] No input files given.")
         return 2
     seg_fn = _resolve_app_symbol("segment_foreground", segment_foreground)
     rc = 0
     for src_str in inputs:
         src = Path(src_str).expanduser()
         if not src.is_file():
-            print(f"[CLI] Skipping (not a file): {src}")
+            logger.warning("[CLI] Skipping (not a file): %s", src)
             rc = 1
             continue
-        pil_img: Optional[Image.Image] = None
+        pil_img: Image.Image | None = None
         try:
             pil_img = Image.open(src)
             pil_img.load()
@@ -884,25 +851,26 @@ def run_cli(
                 matting,
             )
             try:
-                out_path = _resolve_cli_output(
-                    src, output, len(inputs), fmt=fmt
-                )
+                out_path = _resolve_cli_output(src, output, len(inputs), fmt=fmt)
                 if out_path is None:
-                    print(f"[CLI] Save cancelled for {src.name}")
+                    logger.info("[CLI] Save cancelled for %s", src.name)
                     continue
                 out_path.parent.mkdir(parents=True, exist_ok=True)
                 out_path.write_bytes(encode_cutout_image(result_img, fmt=fmt))
-                print(
-                    f"[CLI] {src.name} -> {out_path} "
-                    f"({elapsed_ms:.0f} ms, {tier_cfg['label']})"
+                logger.info(
+                    "[CLI] %s -> %s (%.0f ms, %s)",
+                    src.name,
+                    out_path,
+                    elapsed_ms,
+                    tier_cfg["label"],
                 )
             finally:
                 result_img.close()
         except InterruptedError:
-            print(f"[CLI] Cancelled: {src.name}")
+            logger.info("[CLI] Cancelled: %s", src.name)
             rc = 1
         except Exception as exc:
-            print(f"[CLI] Failed {src.name}: {exc}")
+            logger.warning("[CLI] Failed %s: %s", src.name, exc)
             rc = 1
         finally:
             if pil_img is not None:

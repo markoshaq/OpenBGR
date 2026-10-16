@@ -5,16 +5,19 @@ and shared filesystem paths.
 
 from __future__ import annotations
 
+import logging
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
 import threading
 import time
 import warnings
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 # Must be set before importing PyTorch so any non-native Apple Silicon MPS operator
 # transparently falls back to CPU execution without raising a runtime error.
@@ -31,7 +34,20 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 STATIC_DIR.mkdir(exist_ok=True)
 
-APP_VERSION = "0.10.1"
+
+def _read_project_version() -> str:
+    """Reads `version` from `pyproject.toml` so the version is defined in one place."""
+    try:
+        text = (BASE_DIR / "pyproject.toml").read_text(encoding="utf-8")
+        m = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
+        if m:
+            return m.group(1)
+    except OSError:
+        pass
+    return "0.10.1"
+
+
+APP_VERSION = _read_project_version()
 
 # Per-user desktop preferences dir; survives app updates and keeps the repo clean.
 APP_CONFIG_DIR = Path.home() / ".openbgr"
@@ -40,6 +56,39 @@ APP_ICON_PATH = APP_CONFIG_DIR / "icon.png"
 QUICK_ACTION_CONFIG_PATH = APP_CONFIG_DIR / "quick_action.json"
 NOTIFIER_APP_PATH = APP_CONFIG_DIR / "OpenBGRNotifier.app"
 NOTIFIER_ICNS_PATH = APP_CONFIG_DIR / "OpenBGR.icns"
+LOG_FILE_PATH = APP_CONFIG_DIR / "openbgr.log"
+
+
+def _configure_logger() -> logging.Logger:
+    """
+    Configures a shared logger that echoes `info`/`warning` lines to stderr (so
+    CLI output stays identical) and also appends to `~/.openbgr/openbgr.log`
+    (rotating at 2 MB) so headless Quick Action and desktop failures are never
+    lost when no terminal is attached.
+    """
+    log = logging.getLogger("openbgr")
+    if log.handlers:
+        return log
+    log.setLevel(logging.INFO)
+    log.propagate = False
+    stream = logging.StreamHandler(sys.stderr)
+    stream.setFormatter(logging.Formatter("%(message)s"))
+    log.addHandler(stream)
+    try:
+        APP_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        fh = RotatingFileHandler(
+            LOG_FILE_PATH, maxBytes=2 * 1024 * 1024, backupCount=1, encoding="utf-8"
+        )
+        fh.setFormatter(
+            logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S")
+        )
+        log.addHandler(fh)
+    except OSError:
+        pass
+    return log
+
+
+logger = _configure_logger()
 
 DEFAULT_QUICK_ACTION_CONFIG: dict[str, Any] = {
     "tier": "auto",
@@ -66,9 +115,7 @@ def get_host_ram_gb() -> float:
     if sys_name == "Darwin":
         try:
             mem_bytes = int(
-                subprocess.check_output(
-                    ["sysctl", "-n", "hw.memsize"], text=True
-                ).strip()
+                subprocess.check_output(["sysctl", "-n", "hw.memsize"], text=True).strip()
             )
             return mem_bytes / (1024**3)
         except Exception:
@@ -393,16 +440,15 @@ def open_folder_in_file_manager(folder: Path) -> bool:
         for cmd in ("xdg-open", "gio"):
             if shutil.which(cmd):
                 args = [cmd, "open", resolved] if cmd == "gio" else [cmd, resolved]
-                subprocess.Popen(
-                    args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                )
+                subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 return True
-    except Exception:
+    except Exception as exc:
+        logger.warning("[Config] Failed to open folder %s: %s", folder, exc)
         return False
     return False
 
 
-def ensure_app_icon() -> Optional[str]:
+def ensure_app_icon() -> str | None:
     """
     Generates the macOS-squircle OpenBGR icon in `~/.openbgr/icon.png`
     so the native window, Dock, and task switcher display the OpenBGR mark.
@@ -425,5 +471,6 @@ def ensure_app_icon() -> Optional[str]:
             img.save(APP_ICON_PATH, format="PNG")
             img.close()
         return str(APP_ICON_PATH)
-    except Exception:
+    except Exception as exc:
+        logger.warning("[Config] Failed to generate app icon: %s", exc)
         return None

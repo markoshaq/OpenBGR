@@ -99,6 +99,7 @@ from openbgr.config import (
     get_app_disk_bytes,
     get_host_ram_gb,
     get_system_memory_gb,
+    logger,
     normalize_tier_key,
     open_folder_in_file_manager,
     select_recommended_tier,
@@ -257,6 +258,7 @@ __all__ = [
     "run_quick_action",
     "sanitize_quick_action_config",
     "save_quick_action_config",
+    "segment_foreground",
     "select_recommended_tier",
     "send_openbgr_notification",
     "serve_favicon",
@@ -436,14 +438,16 @@ def main(argv: list[str] | None = None) -> None:
     host = "127.0.0.1"
     url = f"http://{host}:{port}"
 
-    print("-" * 68)
-    print("  OpenBGR // LOCAL AI SEGMENTATION STUDIO")
-    print(f"  Compute   : {DEVICE_LABEL} ({PRECISION_LABEL})")
-    print(
-        f"  Default   : {TIERS[RECOMMENDED_TIER]['label']} ({TIERS[RECOMMENDED_TIER]['sublabel']})"
+    logger.info("-" * 68)
+    logger.info("  OpenBGR // LOCAL AI SEGMENTATION STUDIO")
+    logger.info("  Compute   : %s (%s)", DEVICE_LABEL, PRECISION_LABEL)
+    logger.info(
+        "  Default   : %s (%s)",
+        TIERS[RECOMMENDED_TIER]["label"],
+        TIERS[RECOMMENDED_TIER]["sublabel"],
     )
-    print(f"  Interface : {url}")
-    print("-" * 68)
+    logger.info("  Interface : %s", url)
+    logger.info("-" * 68)
 
     # Headless / server-only mode when NO_BROWSER=1 or OPENBGR_BROWSER=1 is set
     if os.environ.get("NO_BROWSER") == "1":
@@ -454,23 +458,17 @@ def main(argv: list[str] | None = None) -> None:
     else:
         # Start FastAPI server in a background daemon thread and open native desktop window
         server_thread = threading.Thread(
-            target=lambda: uvicorn.run(
-                app, host=host, port=port, log_level="warning"
-            ),
+            target=lambda: uvicorn.run(app, host=host, port=port, log_level="warning"),
             daemon=True,
         )
         server_thread.start()
         if wait_for_server(host, port):
             if not is_openbgr_server(url):
-                print(
-                    f"[Server] Port {port} is already in use by another application."
-                )
-                print(
-                    "[Server] Close it or set PORT=<free port> and try again."
-                )
+                logger.error("[Server] Port %s is already in use by another application.", port)
+                logger.error("[Server] Close it or set PORT=<free port> and try again.")
                 raise SystemExit(1)
         elif not server_thread.is_alive():
-            print("[Server] Uvicorn failed to start — see errors above.")
+            logger.error("[Server] Uvicorn failed to start — see errors above.")
             raise SystemExit(1)
 
         try:
@@ -518,7 +516,7 @@ def main(argv: list[str] | None = None) -> None:
                 try:
                     native_menus = build_native_menus(window)
                 except Exception as menu_exc:
-                    print(f"[Desktop] Native menu bar unavailable ({menu_exc}).")
+                    logger.warning("[Desktop] Native menu bar unavailable (%s).", menu_exc)
                     native_menus = None
 
             start_kwargs: dict[str, Any] = {}
@@ -535,9 +533,7 @@ def main(argv: list[str] | None = None) -> None:
             MANAGER.unload()
             os._exit(0)
         except Exception as exc:
-            print(
-                f"[Desktop] Native window unavailable ({exc}); opening app window..."
-            )
+            logger.warning("[Desktop] Native window unavailable (%s); opening app window...", exc)
             open_fallback_app_window(url)
 
 

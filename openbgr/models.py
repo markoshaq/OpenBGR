@@ -10,7 +10,7 @@ import os
 import sys
 import threading
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import torch
 from huggingface_hub import try_to_load_from_cache
@@ -27,6 +27,7 @@ from .config import (
     IMAGENET_STD,
     MODELS,
     PRECISION_LABEL,
+    logger,
 )
 
 # Cache compiled torchvision transform pipelines keyed by target (height, width).
@@ -89,9 +90,7 @@ def get_model_disk_bytes(repo_id: str) -> int:
         if not folder.exists():
             return 0
         return sum(
-            f.stat().st_size
-            for f in folder.rglob("*")
-            if f.is_file() and not f.is_symlink()
+            f.stat().st_size for f in folder.rglob("*") if f.is_file() and not f.is_symlink()
         )
     except Exception:
         return 0
@@ -101,7 +100,7 @@ def _resolve_cache_lookup() -> Any:
     """Returns `try_to_load_from_cache`, honoring any test patch on `app`."""
     app_mod = sys.modules.get("app")
     if app_mod is not None and hasattr(app_mod, "try_to_load_from_cache"):
-        return getattr(app_mod, "try_to_load_from_cache")
+        return app_mod.try_to_load_from_cache
     return try_to_load_from_cache
 
 
@@ -148,12 +147,15 @@ def compact_model_cache_fp16(repo_id: str) -> int:
         new_size = blob_path.stat().st_size
         saved = max(0, old_size - new_size)
         if saved > 0:
-            print(
-                f"[Model] Compacted {repo_id} cache to FP16 "
-                f"({old_size / 1024**2:.1f} MB -> {new_size / 1024**2:.1f} MB)."
+            logger.info(
+                "[Model] Compacted %s cache to FP16 (%.1f MB -> %.1f MB).",
+                repo_id,
+                old_size / 1024**2,
+                new_size / 1024**2,
             )
         return saved
-    except Exception:
+    except Exception as exc:
+        logger.warning("[Model] Failed to compact %s cache to FP16: %s", repo_id, exc)
         return 0
 
 
@@ -190,8 +192,8 @@ class ModelManager:
         self._lock = threading.Lock()
         self.inference_lock = threading.Lock()
         self.cancel_epoch: int = 0
-        self.active_model_key: Optional[str] = None
-        self.model: Optional[torch.nn.Module] = None
+        self.active_model_key: str | None = None
+        self.model: torch.nn.Module | None = None
 
     def request_cancel(self) -> int:
         """Increments the cancellation epoch so any queued or active job aborts early."""
@@ -241,18 +243,14 @@ class ModelManager:
 
             # Evict currently loaded backbone before allocating a new one.
             if self.model is not None:
-                print(
-                    f"[Memory] Evicting previous backbone ({self.active_model_key})..."
-                )
+                logger.info("[Memory] Evicting previous backbone (%s)...", self.active_model_key)
                 del self.model
                 self.model = None
                 self.active_model_key = None
                 self.flush_device_memory()
 
             repo_id = MODELS[model_key]
-            print(
-                f"[Model] Loading {repo_id} ({PRECISION_LABEL}) on {DEVICE_LABEL}..."
-            )
+            logger.info("[Model] Loading %s (%s) on %s...", repo_id, PRECISION_LABEL, DEVICE_LABEL)
 
             try:
                 loaded_model = AutoModelForImageSegmentation.from_pretrained(
@@ -260,18 +258,19 @@ class ModelManager:
                     trust_remote_code=True,
                     local_files_only=True,
                 )
-                print(f"[Model] Loaded {repo_id} from local offline cache.")
+                logger.info("[Model] Loaded %s from local offline cache.", repo_id)
             except Exception:
-                print(
-                    f"[Model] {repo_id} not found in local cache. "
-                    "Downloading weights from Hugging Face Hub (one-time)..."
+                logger.info(
+                    "[Model] %s not found in local cache. "
+                    "Downloading weights from Hugging Face Hub (one-time)...",
+                    repo_id,
                 )
                 loaded_model = AutoModelForImageSegmentation.from_pretrained(
                     repo_id,
                     trust_remote_code=True,
                     local_files_only=False,
                 )
-                print(f"[Model] Download complete for {repo_id}.")
+                logger.info("[Model] Download complete for %s.", repo_id)
                 compact_model_cache_fp16(repo_id)
 
             loaded_model.to(device=DEVICE, dtype=DTYPE)
