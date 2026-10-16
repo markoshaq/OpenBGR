@@ -100,7 +100,7 @@ BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 STATIC_DIR.mkdir(exist_ok=True)
 
-APP_VERSION = "0.01"
+APP_VERSION = "0.02"
 
 # Scale intra-op CPU parallelism for machines running without a GPU accelerator.
 if os.cpu_count():

@@ -128,9 +128,9 @@ def build_macos_dmg() -> Path:
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.01</string>
+    <string>0.02</string>
     <key>CFBundleVersion</key>
-    <string>0.01</string>
+    <string>0.02</string>
     <key>LSMinimumSystemVersion</key>
     <string>11.0</string>
     <key>NSHighResolutionCapable</key>

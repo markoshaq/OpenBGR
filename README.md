@@ -33,6 +33,7 @@ Or download the repository ZIP and double-click **`Start Mac.command`** (macOS) 
 - **Export Destinations** — Set a per-tab output folder for one-click exports, or leave it unset for a native Save-As dialog (browser downloads in fallback mode).
 - **Zoom, Pan & 4× Loupe** — Scroll-wheel zoom (`100%–800%`) with click-and-drag panning, plus a toggleable 4× circular magnifier loupe (`Z` key) for inspecting hair strands and edges — works before and after processing.
 - **Native Desktop Window** — Opens in a standalone native OS window via `pywebview` (with native menus, clipboard, Save dialogs, and automatic browser fallback).
+- **Model Storage Management** — Right-click any hardware preset (or open `⌘,` → MODELS) to see exact on-disk size per checkpoint and uninstall weights you don't need; uninstalled presets re-download on next use.
 - **Hardware Acceleration** — Runs in `FP16` half-precision on CUDA and Apple MPS (cutting memory usage in half and speeding up inference ~5×), and automatically evicts inactive models from memory when switching presets.
 
 ## Models
@@ -92,7 +93,7 @@ To build lightweight desktop release bundles locally into `dist/`:
 python3 scripts/build_release.py
 ```
 
-Pushing a version tag (e.g. `git tag v0.01 && git push origin v0.01`) triggers `.github/workflows/release.yml` to build and attach `OpenBGR-macOS.dmg`, `OpenBGR-Windows.zip`, and `OpenBGR-Linux.tar.gz` to a GitHub Release automatically.
+Pushing a version tag (e.g. `git tag v0.02 && git push origin v0.02`) triggers `.github/workflows/release.yml` to build and attach `OpenBGR-macOS.dmg`, `OpenBGR-Windows.zip`, and `OpenBGR-Linux.tar.gz` to a GitHub Release automatically.
 
 ## License
 
