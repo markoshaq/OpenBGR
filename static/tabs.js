@@ -593,10 +593,12 @@ export function toggleLoupe(forceState) {
 /** Enables/disables the in-app menu bar items for the current workspace state. */
 export function syncMenuBarState() {
   if (!dom.menuBar) return;
+  const activeTabNow = getActiveTab();
   const hasTab = Boolean(state.activeTabId);
   const hasImage = Boolean(state.sourceFile);
   const hasResult = Boolean(state.resultBlob);
   const isBusy = Boolean(state.isProcessing);
+  const hasContent = hasImage || activeTabNow?.kind === "batch";
 
   dom.menuBar.querySelectorAll(".menu-item").forEach((item) => {
     const req = item.getAttribute("data-requires");
@@ -605,6 +607,8 @@ export function syncMenuBarState() {
     else if (req === "image") enabled = hasImage;
     else if (req === "result") enabled = hasResult && !isBusy;
     else if (req === "processing") enabled = isBusy;
+    else if (req === "content") enabled = hasContent;
+    else if (req === "image-idle") enabled = hasImage && !isBusy;
     item.classList.toggle("disabled", !enabled);
 
     const checkKey = item.getAttribute("data-check");
@@ -635,7 +639,6 @@ export function syncMenuBarState() {
         : "PROCESS IMAGE";
   }
 
-  const activeTabNow = getActiveTab();
   if (activeTabNow?.kind === "batch") renderBatchPanel(activeTabNow);
 }
 

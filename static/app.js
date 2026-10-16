@@ -769,6 +769,10 @@ async function pullPendingFiles() {
 window.openBGR = {
   pullPendingFiles: () => pullPendingFiles(),
   newTab: () => {
+    const activeTab = getActiveTab();
+    if (!activeTab || (!activeTab.sourceFile && activeTab.kind !== "batch")) {
+      return;
+    }
     if (state.isProcessing) {
       openConfirmModal(
         {
@@ -789,10 +793,10 @@ window.openBGR = {
   openImage: () => requestOpenImage(),
   startBatch: () => requestBatch(),
   exportImage: () => {
-    if (!dom.btnDownload.classList.contains("disabled")) dom.btnDownload.click();
+    if (state.resultBlob && !state.isProcessing) exportActiveImage();
   },
   copyImage: () => {
-    if (!dom.btnCopy.classList.contains("disabled")) dom.btnCopy.click();
+    if (state.resultBlob && !state.isProcessing) copyActiveCutout();
   },
   closeActiveTab: () => {
     if (state.activeTabId) requestCloseTab(state.activeTabId);
