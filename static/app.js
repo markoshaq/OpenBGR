@@ -9,13 +9,7 @@
 
 "use strict";
 
-/** Format descriptions shown in the right Export sidebar */
-const FORMAT_HINTS = {
-  png: "Uncompressed 32-bit RGBA PNG with full alpha transparency.",
-  webp: "High-efficiency WebP with alpha transparency (~40% smaller file size).",
-  jpg: "Lossy JPEG composited onto the active Matte backdrop color.",
-  mask: "8-bit grayscale Alpha Matte PNG (White = Foreground, Black = Background).",
-};
+
 
 /** Status dot tooltip descriptions */
 const DOT_TOOLTIPS = {
@@ -121,6 +115,7 @@ const state = {
   naturalWidth: 0,           // Native pixel width of active cutout
   naturalHeight: 0,          // Native pixel height of active cutout
   exportFormat: prefs.defaultFormat, // "png" | "webp" | "jpg" | "mask"
+  outputDir: null,           // Chosen output folder for direct-save exports (per tab)
   exportScale: 1,            // Scale multiplier (0.1 to 2.0)
   exportWidth: 0,            // Target export width in pixels
   exportHeight: 0,           // Target export height in pixels
@@ -205,8 +200,6 @@ const dom = {
   batchSub: document.getElementById("batchSub"),
   batchFootText: document.getElementById("batchFootText"),
   btnBatchAdd: document.getElementById("btnBatchAdd"),
-  btnBatchDest: document.getElementById("btnBatchDest"),
-  batchDestPath: document.getElementById("batchDestPath"),
   tabContextMenu: document.getElementById("tabContextMenu"),
   btnCopy: document.getElementById("btnCopy"),
   btnDownload: document.getElementById("btnDownload"),
@@ -216,8 +209,9 @@ const dom = {
   shadowCutoffSlider: document.getElementById("shadowCutoffSlider"),
   shadowCutoffLabel: document.getElementById("shadowCutoffLabel"),
 
-  exportFormatSelect: document.getElementById("exportFormatSelect"),
-  formatHint: document.getElementById("formatHint"),
+  formatRow: document.getElementById("formatRow"),
+  btnFileDest: document.getElementById("btnFileDest"),
+  fileDestPath: document.getElementById("fileDestPath"),
   exportScaleSlider: document.getElementById("exportScaleSlider"),
   scalePctLabel: document.getElementById("scalePctLabel"),
   exportWidthInput: document.getElementById("exportWidthInput"),
@@ -262,6 +256,7 @@ function saveStateToActiveTab() {
   tab.naturalWidth = state.naturalWidth;
   tab.naturalHeight = state.naturalHeight;
   tab.exportFormat = state.exportFormat;
+  tab.outputDir = state.outputDir;
   tab.exportScale = state.exportScale;
   tab.exportWidth = state.exportWidth;
   tab.exportHeight = state.exportHeight;
@@ -455,6 +450,7 @@ function createBlankTab() {
     viewMode: "split",
     splitPercent: 50,
     exportFormat: prefs.defaultFormat,
+    outputDir: null,
     exportScale: 1,
     exportWidth: 0,
     exportHeight: 0,
@@ -619,6 +615,7 @@ async function switchToTab(tabId) {
   state.viewMode = tab.viewMode;
   state.splitPercent = tab.splitPercent;
   state.exportFormat = tab.exportFormat;
+  state.outputDir = tab.outputDir || null;
   state.exportScale = tab.exportScale;
   state.exportWidth = tab.exportWidth;
   state.exportHeight = tab.exportHeight;
@@ -639,7 +636,8 @@ async function switchToTab(tabId) {
   if (dom.shadowCutoffLabel) {
     dom.shadowCutoffLabel.textContent = `${state.shadowCutoff}%`;
   }
-  dom.exportFormatSelect.value = state.exportFormat;
+  syncFormatButtons();
+  updateDestUI();
 
   applyBackdrop(state.activeBackdrop);
 
@@ -878,13 +876,13 @@ function createBatchTab(files) {
     exportHeight: 0,
     activeBackdrop: state.activeBackdrop,
     elapsedText: "—",
+    outputDir: null,
     batchFiles: list.map((f) => ({
       file: f,
       name: f.name || "image",
       size: f.size || 0,
       status: "queued",
     })),
-    batchOutputDir: null,
   };
   state.tabs.push(tab);
   switchToTab(tabId);
@@ -928,21 +926,10 @@ function renderBatchPanel(tab) {
   const runningThis = state.batch.running && state.batch.tabId === tab.id;
   dom.batchSub.textContent = `${n} IMAGE${n === 1 ? "" : "S"} · ONE SETTING FOR ALL`;
 
-  // FILE DESTINATION sidebar section (native folder pick or ZIP fallback)
-  const hasNativePicker = Boolean(window.pywebview?.api?.choose_output_dir);
-  if (dom.btnBatchDest) {
-    dom.btnBatchDest.style.display = hasNativePicker ? "" : "none";
-    dom.btnBatchDest.textContent = tab.batchOutputDir
-      ? "CHANGE FOLDER…"
-      : "CHOOSE FOLDER…";
-  }
-  if (dom.batchDestPath) {
-    dom.batchDestPath.textContent = hasNativePicker
-      ? tab.batchOutputDir || "Picked on first run if unset."
-      : "Exports download as a single ZIP.";
-  }
-  dom.batchFootText.textContent = tab.batchOutputDir
-    ? `OUTPUT → ${tab.batchOutputDir}`
+  // FILE DESTINATION sidebar section is shared across tab kinds
+  updateDestUI();
+  dom.batchFootText.textContent = tab.outputDir
+    ? `OUTPUT → ${tab.outputDir}`
     : "Drop more images onto this window to add them.";
 
   dom.batchList.innerHTML = "";
@@ -1066,7 +1053,6 @@ function convertTabToBatch(tab) {
   tab.naturalWidth = 0;
   tab.naturalHeight = 0;
   tab.batchFiles = entries;
-  if (tab.batchOutputDir === undefined) tab.batchOutputDir = null;
 }
 
 /**
@@ -1251,7 +1237,7 @@ async function runBatch(tab) {
   }
 
   // Resolve the destination: remembered on the tab, else picked once (native).
-  let outputDir = tab.batchOutputDir || null;
+  let outputDir = tab.outputDir || null;
   if (!outputDir && window.pywebview?.api?.choose_output_dir) {
     try {
       const res = await window.pywebview.api.choose_output_dir();
@@ -1261,7 +1247,8 @@ async function runBatch(tab) {
       }
       if (!res?.path) return; // Folder pick cancelled — abort quietly.
       outputDir = res.path;
-      tab.batchOutputDir = outputDir;
+      tab.outputDir = outputDir;
+      if (tab.id === state.activeTabId) state.outputDir = outputDir;
     } catch (_) {
       // Bridge failure → fall back to the browser ZIP path below.
     }
@@ -1864,9 +1851,7 @@ function updateExportTelemetry() {
         ? "BATCH RUNNING…"
         : "RUN BATCH"
       : `EXPORT ${fmtUpper}`;
-  if (dom.formatHint && FORMAT_HINTS[state.exportFormat]) {
-    dom.formatHint.textContent = FORMAT_HINTS[state.exportFormat];
-  }
+  syncFormatButtons();
 
   const pct = Math.round(state.exportScale * 100);
   dom.scalePctLabel.textContent = `${pct}%`;
@@ -2587,7 +2572,6 @@ dom.prefDefaultFormat?.addEventListener("change", (e) => {
   // Adopt as the live selection when the workspace is still empty
   if (!state.resultBlob) {
     state.exportFormat = prefs.defaultFormat;
-    dom.exportFormatSelect.value = state.exportFormat;
     updateExportTelemetry();
   }
 });
@@ -2605,7 +2589,6 @@ dom.btnResetPrefs?.addEventListener("click", () => {
   applyPreferences();
   if (!state.resultBlob) {
     state.exportFormat = prefs.defaultFormat;
-    dom.exportFormatSelect.value = state.exportFormat;
     applyBackdrop(prefs.defaultBackdrop);
     const targetTier = state.serverStatus?.recommended_tier || "mid";
     selectTier(targetTier, false);
@@ -2769,10 +2752,68 @@ dom.btnZoomOut?.addEventListener("click", () => setZoom(state.zoom - 0.25));
 dom.btnZoomReset?.addEventListener("click", () => setZoom(1));
 dom.btnLoupe?.addEventListener("click", () => toggleLoupe());
 
-// 6. Right Sidebar: Export Format Dropdown, Scale Slider, Quick Scale & Custom PX Inputs
-dom.exportFormatSelect.addEventListener("change", (e) => {
-  state.exportFormat = e.target.value;
-  updateExportTelemetry();
+// 6. Right Sidebar: Output Format Buttons, Scale Slider, Quick Scale & Custom PX Inputs
+document.querySelectorAll("#formatRow .fmt-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    state.exportFormat = btn.getAttribute("data-format") || "png";
+    updateExportTelemetry();
+    saveStateToActiveTab();
+  });
+});
+
+/** Syncs the OUTPUT FORMAT segmented buttons to `state.exportFormat`. */
+function syncFormatButtons() {
+  document.querySelectorAll("#formatRow .fmt-btn").forEach((b) => {
+    b.classList.toggle(
+      "active",
+      b.getAttribute("data-format") === state.exportFormat
+    );
+  });
+}
+
+/**
+ * Updates the FILE DESTINATION section for the active tab — native mode
+ * offers a folder picker; browser mode falls back to downloads/ZIP.
+ */
+function updateDestUI() {
+  const hasNativePicker = Boolean(window.pywebview?.api?.choose_output_dir);
+  if (dom.btnFileDest) {
+    dom.btnFileDest.style.display = hasNativePicker ? "" : "none";
+    dom.btnFileDest.textContent = state.outputDir
+      ? "CHANGE FOLDER…"
+      : "CHOOSE FOLDER…";
+  }
+  if (dom.fileDestPath) {
+    if (!hasNativePicker) {
+      dom.fileDestPath.textContent = "Exports download via the browser.";
+    } else if (state.outputDir) {
+      dom.fileDestPath.textContent = state.outputDir;
+    } else {
+      const active = getActiveTab();
+      dom.fileDestPath.textContent =
+        active?.kind === "batch"
+          ? "Picked on first run if unset."
+          : "Exports ask where to save.";
+    }
+  }
+}
+
+dom.btnFileDest?.addEventListener("click", async () => {
+  if (!window.pywebview?.api?.choose_output_dir) return;
+  try {
+    const res = await window.pywebview.api.choose_output_dir();
+    if (res?.path) {
+      state.outputDir = res.path;
+      const tab = getActiveTab();
+      if (tab) {
+        tab.outputDir = res.path;
+        if (tab.kind === "batch") renderBatchPanel(tab);
+      }
+      updateDestUI();
+    } else if (res?.error) {
+      setError(res.error);
+    }
+  } catch (_) {}
 });
 
 function applyScaleValue(newScale) {
@@ -3028,20 +3069,6 @@ dom.btnBatchAdd?.addEventListener("click", () => {
   pickImageFiles((files) => addFilesToBatchTab(tab, files));
 });
 
-dom.btnBatchDest?.addEventListener("click", async () => {
-  const tab = getActiveTab();
-  if (!tab || tab.kind !== "batch" || !window.pywebview?.api?.choose_output_dir) return;
-  try {
-    const res = await window.pywebview.api.choose_output_dir();
-    if (res?.path) {
-      tab.batchOutputDir = res.path;
-      renderBatchPanel(tab);
-    } else if (res?.error) {
-      setError(res.error);
-    }
-  } catch (_) {}
-});
-
 dom.fileInput.addEventListener("change", (e) => {
   const files = Array.from(e.target.files || []);
   const expecting = state.expectingBatch;
@@ -3192,6 +3219,20 @@ dom.btnDownload.addEventListener("click", async () => {
       : `-${state.exportWidth}x${state.exportHeight}`;
     const baseName = (state.sourceFile?.name || "image").replace(/\.[^/.]+$/, "");
     const fileName = `${baseName}-${suffix}${sizeTag}.${extMap[state.exportFormat] || "png"}`;
+
+    // A chosen FILE DESTINATION skips the Save-As dialog entirely.
+    if (state.outputDir && window.pywebview?.api?.choose_output_dir) {
+      const fd = new FormData();
+      fd.append("directory", state.outputDir);
+      fd.append("filename", fileName);
+      fd.append("file", exportBlob, fileName);
+      const res = await fetch("/api/save", { method: "POST", body: fd });
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}));
+        throw new Error(payload?.detail || "Failed to write to the output folder.");
+      }
+      return;
+    }
 
     // If running inside the pywebview native desktop window, use the native OS Save dialog
     if (window.pywebview?.api?.save_file) {
@@ -3488,8 +3529,8 @@ window.openBGR = {
   window.addEventListener("click", () => closeAllMenus());
 })();
 
-// Initialize persisted preferences, default backdrop, format select & server status
+// Initialize persisted preferences, default backdrop, format buttons & server status
 applyPreferences();
-dom.exportFormatSelect.value = state.exportFormat;
+syncFormatButtons();
 applyBackdrop(state.activeBackdrop);
 syncServerStatus(true);

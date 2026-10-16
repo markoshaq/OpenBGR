@@ -444,21 +444,32 @@
 
       <!-- Right Sidebar: Export Format, Resolution Slider, Custom PX & Download Actions -->
       <aside class="sidebar sidebar-right">
-        <div class="sidebar-section batch-only">
+        <div class="sidebar-section">
           <div class="section-header">FILE DESTINATION</div>
-          <button type="button" class="action-btn full-width" id="btnBatchDest">CHOOSE FOLDER…</button>
-          <div class="field-hint" id="batchDestPath">Folder picked on first run.</div>
+          <button type="button" class="action-btn full-width" id="btnFileDest">CHOOSE FOLDER…</button>
+          <div class="field-hint" id="fileDestPath">Exports ask where to save.</div>
         </div>
 
         <div class="sidebar-section">
           <div class="section-header">OUTPUT FORMAT</div>
-          <select class="studio-select full-width" id="exportFormatSelect" aria-label="Output File Format">
-            <option value="png">PNG — 32-Bit Lossless RGBA</option>
-            <option value="webp">WEBP — Transparent WebP</option>
-            <option value="jpg">JPG — Matte Composited</option>
-            <option value="mask">MASK — 8-Bit Alpha Matte</option>
-          </select>
-          <div class="field-hint" id="formatHint">Uncompressed 32-bit RGBA PNG with full alpha transparency.</div>
+          <div class="tier-row" id="formatRow">
+            <button type="button" class="tier-btn fmt-btn has-tooltip active" data-format="png" data-tooltip="PNG — Uncompressed 32-bit RGBA with full alpha transparency.">
+              <span class="tier-label">PNG</span>
+              <span class="tier-sub">RGBA</span>
+            </button>
+            <button type="button" class="tier-btn fmt-btn has-tooltip" data-format="webp" data-tooltip="WEBP — High-efficiency alpha transparency, ~40% smaller files.">
+              <span class="tier-label">WEBP</span>
+              <span class="tier-sub">SMALL</span>
+            </button>
+            <button type="button" class="tier-btn fmt-btn has-tooltip" data-format="jpg" data-tooltip="JPG — Lossy, composited onto the active Matte backdrop color.">
+              <span class="tier-label">JPG</span>
+              <span class="tier-sub">MATTE</span>
+            </button>
+            <button type="button" class="tier-btn fmt-btn has-tooltip" data-format="mask" data-tooltip="MASK — 8-bit grayscale alpha matte (white = foreground, black = background).">
+              <span class="tier-label">MASK</span>
+              <span class="tier-sub">ALPHA</span>
+            </button>
+          </div>
         </div>
 
         <div class="sidebar-section">
