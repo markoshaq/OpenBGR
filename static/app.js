@@ -315,10 +315,27 @@ function renderTabBar() {
         .forEach((el) => el.classList.remove("drop-target"));
     });
     tabEl.addEventListener("dragover", (e) => {
-      const dragging =
-        state.dragTabId === tab.id ||
-        (state.dragBatchItem && state.dragBatchItem.tabId === tab.id);
-      if ((!state.dragTabId && !state.dragBatchItem) || dragging) return;
+      if (state.dragBatchItem) {
+        if (state.dragBatchItem.tabId === tab.id) return; // own batch row
+        e.preventDefault();
+        e.stopPropagation();
+        if (tab.kind === "batch") {
+          e.dataTransfer.dropEffect = "move";
+          tabEl.classList.add("drop-target");
+          hideTabGhost();
+        } else {
+          // Dropping on a non-batch tab yields a NEW tab → show ghost instead
+          e.dataTransfer.dropEffect = "copy";
+          const srcTab = state.tabs.find(
+            (t) => t.id === state.dragBatchItem.tabId
+          );
+          showTabGhost(
+            srcTab?.batchFiles[state.dragBatchItem.index]?.name || "image"
+          );
+        }
+        return;
+      }
+      if (!state.dragTabId || state.dragTabId === tab.id) return;
       e.preventDefault();
       e.stopPropagation();
       e.dataTransfer.dropEffect = "move";
@@ -332,6 +349,7 @@ function renderTabBar() {
       e.preventDefault();
       e.stopPropagation();
       tabEl.classList.remove("drop-target");
+      hideTabGhost();
       const item = state.dragBatchItem;
       if (item) {
         state.dragBatchItem = null;
@@ -404,11 +422,40 @@ function renderTabBar() {
   dom.tabBar.appendChild(addBtn);
 }
 
+/* Ghost tab preview — shown while a dragged batch row hovers the tab bar,
+ * indicating a drop will create a new image tab. */
+let tabGhostEl = null;
+
+function showTabGhost(name) {
+  if (!dom.tabBar) return;
+  if (!tabGhostEl) {
+    tabGhostEl = document.createElement("div");
+    tabGhostEl.className = "tab-item tab-ghost";
+    const s = document.createElement("span");
+    s.className = "tab-title";
+    tabGhostEl.appendChild(s);
+  }
+  tabGhostEl.querySelector(".tab-title").textContent = name;
+  const addBtn = dom.tabBar.querySelector(".tab-add");
+  dom.tabBar.insertBefore(tabGhostEl, addBtn);
+}
+
+function hideTabGhost() {
+  tabGhostEl?.remove();
+  tabGhostEl = null;
+}
+
 // Dropping a dragged batch row onto empty tab-bar space pulls it out as a tab.
 dom.tabBar?.addEventListener("dragover", (e) => {
   if (!state.dragBatchItem) return;
   e.preventDefault();
   e.dataTransfer.dropEffect = "copy";
+  const src = state.tabs.find((t) => t.id === state.dragBatchItem.tabId);
+  const name = src?.batchFiles[state.dragBatchItem.index]?.name || "image";
+  showTabGhost(name);
+});
+dom.tabBar?.addEventListener("dragleave", (e) => {
+  if (!dom.tabBar.contains(e.relatedTarget)) hideTabGhost();
 });
 dom.tabBar?.addEventListener("drop", (e) => {
   const item = state.dragBatchItem;
@@ -416,6 +463,7 @@ dom.tabBar?.addEventListener("drop", (e) => {
   e.preventDefault();
   e.stopPropagation();
   state.dragBatchItem = null;
+  hideTabGhost();
   const src = state.tabs.find((t) => t.id === item.tabId);
   if (src) extractBatchItemToTab(src, item.index);
 });
@@ -959,6 +1007,7 @@ function renderBatchPanel(tab) {
     row.addEventListener("dragend", () => {
       state.dragBatchItem = null;
       row.classList.remove("dragging");
+      hideTabGhost();
       dom.tabBar
         .querySelectorAll(".drop-target")
         .forEach((el) => el.classList.remove("drop-target"));
@@ -2239,8 +2288,8 @@ function ingestImageFile(file) {
   const currentTab = getActiveTab();
 
   let targetTab;
-  if (currentTab && !currentTab.sourceFile) {
-    // Reuse the currently active blank "NEW TAB"
+  if (currentTab && !currentTab.sourceFile && currentTab.kind !== "batch") {
+    // Reuse the currently active blank "NEW TAB" (batch tabs never absorb files)
     currentTab.name = rawName;
     currentTab.sourceFile = file;
     currentTab.originalObjectUrl = objUrl;
@@ -3107,6 +3156,7 @@ window.addEventListener("drop", (e) => {
   const item = state.dragBatchItem;
   if (item) {
     state.dragBatchItem = null;
+    hideTabGhost();
     if (e.target.closest && e.target.closest(".batch-list")) return;
     const src = state.tabs.find((t) => t.id === item.tabId);
     if (src) extractBatchItemToTab(src, item.index);

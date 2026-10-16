@@ -2214,3 +2214,10 @@ input[type="file"] {
   right: 0;
   transform: none;
 }
+
+/* Ghost preview tab shown while dragging a batch row over the tab bar */
+.tab-item.tab-ghost {
+  opacity: 0.55;
+  border: 1px dashed var(--accent);
+  pointer-events: none;
+}
