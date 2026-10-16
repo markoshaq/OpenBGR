@@ -70,6 +70,7 @@ import {
   syncMenuBarState,
   cancelProcessing,
   runSegmentation,
+  applyEdgeRefinement,
 } from "./tabs.js";
 
 // Connectivity listeners for model cache indicators
@@ -266,6 +267,7 @@ dom.btnDefringe.addEventListener("click", () => {
   dom.btnDefringe.classList.toggle("active", state.defringe);
   saveStateToActiveTab();
   syncMenuBarState();
+  applyEdgeRefinement();
 });
 
 dom.btnDespill?.addEventListener("click", () => {
@@ -273,6 +275,7 @@ dom.btnDespill?.addEventListener("click", () => {
   dom.btnDespill.classList.toggle("active", state.despill);
   saveStateToActiveTab();
   syncMenuBarState();
+  applyEdgeRefinement();
 });
 
 dom.shadowCutoffSlider?.addEventListener("input", (e) => {

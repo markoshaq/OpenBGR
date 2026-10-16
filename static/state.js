@@ -144,6 +144,8 @@ export const state = {
   pendingAltFn: null,
   sourceFile: null,
   resultBlob: null,
+  refineJobId: null,
+  refineToken: 0,
   previewBlob: null,
   originalObjectUrl: null,
   resultObjectUrl: null,
@@ -281,6 +283,7 @@ export function createTabRecord(overrides = {}) {
     sourceFile: null,
     originalObjectUrl: null,
     resultBlob: null,
+    refineJobId: null,
     resultObjectUrl: null,
     previewBlob: null,
     previewObjectUrl: null,
@@ -330,6 +333,7 @@ export function saveStateToActiveTab() {
   tab.viewMode = state.viewMode;
   tab.splitPercent = state.splitPercent;
   tab.resultBlob = state.resultBlob;
+  tab.refineJobId = state.refineJobId;
   tab.previewBlob = state.previewBlob;
   tab.resultObjectUrl = state.resultObjectUrl;
   tab.previewObjectUrl = state.previewObjectUrl;

@@ -68,7 +68,9 @@ class TestOpenBGR(unittest.TestCase):
         alpha[8:24, 8:24] = 255
         alpha[7, 8:24] = 128
 
-        defringed = openbgr_app.decontaminate_edge_colors(rgb, alpha)
+        defringed = openbgr_app.decontaminate_edge_colors(
+            np.array(rgb, dtype=np.uint8), alpha
+        )
         self.assertEqual(defringed.shape, (32, 32, 3))
         self.assertEqual(defringed.dtype, np.uint8)
 
@@ -78,6 +80,43 @@ class TestOpenBGR(unittest.TestCase):
         )
         self.assertEqual(despilled.shape, (32, 32, 3))
         self.assertEqual(despilled.dtype, np.uint8)
+
+        # compose_rgba produces a full 32-bit RGBA cutout with and without filters
+        composed = openbgr_app.compose_rgba(
+            np.array(rgb, dtype=np.uint8), alpha, defringe=True, despill=True
+        )
+        self.assertEqual(composed.mode, "RGBA")
+        self.assertEqual(composed.size, (32, 32))
+        self.assertEqual(composed.getpixel((0, 0))[3], 0)
+        self.assertEqual(composed.getpixel((16, 16))[3], 255)
+        composed.close()
+
+    def test_api_refine_endpoint(self) -> None:
+        rgb = np.full((24, 24, 3), (30, 180, 90), dtype=np.uint8)
+        alpha = np.zeros((24, 24), dtype=np.uint8)
+        alpha[6:18, 6:18] = 255
+        alpha[5, 6:18] = 140
+
+        with openbgr_app._LAST_JOB_LOCK:
+            openbgr_app._LAST_JOB.clear()
+            openbgr_app._LAST_JOB.update({"id": 42, "rgb": rgb, "alpha": alpha})
+
+        res = asyncio.run(
+            openbgr_app.api_refine(job_id=42, defringe=True, despill=True)
+        )
+        self.assertEqual(res.media_type, "image/png")
+        self.assertEqual(res.headers["X-Refine-Job-Id"], "42")
+        out = Image.open(io.BytesIO(res.body))
+        self.assertEqual(out.mode, "RGBA")
+        self.assertEqual(out.size, (24, 24))
+        out.close()
+
+        # Stale job ids are rejected so an older tab can't refine a newer job
+        with self.assertRaises(HTTPException) as ctx:
+            asyncio.run(
+                openbgr_app.api_refine(job_id=41, defringe=True, despill=True)
+            )
+        self.assertEqual(ctx.exception.status_code, 409)
 
     def test_api_save_sanitizes_and_renames_collisions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

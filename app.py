@@ -59,6 +59,7 @@ import asyncio
 import base64
 import gc
 import io
+import itertools
 import json
 import os
 import platform
@@ -581,7 +582,7 @@ MANAGER = ModelManager()
 
 
 def decontaminate_edge_colors(
-    rgb_image: Image.Image, alpha_np: np.ndarray
+    rgb_np: np.ndarray, alpha_np: np.ndarray
 ) -> np.ndarray:
     """
     Removes background color bleed ("halos") from semi-transparent edge pixels.
@@ -598,7 +599,6 @@ def decontaminate_edge_colors(
     filter followed by a 3x3 box blur, blending the propagated foreground color
     into semi-transparent edge pixels proportionally to their transparency.
     """
-    rgb_np = np.array(rgb_image, dtype=np.uint8)
     alpha_norm = alpha_np.astype(np.float32) / 255.0
 
     # Identify semi-transparent transition pixels (hair strands, soft object borders).
@@ -612,10 +612,11 @@ def decontaminate_edge_colors(
     rgb_float = rgb_np.astype(np.float32)
 
     # Dilate nearby solid foreground colors outward and smooth transitions.
-    dilated_pil = rgb_image.filter(ImageFilter.MaxFilter(5)).filter(
-        ImageFilter.BoxBlur(1)
-    )
+    dilated_pil = Image.fromarray(rgb_np, mode="RGB").filter(
+        ImageFilter.MaxFilter(5)
+    ).filter(ImageFilter.BoxBlur(1))
     smooth_fg = np.array(dilated_pil, dtype=np.float32)
+    dilated_pil.close()
 
     blend_strength = (1.0 - fg_weight) * 0.65
     cleaned_rgb = np.where(
@@ -703,6 +704,36 @@ def suppress_color_spill(
     return np.clip(despilled, 0, 255).astype(np.uint8)
 
 
+# Cached raw outputs of the most recent segmentation job. Storing the
+# pre-refinement RGB and alpha lets /api/refine re-apply the edge filters
+# (defringe/despill) in ~20ms without re-running the neural network.
+_JOB_ID_SEQ = itertools.count(1)
+_LAST_JOB: dict[str, Any] = {}
+_LAST_JOB_LOCK = threading.Lock()
+
+
+def compose_rgba(
+    rgb_raw: np.ndarray, alpha_np: np.ndarray, defringe: bool, despill: bool
+) -> Image.Image:
+    """
+    Applies the optional edge-refinement filters onto the raw RGB + alpha and
+    composites the final 32-bit RGBA image. Runs in milliseconds (pure NumPy /
+    Pillow C filters) — no neural network involved.
+    """
+    if defringe:
+        rgb_np = decontaminate_edge_colors(rgb_raw, alpha_np)
+    else:
+        rgb_np = rgb_raw
+    if despill:
+        alpha_norm = alpha_np.astype(np.float32) / 255.0
+        mask_pil = Image.fromarray(alpha_np, mode="L")
+        try:
+            rgb_np = suppress_color_spill(rgb_np, mask_pil, alpha_norm)
+        finally:
+            mask_pil.close()
+    return Image.fromarray(np.dstack((rgb_np, alpha_np)), mode="RGBA")
+
+
 def segment_foreground(
     raw_image: Image.Image,
     tier: str = "general",
@@ -710,7 +741,7 @@ def segment_foreground(
     despill: bool = True,
     matting: bool = False,
     job_epoch: Optional[int] = None,
-) -> tuple[Image.Image, float, dict[str, Any]]:
+) -> tuple[Image.Image, float, dict[str, Any], int]:
     """
     Executes the full background removal pipeline on a PIL image under a thread-safe
     inference lock with cooperative cancellation checkpoints and explicit tensor cleanup.
@@ -775,28 +806,27 @@ def segment_foreground(
             # Explicitly release GPU/MPS tensors immediately after forward pass
             del input_tensor, outputs, pred_logits, alpha_tensor
 
+        job_id = next(_JOB_ID_SEQ)
         try:
             MANAGER.check_cancelled(job_epoch)
             alpha_np = np.array(mask_pil, dtype=np.uint8)
-            alpha_norm = alpha_np.astype(np.float32) / 255.0
+            rgb_np_raw = np.array(rgb_image, dtype=np.uint8)
 
-            if defringe:
-                rgb_np = decontaminate_edge_colors(rgb_image, alpha_np)
-            else:
-                rgb_np = np.array(rgb_image, dtype=np.uint8)
+            # Snapshot the raw RGB + alpha so /api/refine can re-apply the
+            # edge filters later without re-running inference.
+            with _LAST_JOB_LOCK:
+                _LAST_JOB["id"] = job_id
+                _LAST_JOB["rgb"] = rgb_np_raw
+                _LAST_JOB["alpha"] = alpha_np
 
             MANAGER.check_cancelled(job_epoch)
-            if despill:
-                rgb_np = suppress_color_spill(rgb_np, mask_pil, alpha_norm)
-
-            rgba_np = np.dstack((rgb_np, alpha_np))
-            result_image = Image.fromarray(rgba_np, mode="RGBA")
+            result_image = compose_rgba(rgb_np_raw, alpha_np, defringe, despill)
         finally:
             mask_pil.close()
             rgb_image.close()
 
         elapsed_ms = (time.perf_counter() - start_time) * 1000.0
-        return result_image, elapsed_ms, tier_cfg
+        return result_image, elapsed_ms, tier_cfg, job_id
 
 
 # ---------------------------------------------------------------------------
@@ -1023,7 +1053,7 @@ async def api_remove_bg(
 
     result_img: Optional[Image.Image] = None
     try:
-        result_img, elapsed_ms, tier_cfg = await asyncio.to_thread(
+        result_img, elapsed_ms, tier_cfg, job_id = await asyncio.to_thread(
             segment_foreground,
             pil_img,
             tier,
@@ -1057,8 +1087,10 @@ async def api_remove_bg(
         "X-Device": f"{DEVICE_LABEL} / {PRECISION_LABEL}",
         "X-Image-Width": str(img_w),
         "X-Image-Height": str(img_h),
+        "X-Refine-Job-Id": str(job_id),
         "Access-Control-Expose-Headers": (
-            "X-Inference-Time-Ms, X-Tier-Used, X-Device, X-Image-Width, X-Image-Height"
+            "X-Inference-Time-Ms, X-Tier-Used, X-Device, X-Image-Width, "
+            "X-Image-Height, X-Refine-Job-Id"
         ),
     }
     safe_headers = {
@@ -1069,6 +1101,58 @@ async def api_remove_bg(
         content=png_bytes,
         media_type="image/png",
         headers=safe_headers,
+    )
+
+
+@app.post("/api/refine")
+async def api_refine(
+    job_id: int = Form(...),
+    defringe: bool = Form(True),
+    despill: bool = Form(True),
+) -> Response:
+    """
+    Re-applies the edge-refinement filters (defringe/despill) onto the cached
+    raw RGB + alpha of the last completed segmentation job — a pure
+    post-processing pass that skips re-running the neural network entirely.
+    Returns HTTP 409 when the referenced job is no longer the latest one.
+    """
+
+    def _render() -> tuple[bytes, int, int]:
+        with _LAST_JOB_LOCK:
+            job = dict(_LAST_JOB)
+        if job.get("id") != job_id:
+            raise LookupError
+        result_img = compose_rgba(job["rgb"], job["alpha"], defringe, despill)
+        buf = io.BytesIO()
+        try:
+            result_img.save(buf, format="PNG", compress_level=1)
+            return buf.getvalue(), result_img.width, result_img.height
+        finally:
+            buf.close()
+            result_img.close()
+
+    try:
+        png_bytes, img_w, img_h = await asyncio.to_thread(_render)
+    except LookupError:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This cutout is no longer the latest processed job — "
+                "click PROCESS IMAGE to re-apply edge filters."
+            ),
+        )
+
+    return Response(
+        content=png_bytes,
+        media_type="image/png",
+        headers={
+            "X-Refine-Job-Id": str(job_id),
+            "X-Image-Width": str(img_w),
+            "X-Image-Height": str(img_h),
+            "Access-Control-Expose-Headers": (
+                "X-Refine-Job-Id, X-Image-Width, X-Image-Height"
+            ),
+        },
     )
 
 

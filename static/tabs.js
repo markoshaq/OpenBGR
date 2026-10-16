@@ -26,6 +26,7 @@ import {
   updateDestUI,
   updateExportTelemetry,
   applyBackdrop,
+  updateLiveStagePreview,
 } from "./export.js";
 import { updateCacheIndicator, syncServerStatus } from "./preferences.js";
 import {
@@ -304,6 +305,7 @@ export function resetToEmptyWorkspace() {
   setError(null);
   state.sourceFile = null;
   state.resultBlob = null;
+  state.refineJobId = null;
   state.previewBlob = null;
   state.originalObjectUrl = null;
   state.resultObjectUrl = null;
@@ -356,6 +358,7 @@ export async function switchToTab(tabId) {
   state.tier = normalizeTierKey(tab.tier);
   state.defringe = tab.defringe;
   state.despill = tab.despill ?? true;
+  state.refineJobId = tab.refineJobId ?? null;
   state.shadowCutoff = tab.shadowCutoff ?? 0;
   state.viewMode = tab.viewMode;
   state.splitPercent = tab.splitPercent;
@@ -485,6 +488,7 @@ export function ingestImageFile(file) {
   state.sourceFile = file;
   state.originalObjectUrl = objUrl;
   state.resultBlob = null;
+  state.refineJobId = null;
   state.previewBlob = null;
   state.resultObjectUrl = null;
   state.previewObjectUrl = null;
@@ -706,11 +710,16 @@ export async function runSegmentation() {
     );
     const width = parseInt(response.headers.get("X-Image-Width") || "0", 10);
     const height = parseInt(response.headers.get("X-Image-Height") || "0", 10);
+    const jobId = parseInt(
+      response.headers.get("X-Refine-Job-Id") || "0",
+      10
+    );
 
     const blob = await response.blob();
     if (controller.signal.aborted) return;
 
     state.resultBlob = blob;
+    state.refineJobId = jobId || null;
     state.naturalWidth = width;
     state.naturalHeight = height;
     state.exportWidth = Math.max(1, Math.round(width * state.exportScale));
@@ -762,4 +771,65 @@ export async function runSegmentation() {
       syncMenuBarState();
     }
   }
+}
+
+/**
+ * Re-applies the edge-refinement filters (DEFRINGE / SUPPRESS COLOR SPILL) on
+ * the server-side cached raw RGB + alpha of the last job — a pure NumPy
+ * post-processing pass (~20 ms), no neural-network re-inference required.
+ * No-ops when the active tab has no fresh cutout job on the server.
+ */
+export async function applyEdgeRefinement() {
+  const tab = getActiveTab();
+  if (
+    !tab ||
+    tab.kind === "batch" ||
+    !state.refineJobId ||
+    !state.resultBlob ||
+    state.isProcessing
+  ) {
+    return;
+  }
+
+  const token = ++state.refineToken;
+  const fd = new FormData();
+  fd.append("job_id", String(state.refineJobId));
+  fd.append("defringe", state.defringe ? "true" : "false");
+  fd.append("despill", state.despill ? "true" : "false");
+
+  try {
+    const response = await fetch("/api/refine", { method: "POST", body: fd });
+    if (!response.ok) {
+      if (response.status === 409 && token === state.refineToken) {
+        dom.statTime.textContent = "REPROCESS TO APPLY";
+      }
+      return;
+    }
+
+    const blob = await response.blob();
+    if (token !== state.refineToken) return;
+
+    state.resultBlob = blob;
+    if (
+      state.previewObjectUrl &&
+      state.previewObjectUrl !== state.resultObjectUrl
+    ) {
+      URL.revokeObjectURL(state.previewObjectUrl);
+    }
+    state.previewObjectUrl = null;
+    if (state.resultObjectUrl) {
+      URL.revokeObjectURL(state.resultObjectUrl);
+    }
+    state.resultObjectUrl = URL.createObjectURL(blob);
+
+    await new Promise((resolve) => {
+      masterCutoutImg.onload = resolve;
+      masterCutoutImg.onerror = resolve;
+      masterCutoutImg.src = state.resultObjectUrl;
+    });
+    if (token !== state.refineToken) return;
+
+    updateLiveStagePreview();
+    saveStateToActiveTab();
+  } catch (_) {}
 }
