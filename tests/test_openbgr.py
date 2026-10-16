@@ -452,6 +452,17 @@ class TestOpenBGR(unittest.TestCase):
             # Subsequent drain is empty
             self.assertEqual(bridge.take_pending_files(), {"files": []})
 
+    def test_queue_open_files_rejects_non_images(self) -> None:
+        """Launch-time 'odoc' events for the script itself (app.py) are filtered out."""
+        bridge = openbgr_app.DesktopApi()
+        with tempfile.TemporaryDirectory() as tmp:
+            script_path = Path(tmp) / "app.py"
+            script_path.write_text("print('not an image')")
+            missing_img = Path(tmp) / "ghost.png"
+
+            openbgr_app.queue_open_files([str(script_path), str(missing_img)])
+            self.assertEqual(bridge.take_pending_files(), {"files": []})
+
 
 if __name__ == "__main__":
     unittest.main()

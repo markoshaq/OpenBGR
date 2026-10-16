@@ -31,6 +31,11 @@ from .config import (
 from .models import MANAGER
 from .quick_action import copy_png_bytes_to_clipboard
 
+# File types accepted from OS open-file events and clipboard path drops.
+_IMAGE_EXTENSIONS = frozenset(
+    {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
+)
+
 # Image paths handed to the app by the OS (argv / macOS 'odoc' AppleEvent) that
 # the frontend should ingest into tabs once the window is ready.
 _PENDING_OPEN_LOCK = threading.Lock()
@@ -55,7 +60,17 @@ def queue_open_files(paths: Any) -> None:
     global _OPEN_FILES_RECEIVED
     if not paths:
         return
-    file_list = [str(p) for p in paths]
+    # Launching a bundle binary as `MyApp.app/.../MyApp script.py` makes
+    # LaunchServices report argv[1:] as documents to open ('odoc'), which would
+    # otherwise load the entrypoint script itself as an image tab.
+    file_list = [
+        str(p)
+        for p in paths
+        if Path(str(p)).is_file()
+        and Path(str(p)).suffix.lower() in _IMAGE_EXTENSIONS
+    ]
+    if not file_list:
+        return
     with _PENDING_OPEN_LOCK:
         _PENDING_OPEN_FILES.extend(file_list)
         _OPEN_FILES_RECEIVED += len(file_list)
@@ -252,16 +267,7 @@ class DesktopApi:
             if isinstance(grabbed, (list, tuple)):
                 for item in grabbed:
                     p = Path(str(item))
-                    if p.is_file() and p.suffix.lower() in {
-                        ".png",
-                        ".jpg",
-                        ".jpeg",
-                        ".webp",
-                        ".bmp",
-                        ".gif",
-                        ".tif",
-                        ".tiff",
-                    }:
+                    if p.is_file() and p.suffix.lower() in _IMAGE_EXTENSIONS:
                         data = p.read_bytes()
                         if len(data) <= self.OPEN_DIALOG_MAX_BYTES:
                             return {

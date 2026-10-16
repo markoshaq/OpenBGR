@@ -1,8 +1,46 @@
 # OpenBGR
 
-Local background removal tool powered by [BiRefNet](https://github.com/ZhengPeng7/BiRefNet). Runs entirely on your own hardware (NVIDIA CUDA, Apple Silicon MPS, or CPU) and exports full-resolution cutouts without cloud uploads, watermarks, or compression.
+[![CI](https://github.com/markoshaq/OpenBGR/actions/workflows/release.yml/badge.svg)](https://github.com/markoshaq/OpenBGR/actions/workflows/release.yml)
+[![Release](https://img.shields.io/github/v/release/markoshaq/OpenBGR)](https://github.com/markoshaq/OpenBGR/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 
-## Quickstart
+Background removal tool powered by [BiRefNet](https://github.com/ZhengPeng7/BiRefNet). Runs locally and exports full-resolution images in multiple formats without any telemetry, watermarks or compression.
+
+![OpenBGR workspace](docs/screenshot.png)
+
+## Features
+
+- **100% offline after setup.** Model weights are downloaded once from Hugging Face and loaded strictly from local cache on future runs. No uploads, no telemetry, no accounts, no subscriptions.
+- **Multi-tab workspace.** Open several images as tabs, work on them independently, and drag one tab onto another to merge them into a batch, like folders. Zoom and pan are remembered per tab.
+- **Batch processing.** Batch tabs queue any number of images under one shared settings snapshot, with per-file status, drag-out extraction, direct folder export (or a single ZIP in browser mode), and per-file failure recovery.
+- **Six specialized models.** From a fast `Lite` build for CPUs up to 2K soft-alpha `Matting`. See the [model table](#models).
+- **Zoom, pan & 4× loupe.** Pinch-to-zoom and two-finger trackpad panning (`100%-800%`), plus a toggleable 4× circular magnifier loupe (`Z` key) for inspecting hair strands and edges, before and after processing.
+- **Live export preview.** Export as `PNG`, `WEBP`, `JPG`, or an 8-bit `Alpha Mask` at any scale (`10%-200%`) or custom pixel dimensions (`W × H`), rendered live on `<canvas>` without re-running inference.
+- **Edge & reflection refinement.** Edge defringing removes background color bleed along hair and soft borders, color-spill suppression cleans rim reflections, and a shadow/reflection alpha cutoff floors out floor shadows at export.
+- **Native desktop window.** Opens in a standalone OS window via `pywebview`, with native menus, clipboard, save dialogs, per-monitor window-state restore, and automatic browser fallback.
+- **Model management.** Right-click any model card to install or uninstall checkpoints, open the Hugging Face cache folder, and see disk usage split between app files and model weights. `FP16` inference runs on CUDA and Apple MPS (roughly half the memory of FP32, typically with a solid speedup).
+
+## Installation
+
+### From a release
+
+Download the latest build for your OS from [Releases](https://github.com/markoshaq/OpenBGR/releases):
+
+- **macOS.** Open `OpenBGR-macOS.dmg` and drag `OpenBGR.app` into Applications. The build is ad-hoc signed rather than Apple-notarized, so Gatekeeper may prompt on first launch; right-click `OpenBGR.app` > **Open** once, or run `xattr -cr /Applications/OpenBGR.app`.
+- **Windows.** Extract `OpenBGR-Windows.zip` and run `start.bat` (CI builds also include an `OpenBGR.exe` shortcut).
+- **Linux.** Extract `OpenBGR-Linux.tar.gz` and run `./start.sh` inside the extracted folder.
+
+On first run the launcher sets up a standalone Python runtime and downloads the model you pick, so an internet connection is needed once.
+
+### Requirements
+
+- **OS:** macOS 11+, Windows 10+, or a modern Linux desktop (Wayland or X11).
+- **RAM:** 8 GB recommended for `General` and the 2K models; the `Lite` model runs comfortably on 4 GB.
+- **Disk:** ~2-3 GB for the provisioned Python runtime and PyTorch, plus ~85-425 MB per model you download.
+- **GPU:** optional. CUDA and Apple MPS get `FP16` inference; everything also works on CPU.
+- No Python install needed — release builds bundle a runtime, and the source launcher auto-provisions one via `uv` if none is found.
+
+### From source
 
 Works on macOS, Windows, and Linux. If Python 3.10+ isn't installed on your machine, the launch script automatically provisions a standalone Python 3.12 runtime via [`uv`](https://docs.astral.sh/uv/).
 
@@ -20,61 +58,43 @@ cd OpenBGR
 start.bat
 ```
 
-Or download the repository ZIP and double-click **`Start Mac.command`** (macOS) or **`start.bat`** (Windows). The app opens at `http://127.0.0.1:7860`.
+Or download the repository ZIP and double-click `Start Mac.command` (macOS) or `start.bat` (Windows). The app opens at `http://127.0.0.1:7860`.
 
-## Features
+### Headless / CLI-only install (Quick Action without the GUI)
 
-- **100% Offline After Setup** — Model weights are downloaded once from Hugging Face and loaded strictly from local cache (`local_files_only=True`) on future runs. No uploads, no telemetry, no accounts, no subscriptions.
-- **Welcome Splash** — The empty workspace doubles as a splash screen showing the app version, detected compute engine, privacy guarantees, and platform-adapted shortcuts (`⌘` on macOS, `CTRL` on Windows/Linux).
-- **Multi-Tab Workspace** — Open several images as tabs, work on them independently, and drag one tab onto another to merge them into a batch — like folders. Zoom and pan are remembered per tab.
-- **Batch Processing** — Batch tabs queue any number of images under one shared settings snapshot, with per-file status, drag-out extraction, direct folder export (or a single ZIP in browser mode), and per-file failure recovery.
-- **Six Specialized BiRefNet Models** — Switch between `Lite` (fast CPU/iGPU), `General` (default all-round Swin-L), `Ultra HR` (2K detail), `Portrait` (people & flyaway hair), `Matting` (2K soft alpha for glass, smoke & sheer fabric), and `Dynamic` (preserves native aspect ratio up to 2K without square distortion).
-- **Live Edge Filters** — Defringe and color-spill suppression are classical post-processing passes, not extra inference. Toggling either re-composes the cached result via `POST /api/refine` in ~100 ms instead of re-running the network; stale jobs are rejected with HTTP 409.
-- **Edge & Reflection Refinement** — Edge defringing removes background color bleed along hair and soft borders, color-spill suppression cleans rim reflections, and a shadow/reflection alpha cutoff floors out floor shadows at export.
-- **Live Export Preview** — Export as `PNG`, `WEBP`, `JPG`, or an 8-bit `Alpha Mask` at any scale (`10%–200%`) or custom pixel dimensions (`W × H`), rendered live on `<canvas>` without re-running inference.
-- **Export Destinations** — Set a per-tab output folder for one-click exports, or leave it unset for a native Save-As dialog (browser downloads in fallback mode).
-- **Zoom, Pan & 4× Loupe** — Pinch-to-zoom and two-finger trackpad panning (`100%–800%`), plus a toggleable 4× circular magnifier loupe (`Z` key) for inspecting hair strands and edges — works before and after processing.
-- **Native Desktop Window** — Opens in a standalone native OS window via `pywebview` (with native menus, clipboard, Save dialogs, per-monitor window-state restore, and automatic browser fallback).
-- **Model Storage Management** — Right-click any model card (or open `⌘,` → MODELS) for `Install (size)` / `Uninstall (size)` per checkpoint, open the Hugging Face cache folder in the system file manager, and see total disk usage split between app files and model weights. Uninstalled models re-download on next use.
-- **System Info** — The Settings → SYSTEM pane reports the detected compute engine (`CUDA` / `MPS` / `CPU`), inference precision (`FP16`/`FP32`), total RAM, and app version.
-- **Hardware Acceleration** — Runs in `FP16` half-precision on CUDA and Apple MPS (cutting memory usage in half and speeding up inference ~5×), and automatically evicts inactive models from memory when switching models.
+For scripts, servers, or machines that should never open a window. Same local pipeline, same privacy guarantees:
 
-## Models
+```bash
+git clone https://github.com/markoshaq/OpenBGR.git && cd OpenBGR
+./start.sh --cli photo.png      # one-time setup: provisions .venv + model, writes photo-cutout.png
+python3 scripts/install_macos_quick_action.py   # registers the right-click entry
+```
 
-| Model | Checkpoint | Backbone | Native Resolution | FP16 Size | Best For |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **Lite** (`lite`) | `ZhengPeng7/BiRefNet_lite` | Swin-T | `1024 × 1024` | ~85–170 MB | Quick batches, CPUs & integrated graphics |
-| **General** (`general`, *Default*) | `ZhengPeng7/BiRefNet` | Swin-L | `1024 × 1024` | ~424 MB | Products, objects, animals & everyday photos |
-| **Ultra HR** (`hr`) | `ZhengPeng7/BiRefNet_HR` | Swin-L | `1536` / `2048` | ~424 MB | 4K/8K studio photos & micro-edge detail |
-| **Portrait** (`portrait`) | `ZhengPeng7/BiRefNet-portrait` | Swin-L | `1024 × 1024` | ~424 MB | People, headshots, flyaway hair & eyelashes |
-| **Matting** (`matting`) | `ZhengPeng7/BiRefNet_HR-matting` | Swin-L | `1536` / `2048` | ~424 MB | Glass, smoke, veils, sheer fabric & soft alpha |
-| **Dynamic** (`dynamic`) | `ZhengPeng7/BiRefNet_dynamic` | Swin-L | Up to `2048` (native ratio) | ~424 MB | Ultrawide panoramas & tall vertical banners |
+On Windows use `start.bat` and `scripts\install_windows_context_menu.bat`; on Linux `./scripts/install_linux_integration.sh`.
 
-Output masks are always upsampled (`LANCZOS`) back to the exact pixel dimensions of the source image. Any FP32 checkpoint downloaded from Hugging Face is automatically compacted to FP16 on disk.
-
-Weights download on first use of each model into the standard Hugging Face cache (`~/.cache/huggingface`) — only for the models you actually run.
+`start.sh --cli` provisions the environment itself, so this works on a fresh clone. Afterwards use `python app.py --cli` or `--quick-action` from your own scripts: `--quick-action` applies the saved Quick Action preferences (model, format, destination, clipboard, notification), while `--cli` takes explicit flags. It still needs the same torch + model download (~1.5 GB); the difference is that no window, browser, or server is ever opened.
 
 ## Right-Click / "Open With" Integration
 
-OpenBGR can be wired into your OS file manager — everything stays 100% local (the cutout is written next to the original as `<name>-cutout.png`; nothing is uploaded).
+OpenBGR can be wired into your OS file manager. Everything stays 100% local: the cutout is written next to the original as `<name>-cutout.png` and nothing is uploaded.
 
-**macOS** — Finder Quick Action (right-click → Quick Actions → *Remove Background with OpenBGR*):
+**macOS.** Finder Quick Action (right-click > Quick Actions > *Remove Background with OpenBGR*):
 
 ```bash
 python3 scripts/install_macos_quick_action.py     # --remove to uninstall
 ```
 
-The release `OpenBGR.app` also registers itself as an "Open With" target for image files — right-click → Open With → OpenBGR launches the app with the image loaded in a tab. (Drag onto the Dock icon works too.)
+The release `OpenBGR.app` also registers itself as an "Open With" target for image files: right-click > Open With > OpenBGR launches the app with the image loaded in a tab. (Dragging onto the Dock icon works too.)
 
-**Windows** — Explorer context menu (per-user registry entries, no admin):
+**Windows.** Explorer context menu (per-user registry entries, no admin):
 
 ```bat
-scripts\install_windows_context_menu.bat           :: uninstall: uninstall_windows_context_menu.bat
+scripts\install_windows_context_menu.bat           :: uninstall: scripts\uninstall_windows_context_menu.bat
 ```
 
 Adds *Remove background with OpenBGR* (headless cutout) and *Open in OpenBGR*.
 
-**Linux**:
+**Linux.**
 
 ```bash
 ./scripts/install_linux_integration.sh            # --remove to uninstall
@@ -82,7 +102,7 @@ Adds *Remove background with OpenBGR* (headless cutout) and *Open in OpenBGR*.
 
 Installs an "Open With" `.desktop` entry, a KDE Dolphin service-menu action, and a GNOME Files (Nautilus) script.
 
-**CLI** — the same pipeline is available directly:
+**CLI.** The same pipeline is available directly:
 
 ```bash
 python app.py --cli photo.png                      # writes photo-cutout.png
@@ -92,21 +112,22 @@ python app.py --cli photo.png --tier portrait      # pick a model preset
 python app.py photo.png                            # open app with image loaded
 ```
 
-When an OpenBGR window is already running, the context-menu action reuses it over localhost (model is warm → near-instant); otherwise it runs `app.py --cli` standalone (~10–20 s cold start while torch + the model load).
+When an OpenBGR window is already running, the context-menu action reuses it over localhost (model is warm, so it's near-instant); otherwise it runs `app.py --cli` standalone (~10-20 s cold start while torch and the model load).
 
-### Headless / CLI-Only Install (no GUI)
+## Models
 
-For scripts, servers, or users who never want a window — same local pipeline, same privacy guarantees:
+| Model | Checkpoint | Backbone | Native Resolution | FP16 Size | Best For |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Lite** (`lite`) | `ZhengPeng7/BiRefNet_lite` | Swin-T | `1024 × 1024` | ~85-170 MB | Quick batches, CPUs & integrated graphics |
+| **General** (`general`, *Default*) | `ZhengPeng7/BiRefNet` | Swin-L | `1024 × 1024` | ~424 MB | Products, objects, animals & everyday photos |
+| **Ultra HR** (`hr`) | `ZhengPeng7/BiRefNet_HR` | Swin-L | `1536` / `2048` | ~424 MB | 4K/8K studio photos & micro-edge detail |
+| **Portrait** (`portrait`) | `ZhengPeng7/BiRefNet-portrait` | Swin-L | `1024 × 1024` | ~424 MB | People, headshots, flyaway hair & eyelashes |
+| **Matting** (`matting`) | `ZhengPeng7/BiRefNet_HR-matting` | Swin-L | `1536` / `2048` | ~424 MB | Glass, smoke, veils, sheer fabric & soft alpha |
+| **Dynamic** (`dynamic`) | `ZhengPeng7/BiRefNet_dynamic` | Swin-L | Up to `2048` (native ratio) | ~424 MB | Ultrawide panoramas & tall vertical banners |
 
-```bash
-git clone https://github.com/markoshaq/OpenBGR.git && cd OpenBGR
-./start.sh --cli photo.png      # one-time setup: provisions .venv + model, writes photo-cutout.png
-python3 scripts/install_macos_quick_action.py   # optional: registers the right-click entry
-```
+Output masks are always upsampled (`LANCZOS`) back to the exact pixel dimensions of the source image. Any FP32 checkpoint downloaded from Hugging Face is automatically compacted to FP16 on disk.
 
-(On Windows use `start.bat` and `scripts\install_windows_context_menu.bat`; on Linux `./scripts/install_linux_integration.sh`.)
-
-`start.sh --cli` provisions the environment itself, so this works on a fresh clone. Afterwards use `python app.py --cli` / `--quick-action` from your own scripts — `--quick-action` applies the saved Quick Action preferences (model, format, destination, clipboard, notification), while `--cli` takes explicit flags. It still needs the same torch + model download (~1.5 GB); the difference is that no window, browser, or server is ever opened.
+Weights download on first use of each model into the standard Hugging Face cache (`~/.cache/huggingface`), only for the models you actually run.
 
 ## API
 
@@ -153,6 +174,8 @@ mypy app.py openbgr                     # type-check
 │   └── api.py              # FastAPI application and HTTP endpoints
 ├── icon_render.py          # Shared macOS squircle icon renderer
 ├── pyproject.toml          # Project metadata, ruff & mypy configuration
+├── docs/
+│   └── screenshot.png      # README hero image
 ├── static/
 │   ├── index.html          # 3-column studio workspace
 │   ├── styles.css          # Stylesheet
@@ -166,7 +189,7 @@ mypy app.py openbgr                     # type-check
 ├── scripts/
 │   ├── build_release.py    # Builds .dmg / .zip / .tar.gz into dist/
 │   ├── make_dev_bundle.py  # Generates the venv-local OpenBGR.app for dev runs
-│   ├── context_process.sh  # Headless cutout helper (server fast-path → --cli fallback)
+│   ├── context_process.sh  # Headless cutout helper (server fast-path > --cli fallback)
 │   ├── install_macos_quick_action.py      # Finder "Remove Background" Quick Action
 │   ├── install_windows_context_menu.bat   # Explorer right-click entries (HKCU)
 │   ├── uninstall_windows_context_menu.bat
@@ -179,7 +202,7 @@ mypy app.py openbgr                     # type-check
 
 ## Building Desktop Releases (`.dmg` / `.exe` / Linux)
 
-To build lightweight desktop release bundles locally into `dist/`:
+To build desktop release bundles locally into `dist/`:
 
 ```bash
 python3 scripts/build_release.py
@@ -187,7 +210,13 @@ python3 scripts/build_release.py
 
 Pushing a version tag (e.g. `git tag v0.10 && git push origin v0.10`) triggers `.github/workflows/release.yml` to build and attach `OpenBGR-macOS.dmg`, `OpenBGR-Windows.zip`, and `OpenBGR-Linux.tar.gz` to a GitHub Release automatically.
 
-> **macOS Gatekeeper note:** Because release builds are ad-hoc signed rather than Apple-notarized, macOS may prompt on first launch when opening `OpenBGR.app` from a downloaded `.dmg`. Right-click `OpenBGR.app` → **Open** (once), or run `xattr -cr /Applications/OpenBGR.app`.
+## Troubleshooting
+
+- **"OpenBGR is damaged" or Gatekeeper refusal on macOS.** The release is ad-hoc signed, not notarized. Right-click `OpenBGR.app` > **Open** once, or run `xattr -cr /Applications/OpenBGR.app`.
+- **"Address already in use" on launch.** Something is already on port 7860 (possibly another OpenBGR instance). Close it, or start on a different port with `PORT=7861 ./start.sh`.
+- **First launch is slow or a model download stalls.** The first run downloads PyTorch (~2 GB) plus the model (~85-425 MB). Downloads resume automatically on retry; if Hugging Face is unreachable, set `HF_ENDPOINT` to a mirror or check your proxy/firewall.
+- **Wrong GPU or CUDA not detected.** On Apple Silicon the app uses MPS automatically; CPU fallback is only expected on machines without a supported GPU. On Windows/Linux with NVIDIA, install a CUDA build of PyTorch into `.venv`; the launcher picks CUDA wheels automatically when `nvidia-smi` is present.
+- **Quick Action does nothing on right-click.** Check that the installer ran without errors, then look at `~/Library/Logs` (macOS) or run `context_process.sh` manually on a file to see the real error. The app does not need to be running; it cold-starts in ~10-20 s.
 
 ## License
 
