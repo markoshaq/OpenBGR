@@ -336,7 +336,13 @@ document.querySelectorAll(".quick-scale-btn").forEach((btn) => {
 
 dom.exportWidthInput.addEventListener("input", (e) => {
   const val = parseInt(e.target.value, 10);
-  if (!val || val < 1) return;
+  if (!val || val < 1) {
+    // Cleared input = "auto" — fall back to the scale-derived size.
+    state.exportWidth = 0;
+    state.exportHeight = 0;
+    updateExportTelemetry();
+    return;
+  }
   state.exportWidth = Math.min(16384, val);
   if (state.naturalWidth > 0 && state.naturalHeight > 0) {
     state.exportScale = state.exportWidth / state.naturalWidth;
@@ -351,7 +357,12 @@ dom.exportWidthInput.addEventListener("input", (e) => {
 
 dom.exportHeightInput.addEventListener("input", (e) => {
   const val = parseInt(e.target.value, 10);
-  if (!val || val < 1) return;
+  if (!val || val < 1) {
+    state.exportWidth = 0;
+    state.exportHeight = 0;
+    updateExportTelemetry();
+    return;
+  }
   state.exportHeight = Math.min(16384, val);
   if (state.naturalWidth > 0 && state.naturalHeight > 0) {
     state.exportScale = state.exportHeight / state.naturalHeight;
@@ -536,6 +547,12 @@ dom.fileInput.addEventListener("change", (e) => {
   }
   if (state.isProcessing) cancelProcessing();
   files.forEach((f) => ingestImageFile(f));
+});
+
+// Cancelling the file dialog must clear the batch dispatch intent, otherwise
+// the next normal Open would be routed into a batch queue.
+dom.fileInput.addEventListener("cancel", () => {
+  state.expectingBatch = false;
 });
 
 window.addEventListener("dragover", (e) => {
@@ -779,7 +796,10 @@ window.addEventListener("keydown", (e) => {
 
   if (
     e.target &&
-    (e.target.tagName === "INPUT" || e.target.tagName === "SELECT")
+    (e.target.tagName === "INPUT" ||
+      e.target.tagName === "SELECT" ||
+      e.target.tagName === "TEXTAREA" ||
+      e.target.isContentEditable)
   ) {
     return;
   }

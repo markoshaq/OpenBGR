@@ -1061,6 +1061,15 @@ body {
   display: inline-block;
 }
 
+/* In the unprocessed state the right sidebar is hidden, so the stage may
+ * claim the extra ~276px instead of reserving room for it. */
+.app-shell.no-result:not(.batch-active) .stage {
+  max-width: calc(100vw - 304px);
+}
+.app-shell.no-result:not(.batch-active) .stage-sizer {
+  max-width: calc(100vw - 306px);
+}
+
 .stage.panning {
   cursor: grabbing;
 }

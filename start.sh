@@ -41,6 +41,12 @@ if command -v python3 >/dev/null 2>&1; then
   fi
 fi
 
+# A .venv directory without a working python binary is broken (interrupted
+# setup or partial delete) — rebuild it instead of failing on missing pip.
+if [ -d ".venv" ] && [ ! -x ".venv/bin/python" ]; then
+  rm -rf .venv
+fi
+
 if [ ! -d ".venv" ]; then
   if command -v uv >/dev/null 2>&1; then
     echo "[1/2] Creating virtual environment with uv..."

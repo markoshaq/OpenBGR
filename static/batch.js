@@ -249,7 +249,7 @@ export function convertTabToBatch(tab) {
 }
 
 export function mergeTabsIntoBatch(srcId, dstId) {
-  if (srcId === dstId) return;
+  if (srcId === dstId || state.batch.running) return;
   const src = state.tabs.find((t) => t.id === srcId);
   const dst = state.tabs.find((t) => t.id === dstId);
   if (!src || !dst) return;
@@ -373,10 +373,14 @@ export function showTabContextMenu(tab, x, y, onRequestCloseTab) {
     });
   }
   if (tab.kind === "batch") {
-    addItem("RUN BATCH", () => runBatch(tab));
-    addItem("ADD IMAGES…", () => {
-      pickImageFiles((files) => addFilesToBatchTab(tab, files));
-    });
+    addItem("RUN BATCH", () => runBatch(tab), state.batch.running);
+    addItem(
+      "ADD IMAGES…",
+      () => {
+        pickImageFiles((files) => addFilesToBatchTab(tab, files));
+      },
+      state.batch.running
+    );
   }
   if (menu.children.length) addSep();
   addItem("CLOSE TAB", () => onRequestCloseTab(tab.id));
@@ -397,6 +401,27 @@ export async function runBatch(tab) {
     return;
   }
 
+  const snap = {
+    tier: tab.tier ?? state.tier,
+    defringe: tab.defringe ?? state.defringe,
+    despill: tab.despill ?? state.despill,
+    matting: tab.matting ?? state.matting,
+    format: tab.exportFormat ?? state.exportFormat,
+    scale: tab.exportScale ?? state.exportScale,
+    exportWidth: tab.exportWidth ?? 0,
+    exportHeight: tab.exportHeight ?? 0,
+    backdrop: tab.activeBackdrop ?? state.activeBackdrop,
+    shadowCutoff: tab.shadowCutoff ?? state.shadowCutoff,
+  };
+
+  const tierInfo = snap.matting
+    ? state.serverStatus?.matting
+    : state.serverStatus?.tiers?.[snap.tier];
+  if (tierInfo && tierInfo.cached === false && !navigator.onLine) {
+    setError("Selected model is not cached on disk and device is currently offline.");
+    return;
+  }
+
   let outputDir = tab.outputDir || null;
   if (!outputDir && window.pywebview?.api?.choose_output_dir) {
     try {
@@ -412,19 +437,6 @@ export async function runBatch(tab) {
     } catch (_) {}
   }
 
-  const snap = {
-    tier: tab.tier ?? state.tier,
-    defringe: tab.defringe ?? state.defringe,
-    despill: tab.despill ?? state.despill,
-    matting: tab.matting ?? state.matting,
-    format: tab.exportFormat ?? state.exportFormat,
-    scale: tab.exportScale ?? state.exportScale,
-    exportWidth: tab.exportWidth ?? 0,
-    exportHeight: tab.exportHeight ?? 0,
-    backdrop: tab.activeBackdrop ?? state.activeBackdrop,
-    shadowCutoff: tab.shadowCutoff ?? state.shadowCutoff,
-  };
-
   batch.running = true;
   batch.tabId = tab.id;
   batch.total = tab.batchFiles.length;
@@ -438,9 +450,6 @@ export async function runBatch(tab) {
   state.isProcessing = true;
   setError(null);
   dom.busyOverlay.classList.add("active");
-  const tierInfo = snap.matting
-    ? state.serverStatus?.matting
-    : state.serverStatus?.tiers?.[snap.tier];
   const isCached = tierInfo ? tierInfo.cached !== false : true;
 
   const presetName = snap.matting
@@ -508,7 +517,8 @@ export async function runBatch(tab) {
       const outBlob = await buildBatchExportBlob(blob, snap);
       const ext = FORMAT_EXT[snap.format] || "png";
       const stem = (entry.name || "image").replace(/\.[^.]+$/, "") || "image";
-      const outName = `${stem}_cutout.${ext}`;
+      const suffix = snap.format === "mask" ? "mask" : "cutout";
+      const outName = `${stem}-${suffix}.${ext}`;
 
       if (outputDir) {
         const ok = await saveBatchFile(outputDir, outName, outBlob);

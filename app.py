@@ -327,7 +327,7 @@ def compact_model_cache_fp16(repo_id: str) -> int:
         with safe_open(str(blob_path), framework="pt", device="cpu") as f:
             metadata = f.metadata() or {}
             for k in list(f.keys())[:8]:
-                if f.get_tensor(k).dtype == torch.float32:
+                if f.get_slice(k).get_dtype() == "F32":
                     needs_fp16 = True
                     break
         if not needs_fp16:
@@ -846,8 +846,8 @@ async def api_save(
     dest_dir = Path(directory).expanduser()
     if not dest_dir.is_dir():
         raise HTTPException(status_code=400, detail="Output folder does not exist.")
-    safe_name = Path(filename).name
-    if not safe_name:
+    safe_name = Path(filename).name.strip()
+    if not safe_name or safe_name in (".", ".."):
         raise HTTPException(status_code=400, detail="Invalid filename.")
 
     target = dest_dir / safe_name
@@ -884,10 +884,13 @@ async def api_remove_bg(
     if not raw_bytes:
         raise HTTPException(status_code=400, detail="Uploaded image file is empty.")
 
+    pil_img: Optional[Image.Image] = None
     try:
         pil_img = Image.open(io.BytesIO(raw_bytes))
         pil_img.load()
     except Exception as exc:
+        if pil_img is not None:
+            pil_img.close()
         raise HTTPException(
             status_code=400, detail=f"Unable to decode image file: {exc}"
         ) from exc
@@ -1356,6 +1359,41 @@ def attach_window_state_persistence(window: Any) -> None:
         pass
 
 
+def ensure_window_on_screen(window: Any) -> None:
+    """
+    Moves the window back to the primary screen if its restored geometry lands
+    fully outside every connected display (e.g. a monitor was unplugged after
+    the position was saved).
+    """
+    def _clamp() -> None:
+        try:
+            import webview
+
+            wx, wy = int(window.x), int(window.y)
+            ww, wh = int(window.width), int(window.height)
+            screens = getattr(webview, "screens", [])
+            on_screen = any(
+                wx < s.x + s.width
+                and wx + ww > s.x
+                and wy < s.y + s.height
+                and wy + wh > s.y
+                for s in screens
+            )
+            if not on_screen and screens:
+                primary = screens[0]
+                window.move(
+                    primary.x + max(0, (primary.width - ww) // 2),
+                    primary.y + max(0, (primary.height - wh) // 2),
+                )
+        except Exception:
+            pass
+
+    try:
+        window.events.shown += lambda *a, **k: _clamp()
+    except Exception:
+        pass
+
+
 def set_macos_app_name(name: str) -> None:
     """
     Renames the macOS menu-bar application name from "Python" to `name` and
@@ -1624,6 +1662,21 @@ def wait_for_server(host: str, port: int, timeout_s: float = 15.0) -> bool:
     return False
 
 
+def is_openbgr_server(url: str) -> bool:
+    """
+    Verifies that whatever is listening on the port is actually OpenBGR's API —
+    guards against opening a foreign service when the port is already in use.
+    """
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen(f"{url}/api/status", timeout=2) as res:
+            payload = json.loads(res.read().decode("utf-8"))
+            return isinstance(payload, dict) and "tiers" in payload
+    except Exception:
+        return False
+
+
 def open_fallback_app_window(url: str) -> None:
     """
     Fallback if pywebview is unavailable (e.g. Linux without GTK WebKit).
@@ -1730,7 +1783,14 @@ if __name__ == "__main__":
             daemon=True,
         )
         server_thread.start()
-        wait_for_server(host, port)
+        if wait_for_server(host, port):
+            if not is_openbgr_server(url):
+                print(f"[Server] Port {port} is already in use by another application.")
+                print("[Server] Close it or set PORT=<free port> and try again.")
+                raise SystemExit(1)
+        elif not server_thread.is_alive():
+            print("[Server] Uvicorn failed to start — see errors above.")
+            raise SystemExit(1)
 
         try:
             set_macos_app_name("OpenBGR")
@@ -1763,6 +1823,7 @@ if __name__ == "__main__":
             )
             api_bridge.window = window
             attach_window_state_persistence(window)
+            ensure_window_on_screen(window)
             configure_macos_native_window_and_menus(window)
 
             # On macOS and Linux, attach the native OS menu bar; on Windows,

@@ -23,6 +23,9 @@ echo --------------------------------------------------------------------
 echo   OpenBGR // FIRST-TIME LOCAL SETUP
 echo --------------------------------------------------------------------
 
+:: A .venv directory without a working python binary is broken — rebuild it.
+if exist ".venv" if not exist ".venv\Scripts\python.exe" rmdir /s /q ".venv"
+
 if not exist ".venv" (
     where uv >nul 2>nul
     if !errorlevel! equ 0 (

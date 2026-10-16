@@ -59,17 +59,43 @@ export function getDefaultPrefs() {
   };
 }
 
+const PREF_SCHEMA = {
+  theme: { values: ["dark", "light"], fallback: "dark" },
+  accent: { values: ["default", ...Object.keys(ACCENTS)], fallback: "default" },
+  density: { values: ["comfortable", "compact"], fallback: "comfortable" },
+  defaultTier: { values: ["auto", "low", "mid", "high"], fallback: "auto" },
+  defaultFormat: { values: ["png", "webp", "jpg", "mask"], fallback: "png" },
+  defaultBackdrop: {
+    values: ["checker", "#ffffff", "#000000", "#18181b"],
+    fallback: "checker",
+  },
+  confirmClose: { type: "boolean", fallback: true },
+};
+
+function sanitizePrefs(stored) {
+  const clean = {};
+  for (const [key, rule] of Object.entries(PREF_SCHEMA)) {
+    const v = stored[key];
+    if (rule.type === "boolean") {
+      clean[key] = typeof v === "boolean" ? v : rule.fallback;
+    } else {
+      clean[key] = rule.values.includes(v) ? v : rule.fallback;
+    }
+  }
+  return clean;
+}
+
 function loadPrefs() {
   let stored = {};
   try {
     stored = JSON.parse(localStorage.getItem(STORAGE_KEY_PREFS) || "{}");
   } catch (_) {}
   const legacyConfirm = localStorage.getItem(STORAGE_KEY_CONFIRM_CLOSE);
-  return {
-    ...getDefaultPrefs(),
-    confirmClose: legacyConfirm !== null ? legacyConfirm !== "false" : true,
-    ...stored,
-  };
+  const clean = sanitizePrefs(typeof stored === "object" && stored ? stored : {});
+  if (legacyConfirm !== null) {
+    clean.confirmClose = legacyConfirm !== "false";
+  }
+  return clean;
 }
 
 export const prefs = loadPrefs();
@@ -258,6 +284,9 @@ export function createTabRecord(overrides = {}) {
     exportWidth: 0,
     exportHeight: 0,
     activeBackdrop: state.activeBackdrop,
+    zoom: 1,
+    panX: 0,
+    panY: 0,
     elapsedText: "—",
     batchFiles: [],
     ...overrides,
@@ -299,6 +328,9 @@ export function saveStateToActiveTab() {
   tab.exportWidth = state.exportWidth;
   tab.exportHeight = state.exportHeight;
   tab.activeBackdrop = state.activeBackdrop;
+  tab.zoom = state.zoom;
+  tab.panX = state.panX;
+  tab.panY = state.panY;
   tab.elapsedText = dom.statTime.textContent;
 }
 

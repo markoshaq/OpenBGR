@@ -19,7 +19,7 @@ import {
   closeConfirmModal,
   PRESET_NAMES,
 } from "./state.js";
-import { renderStageGeometry } from "./stage.js";
+import { renderStageGeometry, applyZoomTransform } from "./stage.js";
 import {
   syncFormatButtons,
   updateDestUI,
@@ -228,12 +228,17 @@ export function requestCloseTab(tabId) {
   const tab = state.tabs.find((t) => t.id === tabId);
   if (!tab) return;
 
-  if (state.confirmCloseTab && tab.sourceFile) {
+  const hasContent =
+    Boolean(tab.sourceFile) || (tab.kind === "batch" && tab.batchFiles.length);
+  if (state.confirmCloseTab && hasContent) {
     openConfirmModal(
       {
-        title: "CLOSE IMAGE TAB?",
-        message: `Remove "${tab.name}" from the viewer?`,
-        confirmText: "CLOSE IMAGE",
+        title: tab.kind === "batch" ? "CLOSE BATCH TAB?" : "CLOSE IMAGE TAB?",
+        message:
+          tab.kind === "batch"
+            ? `Remove the batch queue with ${tab.batchFiles.length} image${tab.batchFiles.length === 1 ? "" : "s"}?`
+            : `Remove "${tab.name}" from the viewer?`,
+        confirmText: tab.kind === "batch" ? "CLOSE BATCH" : "CLOSE IMAGE",
         cancelText: "CANCEL",
       },
       () => closeTabImmediate(tabId)
@@ -255,6 +260,7 @@ export function closeTabImmediate(tabId) {
       state.abortController.abort();
       state.abortController = null;
     }
+    fetch("/api/cancel", { method: "POST" }).catch(() => {});
     state.isProcessing = false;
     dom.busyOverlay.classList.remove("active");
   }
@@ -267,6 +273,7 @@ export function closeTabImmediate(tabId) {
       state.abortController.abort();
       state.abortController = null;
     }
+    fetch("/api/cancel", { method: "POST" }).catch(() => {});
     state.isProcessing = false;
     dom.busyOverlay.classList.remove("active");
   }
@@ -358,6 +365,10 @@ export async function switchToTab(tabId) {
   state.exportWidth = tab.exportWidth;
   state.exportHeight = tab.exportHeight;
   state.activeBackdrop = tab.activeBackdrop;
+  state.zoom = tab.zoom ?? 1;
+  state.panX = tab.panX ?? 0;
+  state.panY = tab.panY ?? 0;
+  applyZoomTransform();
 
   renderTabBar();
 
@@ -420,11 +431,16 @@ export async function switchToTab(tabId) {
   dom.statTime.textContent = tab.elapsedText || "—";
 
   if (state.resultBlob && state.resultObjectUrl) {
-    await new Promise((resolve) => {
-      masterCutoutImg.onload = resolve;
-      masterCutoutImg.onerror = resolve;
-      masterCutoutImg.src = state.resultObjectUrl;
-    });
+    if (
+      !masterCutoutImg.complete ||
+      masterCutoutImg.currentSrc !== state.resultObjectUrl
+    ) {
+      await new Promise((resolve) => {
+        masterCutoutImg.onload = resolve;
+        masterCutoutImg.onerror = resolve;
+        masterCutoutImg.src = state.resultObjectUrl;
+      });
+    }
     dom.afterImg.src = state.previewObjectUrl || state.resultObjectUrl;
     dom.appShell?.classList.remove("no-image");
     dom.appShell?.classList.remove("no-result");
@@ -475,6 +491,12 @@ export function ingestImageFile(file) {
   state.previewObjectUrl = null;
   state.naturalWidth = 0;
   state.naturalHeight = 0;
+  state.exportWidth = 0;
+  state.exportHeight = 0;
+  state.zoom = 1;
+  state.panX = 0;
+  state.panY = 0;
+  applyZoomTransform();
 
   dom.appShell?.classList.remove("no-image");
   dom.appShell?.classList.add("no-result");
@@ -482,6 +504,8 @@ export function ingestImageFile(file) {
   dom.appShell?.classList.remove("batch-active");
   dom.btnDownload.classList.add("disabled");
   dom.btnCopy.classList.add("disabled");
+  dom.exportWidthInput.value = "";
+  dom.exportHeightInput.value = "";
 
   dom.stageSizerImg.src = state.originalObjectUrl;
   dom.beforeImg.onload = () => {
@@ -506,6 +530,7 @@ export function ingestImageFile(file) {
   dom.statTime.textContent = "READY";
 
   renderTabBar();
+  updateDestUI();
   setViewMode("original");
   syncMenuBarState();
 }
