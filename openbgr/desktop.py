@@ -890,19 +890,25 @@ def wait_for_server(host: str, port: int, timeout_s: float = 15.0) -> bool:
     return False
 
 
-def is_openbgr_server(url: str) -> bool:
+def is_openbgr_server(url: str, timeout_s: float = 10.0) -> bool:
     """
     Verifies that whatever is listening on the port is actually OpenBGR's API —
     guards against opening a foreign service when the port is already in use.
     """
-    try:
-        import urllib.request
+    import urllib.error
+    import urllib.request
 
-        with urllib.request.urlopen(f"{url}/api/status", timeout=2) as res:
-            payload = json.loads(res.read().decode("utf-8"))
-            return isinstance(payload, dict) and "tiers" in payload
-    except Exception:
-        return False
+    deadline = time.perf_counter() + timeout_s
+    while time.perf_counter() < deadline:
+        try:
+            with urllib.request.urlopen(f"{url}/api/status", timeout=3) as res:
+                payload = json.loads(res.read().decode("utf-8"))
+                return isinstance(payload, dict) and "tiers" in payload
+        except urllib.error.HTTPError:
+            return False
+        except Exception:
+            time.sleep(0.15)
+    return False
 
 
 def open_fallback_app_window(url: str) -> None:

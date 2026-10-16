@@ -78,10 +78,9 @@ async def lifespan(_app: FastAPI):
     """
     default_model_key = TIERS[RECOMMENDED_TIER]["model_key"]
     if is_model_cached_locally(MODELS[default_model_key]):
-        threading.Thread(
-            target=lambda: MANAGER.get_or_load(default_model_key),
-            daemon=True,
-        ).start()
+        timer = threading.Timer(0.5, lambda: MANAGER.get_or_load(default_model_key))
+        timer.daemon = True
+        timer.start()
     try:
         yield
     finally:
