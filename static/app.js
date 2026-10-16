@@ -2337,6 +2337,8 @@ function ingestImageFile(file) {
 
   dom.appShell?.classList.remove("no-image");
   dom.appShell?.classList.add("no-result");
+  dom.batchPanel?.classList.remove("active");
+  dom.appShell?.classList.remove("batch-active");
   dom.btnDownload.classList.add("disabled");
   dom.btnCopy.classList.add("disabled");
 
