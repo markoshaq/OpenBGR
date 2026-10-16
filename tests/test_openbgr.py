@@ -37,7 +37,7 @@ class TestOpenBGR(unittest.TestCase):
     def test_version_and_status_contract(self) -> None:
         """`/api/status` exposes version, disk/RAM fields, and all six model tiers."""
         status = openbgr_app.api_status()
-        self.assertEqual(status["version"], "0.10")
+        self.assertEqual(status["version"], openbgr_app.APP_VERSION)
         self.assertIn("total_cache_bytes", status)
         self.assertIn("app_size_bytes", status)
         self.assertIn("total_disk_bytes", status)
