@@ -400,18 +400,40 @@ document.getElementById("colorPicker").addEventListener("input", (e) => {
   saveStateToActiveTab();
 });
 
-// Viewport wheel zoom, pan, split drag, and loupe tracking
+// Viewport wheel zoom, pan, split drag, and loupe tracking.
+// Standard canvas-app convention (Figma/Maps): two-finger scroll pans the
+// zoomed stage, while pinch (ctrlKey wheel) or Cmd/Ctrl+wheel zooms.
 dom.viewport.addEventListener(
   "wheel",
   (e) => {
     if (!state.sourceFile) return;
     e.preventDefault();
-    const delta = e.deltaY < 0 ? 0.2 : -0.2;
-    setZoom(state.zoom + delta);
+    if (e.ctrlKey || e.metaKey) {
+      // Trackpad pinch arrives as wheel events with ctrlKey set.
+      setZoom(state.zoom * Math.exp(-e.deltaY * 0.01));
+    } else {
+      state.panX -= e.deltaX;
+      state.panY -= e.deltaY;
+      applyZoomTransform();
+    }
     renderLoupeAtPointer(e.clientX, e.clientY);
   },
   { passive: false }
 );
+
+// WebKit pinch gestures (WKWebView delivers GestureEvent instead of ctrlKey
+// wheel events) zoom relative to the zoom level at gesture start.
+let gestureStartZoom = 1;
+dom.viewport.addEventListener("gesturestart", (e) => {
+  if (!state.sourceFile) return;
+  e.preventDefault();
+  gestureStartZoom = state.zoom;
+});
+dom.viewport.addEventListener("gesturechange", (e) => {
+  if (!state.sourceFile) return;
+  e.preventDefault();
+  setZoom(gestureStartZoom * e.scale);
+});
 
 dom.stage.addEventListener("dblclick", () => setZoom(1));
 dom.stage.addEventListener("contextmenu", (e) => {

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>OpenBGR — Local Background Remover</title>
+  <title>OpenBGR</title>
   <link rel="icon" href="/favicon.ico" type="image/png" />
   <link rel="stylesheet" href="/static/styles.css" />
   <script>
@@ -313,7 +313,7 @@
         </div>
 
         <div class="sidebar-section">
-          <div class="section-header">EDGE &amp; REFLECTION REFINEMENT</div>
+          <div class="section-header">ADDITIONAL SETTINGS</div>
           <div class="preset-stack">
             <button
               type="button"
@@ -355,7 +355,7 @@
         </div>
 
         <div class="sidebar-section requires-image">
-          <div class="section-header-row">
+          <div class="section-header-row has-tooltip" data-tooltip="Slices off faint semi-transparent floor reflections and ghost shadows.">
             <span class="section-header">SHADOW / REFLECTION CUTOFF</span>
             <span class="scale-pct" id="shadowCutoffLabel">0%</span>
           </div>
@@ -685,13 +685,13 @@
                 <button type="button" class="pref-switch-row" id="btnToggleConfirmClose">
                   <span class="pref-switch-text">
                     <span class="pref-label">CONFIRM BEFORE CLOSING TAB</span>
-                    <span class="pref-desc">Ask for confirmation when pressing × on an open image tab.</span>
+                    <span class="pref-desc">Ask for confirmation when pressing X on an open image tab.</span>
                   </span>
                   <span class="pref-switch" aria-hidden="true"><span class="pref-switch-knob"></span></span>
                 </button>
                 <div class="pref-row">
                   <div class="pref-text">
-                    <span class="pref-label">DEFAULT HARDWARE PRESET</span>
+                    <span class="pref-label">MODEL PRESET</span>
                     <span class="pref-desc">Model tier selected when the app launches.</span>
                   </div>
                   <select class="studio-select pref-select" id="prefDefaultTier">

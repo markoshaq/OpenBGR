@@ -1578,6 +1578,30 @@ def configure_macos_native_window_and_menus(window: Any) -> None:
                         if dark is not None:
                             ns_win.setAppearance_(dark)
 
+                        # Keep trackpad pinch available to JS GestureEvents by
+                        # disabling WKWebView's page-level magnification.
+                        def _find_wkwebview(view: Any) -> Any:
+                            if view is None:
+                                return None
+                            try:
+                                if str(view.className()) == "WKWebView":
+                                    return view
+                                for sub in view.subviews():
+                                    found = _find_wkwebview(sub)
+                                    if found is not None:
+                                        return found
+                            except Exception:
+                                return None
+                            return None
+
+                        wk_view = _find_wkwebview(ns_win.contentView())
+                        if wk_view is not None:
+                            try:
+                                wk_view.setAllowsMagnification_(False)
+                                wk_view.setMagnification_(1.0)
+                            except Exception:
+                                pass
+
                     main_menu = AppKit.NSApplication.sharedApplication().mainMenu()
                     if main_menu is None:
                         return
