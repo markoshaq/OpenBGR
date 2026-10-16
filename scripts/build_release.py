@@ -170,9 +170,9 @@ def build_macos_dmg() -> Path:
         </dict>
     </array>
     <key>CFBundleShortVersionString</key>
-    <string>0.02</string>
+    <string>0.10</string>
     <key>CFBundleVersion</key>
-    <string>0.02</string>
+    <string>0.10</string>
     <key>LSMinimumSystemVersion</key>
     <string>11.0</string>
     <key>LSArchitecturePriority</key>

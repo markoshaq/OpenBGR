@@ -31,7 +31,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 STATIC_DIR.mkdir(exist_ok=True)
 
-APP_VERSION = "0.02"
+APP_VERSION = "0.10"
 
 # Per-user desktop preferences dir; survives app updates and keeps the repo clean.
 APP_CONFIG_DIR = Path.home() / ".openbgr"
