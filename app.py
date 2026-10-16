@@ -30,27 +30,43 @@ Key Architectural Features:
    multi-threaded CPU backends. Uses FP16 (16-bit half-precision) on GPU/MPS
    targets to cut memory bandwidth by 50% and accelerate inference up to 5.5x.
 
-2. Three Distinct BiRefNet Model Architectures:
-   - Low-End (Lite 1K)   : `ZhengPeng7/BiRefNet_lite` (Swin-T @ 1024x1024, ~110 MB FP16)
-                           Designed for CPU-only laptops, integrated GPUs, and fast batching.
-   - Mid-Range (Full 1K) : `ZhengPeng7/BiRefNet` (Swin-L @ 1024x1024, ~440 MB FP16)
-                           Default on Apple Silicon (MPS) and CUDA GPUs for studio hair/fur detail.
-   - High-End (Ultra 2K) : `ZhengPeng7/BiRefNet_HR` (Swin-L @ 2048x2048, ~440 MB weights + 4x tokens)
-                           Trained natively at 2048x2048 (4.19M pixels) for 4K/8K photography.
+2. Six Specialized BiRefNet Checkpoints (see `TIERS` for the full registry):
+   - Lite    : `ZhengPeng7/BiRefNet_lite`       (Swin-T @ 1024x1024)
+               Fast general cutouts for CPU-only laptops and quick batches.
+   - General : `ZhengPeng7/BiRefNet`            (Swin-L @ 1024x1024, default)
+               All-round flagship for products, objects, and everyday photos.
+   - Ultra HR: `ZhengPeng7/BiRefNet_HR`         (Swin-L @ 1536-2048)
+               Native 2K inference for 4K/8K photography and fine edges.
+   - Portrait: `ZhengPeng7/BiRefNet-portrait`   (Swin-L @ 1024x1024)
+               Tuned for people, headshots, flyaway hair, and eyelashes.
+   - Matting : `ZhengPeng7/BiRefNet_HR-matting` (Swin-L @ 1536-2048)
+               Soft alpha mattes for glass, smoke, veils, and sheer fabric.
+   - Dynamic : `ZhengPeng7/BiRefNet_dynamic`    (Swin-L @ up to 2048)
+               Preserves the native aspect ratio (32px-aligned) instead of
+               squashing panoramas or tall banners into a square.
 
 3. Deterministic Memory Lifecycle (`ModelManager`):
    Thread-safe singleton model loader that explicitly evicts inactive backbones
    and flushes hardware allocator caches (`torch.cuda.empty_cache()` /
-   `torch.mps.empty_cache()`) when switching between Lite and Full models.
+   `torch.mps.empty_cache()`) when switching between checkpoints.
 
 4. Cache-First Air-Gapped Loading:
    Probes local Hugging Face cache (`local_files_only=True`) before opening any
-   network sockets, ensuring 100% offline operation after initial weight hydration.
+   network sockets, ensuring 100% offline operation after initial weight
+   hydration. Checkpoints can be installed/uninstalled on demand via
+   `/api/models/install` and `/api/models/uninstall`.
 
-5. Morphological Edge Color Decontamination (Defringe):
-   Eliminates background color halos in semi-transparent boundary pixels
-   (0.03 < alpha < 0.94) via C-accelerated morphological dilation and box-filtered
-   foreground color propagation.
+5. Live Edge Refinement (`/api/refine`):
+   Each segmentation caches its raw RGB + alpha mask under a monotonic job id,
+   so the frontend can re-run the post-processing filters (defringe, color-spill
+   suppression, shadow cutoff) in ~100 ms without neural re-inference.
+
+6. Classical Post-Processing Filters (no extra model):
+   - `decontaminate_edge_colors`: eliminates background color halos in
+     semi-transparent boundary pixels via morphological dilation and
+     box-filtered foreground color propagation.
+   - `suppress_color_spill`: samples the removed background chroma and
+     subtracts ambient light bounce while preserving pixel luminance.
 """
 
 from __future__ import annotations
@@ -127,6 +143,8 @@ def get_host_ram_gb() -> float:
             import ctypes
 
             class _MEMORYSTATUSEX(ctypes.Structure):
+                """Win32 MEMORYSTATUSEX layout for `GlobalMemoryStatusEx` (total RAM field)."""
+
                 _fields_ = [
                     ("dwLength", ctypes.c_ulong),
                     ("dwMemoryLoad", ctypes.c_ulong),
@@ -506,12 +524,13 @@ class ModelManager:
     Manages the lifecycle of BiRefNet segmentation models in device memory.
 
     Ensures only one model backbone is resident in VRAM / Unified RAM at any
-    given time. When switching between `lite` (Swin-T) and `full` (Swin-L),
-    the previous model is explicitly dereferenced and hardware caches are
-    flushed before allocating the new weights.
+    given time. When switching between checkpoints (e.g. `lite` Swin-T vs a
+    Swin-L variant), the previous model is explicitly dereferenced and
+    hardware caches are flushed before allocating the new weights.
     """
 
     def __init__(self) -> None:
+        """Initializes the unloaded state, job lock, and cancellation epoch."""
         self._lock = threading.Lock()
         self.inference_lock = threading.Lock()
         self.cancel_epoch: int = 0
@@ -1097,6 +1116,7 @@ async def api_install_model(target: str = Form(...)) -> dict[str, Any]:
     repo_id = MODELS[norm]
 
     def _download() -> None:
+        """Blocking download + FP16 compaction, run in a worker thread."""
         snapshot_download(repo_id=repo_id)
         compact_model_cache_fp16(repo_id)
 
@@ -1246,6 +1266,7 @@ async def api_refine(
     """
 
     def _render() -> tuple[bytes, int, int]:
+        """Re-composes the cached job's RGBA under a lock; raises LookupError if stale."""
         with _LAST_JOB_LOCK:
             job = dict(_LAST_JOB)
         if job.get("id") != job_id:
@@ -1328,10 +1349,12 @@ class DesktopApi:
     OPEN_DIALOG_MAX_BYTES = 48 * 1024 * 1024
 
     def __init__(self) -> None:
+        """The pywebview window handle is attached after `create_window`."""
         self.window: Any = None
 
     @staticmethod
     def _dialog_mode(webview_mod: Any, kind: str) -> Any:
+        """Resolves the open/save dialog constant across pywebview API versions."""
         file_dialog = getattr(webview_mod, "FileDialog", None)
         if file_dialog is not None and hasattr(file_dialog, kind):
             return getattr(file_dialog, kind)
@@ -1451,6 +1474,7 @@ class DesktopApi:
                 err_holder: list[str] = []
 
                 def _set_win_clip() -> None:
+                    """Sets both PNG stream and bitmap clipboard formats (must run on an STA thread)."""
                     try:
                         ms = SysIO.MemoryStream(raw_bytes)
                         bmp = Drawing.Bitmap(ms)
@@ -1573,6 +1597,7 @@ class DesktopApi:
                 from PyObjCTools import AppHelper  # type: ignore
 
                 def _apply() -> None:
+                    """Applies the NSAppearance on the AppKit main thread."""
                     try:
                         ns_win = getattr(self.window, "native", None)
                         if ns_win is None:
@@ -1670,6 +1695,7 @@ def attach_window_state_persistence(window: Any) -> None:
     debounce_timer: list[Optional[threading.Timer]] = [None]
 
     def _persist() -> None:
+        """Writes the current window frame to disk, ignoring IO failures."""
         try:
             APP_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
             WINDOW_STATE_PATH.write_text(
@@ -1687,6 +1713,7 @@ def attach_window_state_persistence(window: Any) -> None:
             pass
 
     def _schedule() -> None:
+        """Debounces move/resize events so rapid drags collapse into one write."""
         if debounce_timer[0] is not None:
             debounce_timer[0].cancel()
         debounce_timer[0] = threading.Timer(0.4, _persist)
@@ -1707,6 +1734,7 @@ def ensure_window_on_screen(window: Any) -> None:
     the position was saved).
     """
     def _clamp() -> None:
+        """Re-centers the window on the primary screen when fully off-screen."""
         try:
             import webview
 
@@ -1781,7 +1809,9 @@ def build_native_menus(window: Any) -> list[Any]:
     from webview.menu import Menu, MenuAction, MenuSeparator
 
     def call(fn: str):
+        """Wraps a `window.openBGR.*` JS invocation in a native-menu-safe closure."""
         def _run() -> None:
+            """Menu-action thunk: evaluates the JS handler, ignoring bridge failures."""
             try:
                 window.evaluate_js(f"window.openBGR && window.openBGR.{fn}")
             except Exception:
@@ -1790,12 +1820,14 @@ def build_native_menus(window: Any) -> list[Any]:
         return _run
 
     def toggle_fs() -> None:
+        """Toggles the native window between windowed and full-screen mode."""
         try:
             window.toggle_fullscreen()
         except Exception:
             pass
 
     def quit_app() -> None:
+        """Cancels any in-flight job before tearing the window down."""
         MANAGER.request_cancel()
         try:
             window.destroy()
@@ -1907,12 +1939,14 @@ def configure_macos_native_window_and_menus(window: Any) -> None:
         return
 
     def _enhance() -> None:
+        """Deferred post-show enhancement; imports Cocoa lazily and fails soft."""
         try:
             import AppKit  # type: ignore
             from PyObjCTools import AppHelper  # type: ignore
             import webview.platforms.cocoa as cocoa_mod  # type: ignore
 
             def _on_main() -> None:
+                """Applies dark appearance, gesture config, and menu shortcuts on the main run loop."""
                 try:
                     ns_win = getattr(window, "native", None)
                     if ns_win is not None:
@@ -1925,6 +1959,7 @@ def configure_macos_native_window_and_menus(window: Any) -> None:
                         # Keep trackpad pinch available to JS GestureEvents by
                         # disabling WKWebView's page-level magnification.
                         def _find_wkwebview(view: Any) -> Any:
+                            """Depth-first search for the WKWebView inside the window's view tree."""
                             if view is None:
                                 return None
                             try:
@@ -2106,6 +2141,7 @@ if __name__ == "__main__":
                 lethal.add(signal.SIGHUP)
 
             def _watch() -> None:
+                """Blocks on the wakeup pipe and force-exits on a lethal signal."""
                 try:
                     while True:
                         select.select([r_fd], [], [])

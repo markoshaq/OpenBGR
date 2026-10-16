@@ -5,6 +5,7 @@
 
 import { state, dom } from "./state.js";
 
+/** Applies `max-width`/`max-height` constraints so the stage image fits the viewport. */
 export function renderStageGeometry() {
   if (state.viewMode === "split") {
     dom.beforeClip.style.display = "block";
@@ -27,6 +28,7 @@ export function renderStageGeometry() {
   }
 }
 
+/** Writes `state.zoom`/`state.pan` onto the stage transform and updates the zoom readout. */
 export function applyZoomTransform() {
   if (!dom.stage) return;
   if (state.zoom <= 1) {
@@ -40,11 +42,13 @@ export function applyZoomTransform() {
   }
 }
 
+/** Clamps and applies a new zoom level, keeping the stage centered. */
 export function setZoom(newZoom) {
   state.zoom = Math.max(1, Math.min(8, newZoom));
   applyZoomTransform();
 }
 
+/** Draws the 4x circular magnifier at the pointer, sampling the correct stage layer. */
 export function renderLoupeAtPointer(clientX, clientY) {
   if (!state.loupeEnabled || !state.sourceFile || !dom.loupeCanvas) {
     dom.loupeCanvas?.classList.remove("visible");
@@ -116,6 +120,7 @@ export function renderLoupeAtPointer(clientX, clientY) {
   }
 }
 
+/** Repositions the split-view divider and clip path from a pointer x-coordinate. */
 export function handleSplitDrag(clientX) {
   if (state.loupeEnabled || !state.isDraggingSplit || state.viewMode !== "split") return;
   const rect = dom.stage.getBoundingClientRect();

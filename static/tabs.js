@@ -39,6 +39,7 @@ import {
 
 let tabGhostEl = null;
 
+/** Displays the drag-reorder ghost label while a tab is being dragged. */
 export function showTabGhost(name) {
   if (!dom.tabBar) return;
   if (!tabGhostEl) {
@@ -53,11 +54,13 @@ export function showTabGhost(name) {
   dom.tabBar.insertBefore(tabGhostEl, addBtn);
 }
 
+/** Hides the tab drag ghost. */
 export function hideTabGhost() {
   tabGhostEl?.remove();
   tabGhostEl = null;
 }
 
+/** Re-renders the tab strip, wiring click/close/context/drag handlers per tab. */
 export function renderTabBar() {
   if (!dom.tabBar) return;
   dom.tabBar.innerHTML = "";
@@ -211,6 +214,7 @@ export function renderTabBar() {
   dom.tabBar.appendChild(addBtn);
 }
 
+/** Creates and switches to an empty tab. */
 export function createBlankTab() {
   saveStateToActiveTab();
 
@@ -226,6 +230,7 @@ export function createBlankTab() {
   switchToTab(blankTab.id);
 }
 
+/** Closes a tab, prompting first when it holds an image or a non-empty batch. */
 export function requestCloseTab(tabId) {
   const tab = state.tabs.find((t) => t.id === tabId);
   if (!tab) return;
@@ -250,6 +255,7 @@ export function requestCloseTab(tabId) {
   }
 }
 
+/** Destroys a tab record, revoking its URLs and updating neighbors. */
 export function closeTabImmediate(tabId) {
   const idx = state.tabs.findIndex((t) => t.id === tabId);
   if (idx === -1) return;
@@ -301,6 +307,7 @@ export function closeTabImmediate(tabId) {
   }
 }
 
+/** Tears all tabs down and returns to the splash/dropzone state. */
 export function resetToEmptyWorkspace() {
   setError(null);
   state.sourceFile = null;
@@ -338,6 +345,7 @@ export function resetToEmptyWorkspace() {
   syncMenuBarState();
 }
 
+/** Switches the workspace to a tab, restoring its image, result, zoom, and mode. */
 export async function switchToTab(tabId) {
   if (state.activeTabId && state.activeTabId !== tabId) {
     saveStateToActiveTab();
@@ -461,6 +469,7 @@ export async function switchToTab(tabId) {
   syncMenuBarState();
 }
 
+/** Loads a File/Blob into the current (or a new) tab and shows the loaded state. */
 export function ingestImageFile(file) {
   saveStateToActiveTab();
 
@@ -538,6 +547,7 @@ export function ingestImageFile(file) {
   syncMenuBarState();
 }
 
+/** Sets the active model key and syncs cards, menus, and the Settings default. */
 export function selectTier(tierKey) {
   const norm = normalizeTierKey(tierKey);
   state.tier = norm;
@@ -549,6 +559,7 @@ export function selectTier(tierKey) {
   syncMenuBarState();
 }
 
+/** Switches the stage between split / cutout / original modes. */
 export function setViewMode(mode) {
   state.viewMode = mode;
   document.getElementById("viewSplit").classList.toggle("active", mode === "split");
@@ -559,6 +570,7 @@ export function setViewMode(mode) {
   syncMenuBarState();
 }
 
+/** Toggles (or forces) the 4x magnifier loupe. */
 export function toggleLoupe(forceState) {
   state.loupeEnabled =
     typeof forceState === "boolean" ? forceState : !state.loupeEnabled;
@@ -570,6 +582,7 @@ export function toggleLoupe(forceState) {
   syncMenuBarState();
 }
 
+/** Enables/disables the in-app menu bar items for the current workspace state. */
 export function syncMenuBarState() {
   if (!dom.menuBar) return;
   const hasTab = Boolean(state.activeTabId);
@@ -618,6 +631,7 @@ export function syncMenuBarState() {
   if (activeTabNow?.kind === "batch") renderBatchPanel(activeTabNow);
 }
 
+/** Aborts the in-flight segmentation fetch and tells the server to drop the job. */
 export function cancelProcessing() {
   if (state.batch.running) {
     state.batch.cancelled = true;
@@ -639,6 +653,7 @@ export function cancelProcessing() {
   syncMenuBarState();
 }
 
+/** POSTs the active image to `/api/remove-bg` and applies the returned cutout + job id. */
 export async function runSegmentation() {
   if (!state.sourceFile) return;
 

@@ -32,7 +32,10 @@ STATIC_DIR = ROOT_DIR / "static"
 
 
 class TestOpenBGR(unittest.TestCase):
+    """End-to-end contract tests for the OpenBGR server, pipeline, and frontend modules."""
+
     def test_version_and_status_contract(self) -> None:
+        """`/api/status` exposes version, disk/RAM fields, and all six model tiers."""
         status = openbgr_app.api_status()
         self.assertEqual(status["version"], "0.02")
         self.assertIn("total_cache_bytes", status)
@@ -65,6 +68,7 @@ class TestOpenBGR(unittest.TestCase):
         self.assertGreater(dyn_w, dyn_h)
 
     def test_icon_squircle_geometry(self) -> None:
+        """The rendered icon is RGBA with a transparent corner and opaque squircle center."""
         img = icon_render.render_icon(256)
         self.assertEqual(img.mode, "RGBA")
         self.assertEqual(img.size, (256, 256))
@@ -73,6 +77,7 @@ class TestOpenBGR(unittest.TestCase):
         self.assertEqual(img.getpixel((128, 128))[3], 255)
 
     def test_edge_refinement_pipeline(self) -> None:
+        """Defringe, despill, and `compose_rgba` produce well-formed 32-bit RGBA output."""
         rgb = Image.fromarray(np.full((32, 32, 3), (40, 200, 60), dtype=np.uint8), mode="RGB")
         alpha = np.zeros((32, 32), dtype=np.uint8)
         alpha[8:24, 8:24] = 255
@@ -102,6 +107,7 @@ class TestOpenBGR(unittest.TestCase):
         composed.close()
 
     def test_api_refine_endpoint(self) -> None:
+        """`/api/refine` re-composes a cached job and rejects stale job ids with HTTP 409."""
         rgb = np.full((24, 24, 3), (30, 180, 90), dtype=np.uint8)
         alpha = np.zeros((24, 24), dtype=np.uint8)
         alpha[6:18, 6:18] = 255
@@ -129,6 +135,7 @@ class TestOpenBGR(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 409)
 
     def test_api_save_sanitizes_and_renames_collisions(self) -> None:
+        """`/api/save` strips path traversal and de-duplicates colliding filenames."""
         with tempfile.TemporaryDirectory() as tmp:
             up1 = UploadFile(filename="cutout.png", file=io.BytesIO(b"png-bytes-1"))
             res1 = asyncio.run(
@@ -148,6 +155,7 @@ class TestOpenBGR(unittest.TestCase):
             self.assertEqual((Path(tmp) / "cutout-1.png").read_bytes(), b"png-bytes-2")
 
     def test_api_uninstall_validation(self) -> None:
+        """Install/uninstall endpoints reject unknown model targets with HTTP 400."""
         with self.assertRaises(HTTPException) as ctx:
             openbgr_app.api_uninstall_model(target="invalid-tier")
         self.assertEqual(ctx.exception.status_code, 400)
@@ -156,6 +164,7 @@ class TestOpenBGR(unittest.TestCase):
         self.assertEqual(ctx2.exception.status_code, 400)
 
     def test_fp16_cache_compaction(self) -> None:
+        """`compact_model_cache_fp16` rewrites FP32 safetensors to FP16 and is idempotent."""
         from safetensors import safe_open
         from safetensors.torch import save_file
 
@@ -180,6 +189,7 @@ class TestOpenBGR(unittest.TestCase):
                 self.assertEqual(f.get_tensor("weight").dtype, torch.float16)
 
     def test_frontend_modules_and_dom_ids(self) -> None:
+        """Every `getElementById` in the ES modules resolves to a real `id` in index.html."""
         expected_modules = [
             "state.js",
             "stage.js",
@@ -204,6 +214,7 @@ class TestOpenBGR(unittest.TestCase):
                 )
 
     def test_release_archives_contain_all_modules(self) -> None:
+        """Windows/Linux release archives ship every frontend module and launcher."""
         win_zip = build_release.build_windows_release()
         linux_tar = build_release.build_linux_release()
 

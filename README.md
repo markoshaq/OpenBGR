@@ -24,16 +24,19 @@ Or download the repository ZIP and double-click **`Start Mac.command`** (macOS) 
 
 ## Features
 
-- **100% Offline After Setup** — Model weights are downloaded once from Hugging Face and loaded strictly from local cache (`local_files_only=True`) on future runs.
-- **Multi-Tab Workspace** — Open several images as tabs, work on them independently, and drag one tab onto another to merge them into a batch — like folders.
+- **100% Offline After Setup** — Model weights are downloaded once from Hugging Face and loaded strictly from local cache (`local_files_only=True`) on future runs. No uploads, no telemetry, no accounts, no subscriptions.
+- **Welcome Splash** — The empty workspace doubles as a splash screen showing the app version, detected compute engine, privacy guarantees, and platform-adapted shortcuts (`⌘` on macOS, `CTRL` on Windows/Linux).
+- **Multi-Tab Workspace** — Open several images as tabs, work on them independently, and drag one tab onto another to merge them into a batch — like folders. Zoom and pan are remembered per tab.
 - **Batch Processing** — Batch tabs queue any number of images under one shared settings snapshot, with per-file status, drag-out extraction, direct folder export (or a single ZIP in browser mode), and per-file failure recovery.
 - **Six Specialized BiRefNet Models** — Switch between `Lite` (fast CPU/iGPU), `General` (default all-round Swin-L), `Ultra HR` (2K detail), `Portrait` (people & flyaway hair), `Matting` (2K soft alpha for glass, smoke & sheer fabric), and `Dynamic` (preserves native aspect ratio up to 2K without square distortion).
+- **Live Edge Filters** — Defringe and color-spill suppression are classical post-processing passes, not extra inference. Toggling either re-composes the cached result via `POST /api/refine` in ~100 ms instead of re-running the network; stale jobs are rejected with HTTP 409.
 - **Edge & Reflection Refinement** — Edge defringing removes background color bleed along hair and soft borders, color-spill suppression cleans rim reflections, and a shadow/reflection alpha cutoff floors out floor shadows at export.
 - **Live Export Preview** — Export as `PNG`, `WEBP`, `JPG`, or an 8-bit `Alpha Mask` at any scale (`10%–200%`) or custom pixel dimensions (`W × H`), rendered live on `<canvas>` without re-running inference.
 - **Export Destinations** — Set a per-tab output folder for one-click exports, or leave it unset for a native Save-As dialog (browser downloads in fallback mode).
-- **Zoom, Pan & 4× Loupe** — Pinch-to-zoom (`100%–800%`) with two-finger trackpad panning, plus a toggleable 4× circular magnifier loupe (`Z` key) for inspecting hair strands and edges — works before and after processing.
-- **Native Desktop Window** — Opens in a standalone native OS window via `pywebview` (with native menus, clipboard, Save dialogs, and automatic browser fallback).
-- **Model Storage Management** — Right-click any model button (or open `⌘,` → MODELS) to see exact on-disk size per checkpoint and uninstall weights you don't need; uninstalled models re-download on next use.
+- **Zoom, Pan & 4× Loupe** — Pinch-to-zoom and two-finger trackpad panning (`100%–800%`), plus a toggleable 4× circular magnifier loupe (`Z` key) for inspecting hair strands and edges — works before and after processing.
+- **Native Desktop Window** — Opens in a standalone native OS window via `pywebview` (with native menus, clipboard, Save dialogs, per-monitor window-state restore, and automatic browser fallback).
+- **Model Storage Management** — Right-click any model card (or open `⌘,` → MODELS) for `Install (size)` / `Uninstall (size)` per checkpoint, open the Hugging Face cache folder in the system file manager, and see total disk usage split between app files and model weights. Uninstalled models re-download on next use.
+- **System Info** — The Settings → SYSTEM pane reports the detected compute engine (`CUDA` / `MPS` / `CPU`), inference precision (`FP16`/`FP32`), total RAM, and app version.
 - **Hardware Acceleration** — Runs in `FP16` half-precision on CUDA and Apple MPS (cutting memory usage in half and speeding up inference ~5×), and automatically evicts inactive models from memory when switching models.
 
 ## Models
@@ -62,6 +65,16 @@ curl -X POST "http://127.0.0.1:7860/api/remove-bg" \
   -F "defringe=true" \
   -o photo-cutout.png
 ```
+
+Other endpoints: `GET /api/status` (version, device, RAM, per-model cache state), `POST /api/refine` (re-apply edge filters to the cached job without re-inference), `POST /api/models/install` / `/api/models/uninstall` (checkpoint management), `POST /api/save` (write to a chosen folder), `POST /api/open-cache-dir` (reveal the HF cache in the OS file manager), and `POST /api/cancel` (abort the active job).
+
+## Tests
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+The suite covers the status contract, refine endpoint, save sanitization, FP16 compaction, the edge-refinement pipeline, frontend DOM/module integrity, icon geometry, and release-archive contents. CI runs the same suite on CPU-only PyTorch for every push and pull request (`.github/workflows/release.yml`).
 
 ## Project Layout
 

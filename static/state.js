@@ -25,6 +25,7 @@ const TIER_ALIASES = {
   high: "hr",
 };
 
+/** Resolves legacy tier keys (`low`/`mid`/`high`) and display labels to a canonical model key. */
 export function normalizeTierKey(key) {
   const cleaned = String(key || "").trim().toLowerCase();
   return TIER_ALIASES[cleaned] || cleaned;
@@ -58,6 +59,7 @@ export const ACCENTS = {
 const STORAGE_KEY_CONFIRM_CLOSE = "openbgr_confirm_close_tab";
 const STORAGE_KEY_PREFS = "openbgr_prefs";
 
+/** Returns the factory-default preference snapshot (theme, model, filters, export). */
 export function getDefaultPrefs() {
   return {
     theme: "dark",
@@ -84,6 +86,7 @@ const PREF_SCHEMA = {
   confirmClose: { type: "boolean", fallback: true },
 };
 
+/** Validates a stored preference object against the schema; unknown/invalid values fall back to defaults. */
 function sanitizePrefs(stored) {
   const clean = {};
   for (const [key, rule] of Object.entries(PREF_SCHEMA)) {
@@ -100,6 +103,7 @@ function sanitizePrefs(stored) {
   return clean;
 }
 
+/** Reads preferences from `localStorage`, sanitizes them, and merges over defaults. */
 function loadPrefs() {
   let stored = {};
   try {
@@ -115,6 +119,7 @@ function loadPrefs() {
 
 export const prefs = loadPrefs();
 
+/** Persists the current preference object to `localStorage` as JSON. */
 export function savePrefs() {
   try {
     localStorage.setItem(STORAGE_KEY_PREFS, JSON.stringify(prefs));
@@ -263,16 +268,19 @@ export const dom = {
   statTime: document.getElementById("statTime"),
 };
 
+/** Returns the currently active tab record, or `null` in the empty workspace. */
 export function getActiveTab() {
   return state.tabs.find((t) => t.id === state.activeTabId) || null;
 }
 
+/** Resolves which model key a newly created tab should inherit. */
 export function defaultTierForNewTab() {
   return prefs.defaultTier !== "auto"
     ? prefs.defaultTier
     : state.serverStatus?.recommended_tier || state.tier;
 }
 
+/** Allocates a fresh tab record (image, result, zoom, batch state) with optional overrides. */
 export function createTabRecord(overrides = {}) {
   return {
     id: `tab-${nextTabSeq++}`,
@@ -308,10 +316,12 @@ export function createTabRecord(overrides = {}) {
   };
 }
 
+/** Generates sequential `Pasted Image N` names for clipboard-ingested images. */
 export function nextClipboardName() {
   return `CLIPBOARD_${nextTabSeq}.PNG`;
 }
 
+/** Revokes all `blob:` object URLs owned by a tab before it is discarded. */
 export function revokeTabUrls(tab) {
   if (!tab) return;
   if (tab.originalObjectUrl) URL.revokeObjectURL(tab.originalObjectUrl);
@@ -321,6 +331,7 @@ export function revokeTabUrls(tab) {
   }
 }
 
+/** Snapshots the live global state (model, view, filters, result) back into the active tab record. */
 export function saveStateToActiveTab() {
   const tab = getActiveTab();
   if (!tab) return;
@@ -349,6 +360,7 @@ export function saveStateToActiveTab() {
   tab.elapsedText = dom.statTime.textContent;
 }
 
+/** Shows (or clears, with empty message) the transient error toast. */
 export function setError(message) {
   if (!message) {
     dom.errorToast.classList.remove("visible");
@@ -359,6 +371,7 @@ export function setError(message) {
   dom.errorToast.classList.add("visible");
 }
 
+/** Opens the destructive-action confirm modal and stashes its confirm callback. */
 export function openConfirmModal(opts, onConfirm) {
   const cfg = typeof opts === "string" ? { message: opts } : opts;
   if (dom.modalTitle) {
@@ -377,17 +390,20 @@ export function openConfirmModal(opts, onConfirm) {
   dom.confirmModal.classList.add("active");
 }
 
+/** Dismisses the confirm modal and drops the pending callback. */
 export function closeConfirmModal() {
   state.pendingConfirmFn = null;
   state.pendingAltFn = null;
   dom.confirmModal.classList.remove("active");
 }
 
+/** Programmatically clicks the hidden file input (or the native dialog via `openBGR.openImage`). */
 export function triggerOpenFileDialog() {
   dom.fileInput.value = "";
   dom.fileInput.click();
 }
 
+/** Decodes a base64 data payload into a typed `Blob`. */
 export function base64ToBlob(b64) {
   const bin = atob(b64);
   const bytes = new Uint8Array(bin.length);
@@ -397,6 +413,7 @@ export function base64ToBlob(b64) {
   return new Blob([bytes]);
 }
 
+/** Encodes a `Blob` as a raw base64 string (no `data:` prefix). */
 export function blobToBase64(blob) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -409,6 +426,7 @@ export function blobToBase64(blob) {
   });
 }
 
+/** Normalizes a native-dialog result into an array of `{name, blob}` entries. */
 export function filesFromDialogResult(res) {
   if (Array.isArray(res?.files) && res.files.length > 0) {
     return res.files.map(
@@ -421,6 +439,7 @@ export function filesFromDialogResult(res) {
   return [];
 }
 
+/** Browser-mode fallback: triggers an anchor download for a blob. */
 export function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -432,6 +451,7 @@ export function downloadBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 
+/** Opens an external URL via the native bridge when present, else `window.open`. */
 export function openExternalUrl(url) {
   if (window.pywebview?.api?.open_external) {
     window.pywebview.api.open_external(url);

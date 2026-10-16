@@ -104,6 +104,7 @@ export async function renderExportBlob(source, srcW, srcH, opts) {
   return canvasToBlob(canvas, mimeType, quality);
 }
 
+/** Promisified `canvas.toBlob` with MIME/quality support. */
 function canvasToBlob(canvas, mimeType, quality) {
   return new Promise((resolve, reject) => {
     canvas.toBlob(
@@ -119,6 +120,7 @@ function canvasToBlob(canvas, mimeType, quality) {
   });
 }
 
+/** Builds the final export blob for the active image using live export settings. */
 export async function buildExportBlob(format) {
   const srcW = state.naturalWidth || masterCutoutImg.naturalWidth;
   const srcH = state.naturalHeight || masterCutoutImg.naturalHeight;
@@ -145,6 +147,7 @@ export async function buildExportBlob(format) {
   });
 }
 
+/** Builds the export blob for one batch item using the batch's settings snapshot. */
 export async function buildBatchExportBlob(blob, snap) {
   const bmp = await createImageBitmap(blob);
   try {
@@ -185,6 +188,7 @@ export async function buildBatchExportBlob(blob, snap) {
   }
 }
 
+/** Re-renders the processed preview on canvas after backdrop/scale changes. */
 export async function updateLiveStagePreview() {
   if (
     !state.resultBlob ||
@@ -216,6 +220,7 @@ export async function updateLiveStagePreview() {
   } catch (_) {}
 }
 
+/** Marks the active export-format segment button. */
 export function syncFormatButtons() {
   document.querySelectorAll("#formatRow .fmt-btn").forEach((b) => {
     b.classList.toggle(
@@ -225,6 +230,7 @@ export function syncFormatButtons() {
   });
 }
 
+/** Refreshes the export-destination label and folder button state. */
 export function updateDestUI() {
   const hasNativePicker = Boolean(window.pywebview?.api?.choose_output_dir);
   if (dom.btnFileDest) {
@@ -248,6 +254,7 @@ export function updateDestUI() {
   }
 }
 
+/** Prompts for a per-tab export directory via the native bridge. */
 export async function chooseOutputFolder(onBatchUpdate) {
   if (!window.pywebview?.api?.choose_output_dir) return;
   try {
@@ -266,6 +273,7 @@ export async function chooseOutputFolder(onBatchUpdate) {
   } catch (_) {}
 }
 
+/** Updates the dims/size/format readouts in the export panel. */
 export function updateExportTelemetry() {
   const activeTab = getActiveTab();
   const fmtUpper = state.exportFormat.toUpperCase();
@@ -316,6 +324,7 @@ export function updateExportTelemetry() {
   }
 }
 
+/** Applies an export backdrop choice (transparent/white/black/custom). */
 export function applyBackdrop(value) {
   state.activeBackdrop = value;
   document.querySelectorAll("#matteSwatches .swatch").forEach((s) => {
@@ -331,6 +340,7 @@ export function applyBackdrop(value) {
   updateLiveStagePreview();
 }
 
+/** Applies a preset export scale and re-renders the live preview. */
 export function applyScaleValue(newScale) {
   state.exportScale = newScale;
   if (state.naturalWidth > 0 && state.naturalHeight > 0) {
@@ -346,6 +356,7 @@ export function applyScaleValue(newScale) {
   updateExportTelemetry();
 }
 
+/** Writes one exported batch file to the batch's output directory (or downloads it). */
 export async function saveBatchFile(dir, filename, blob) {
   try {
     const fd = new FormData();
@@ -359,6 +370,7 @@ export async function saveBatchFile(dir, filename, blob) {
   }
 }
 
+/** Exports the active cutout to its output folder or a Save-As dialog. */
 export async function exportActiveImage() {
   if (!state.resultBlob) return;
   try {
@@ -403,6 +415,7 @@ export async function exportActiveImage() {
   }
 }
 
+/** Copies the processed cutout PNG to the system clipboard. */
 export async function copyActiveCutout() {
   if (!state.resultBlob) return;
   const markCopied = () => {
@@ -445,6 +458,7 @@ const ZIP_CRC_TABLE = (() => {
   return t;
 })();
 
+/** Computes a CRC-32 checksum for ZIP central-directory entries. */
 function crc32(u8) {
   let c = 0xffffffff;
   for (let i = 0; i < u8.length; i++) {

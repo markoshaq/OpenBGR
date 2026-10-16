@@ -35,6 +35,7 @@ import {
   syncMenuBarState,
 } from "./tabs.js";
 
+/** Opens the hidden multi-file input (or native dialog) routing results to a callback. */
 export function openMultiFileChooser(files, noun) {
   const list = Array.from(files || []).filter(Boolean);
   if (!list.length) return;
@@ -58,6 +59,7 @@ export function openMultiFileChooser(files, noun) {
   );
 }
 
+/** Unified file picker: native dialog in desktop mode, `<input>` in browser mode. */
 export async function pickImageFiles(cb) {
   if (window.pywebview?.api?.open_image_dialog) {
     try {
@@ -75,6 +77,7 @@ export async function pickImageFiles(cb) {
   triggerOpenFileDialog();
 }
 
+/** Creates a batch tab from a file list and switches to it. */
 export function createBatchTab(files) {
   const list = Array.from(files || []).filter(Boolean);
   if (!list.length) return;
@@ -96,6 +99,7 @@ export function createBatchTab(files) {
   return tab;
 }
 
+/** Appends files to an existing batch tab's queue and re-renders its panel. */
 export function addFilesToBatchTab(tab, files) {
   Array.from(files || [])
     .filter(Boolean)
@@ -111,6 +115,7 @@ export function addFilesToBatchTab(tab, files) {
   renderTabBar();
 }
 
+/** Formats a byte count for batch row file-size labels. */
 function formatBytes(n) {
   if (!n) return "—";
   if (n < 1024) return `${n} B`;
@@ -118,6 +123,7 @@ function formatBytes(n) {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/** Re-renders the batch queue list, counters, and Run button state. */
 export function renderBatchPanel(tab) {
   if (!dom.batchPanel || tab.kind !== "batch") return;
   dom.batchPanel.classList.add("active");
@@ -208,6 +214,7 @@ export function renderBatchPanel(tab) {
   }
 }
 
+/** Sets one row's status chip and optional detail message. */
 function updateBatchRowStatus(tab, i) {
   if (tab.id !== state.activeTabId || !dom.batchList) return;
   const row = dom.batchList.querySelector(`.batch-row[data-idx="${i}"]`);
@@ -222,6 +229,7 @@ function updateBatchRowStatus(tab, i) {
   }
 }
 
+/** Converts a single-image tab into a batch tab seeded with its image. */
 export function convertTabToBatch(tab) {
   const entries = [];
   if (tab.kind === "batch") {
@@ -248,6 +256,7 @@ export function convertTabToBatch(tab) {
   tab.batchFiles = entries;
 }
 
+/** Drags one tab's contents into another, creating/extending a batch tab. */
 export function mergeTabsIntoBatch(srcId, dstId) {
   if (srcId === dstId || state.batch.running) return;
   const src = state.tabs.find((t) => t.id === srcId);
@@ -283,6 +292,7 @@ export function mergeTabsIntoBatch(srcId, dstId) {
   switchToTab(dst.id);
 }
 
+/** Pulls one queue entry out of a batch into its own image tab. */
 export function extractBatchItemToTab(tab, index) {
   const entry = tab.batchFiles[index];
   if (!entry || state.batch.running) return;
@@ -296,6 +306,7 @@ export function extractBatchItemToTab(tab, index) {
   }
 }
 
+/** Moves a batch queue entry into a different batch tab. */
 export function moveBatchItemToBatch(item, targetTab) {
   const src = state.tabs.find((t) => t.id === item.tabId);
   if (
@@ -320,6 +331,7 @@ export function moveBatchItemToBatch(item, targetTab) {
   renderTabBar();
 }
 
+/** Shows the right-click menu on a tab (batch ops, close). */
 export function showTabContextMenu(tab, x, y, onRequestCloseTab) {
   const menu = dom.tabContextMenu;
   if (!menu) return;
@@ -391,10 +403,12 @@ export function showTabContextMenu(tab, x, y, onRequestCloseTab) {
   menu.style.top = `${Math.min(y, window.innerHeight - rect.height - 8)}px`;
 }
 
+/** Dismisses the tab context menu. */
 export function hideTabContextMenu() {
   if (dom.tabContextMenu) dom.tabContextMenu.style.display = "none";
 }
 
+/** Runs the segmentation pipeline sequentially over a batch tab's queue. */
 export async function runBatch(tab) {
   const batch = state.batch;
   if (!tab || tab.kind !== "batch" || batch.running || !tab.batchFiles.length) {
@@ -585,11 +599,13 @@ export async function runBatch(tab) {
   );
 }
 
+/** Entry point for the Batch shortcut: pick files, then create a batch tab. */
 export function requestBatch() {
   if (state.batch.running) return;
   pickImageFiles(requestBatchDispatch);
 }
 
+/** Handles files routed into batch mode from the shared file input. */
 export function requestBatchDispatch(files) {
   const active = getActiveTab();
   if (active?.kind === "batch") {

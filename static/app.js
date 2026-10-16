@@ -497,6 +497,7 @@ window.addEventListener("touchend", () => {
 });
 
 // File dialogs, drag-and-drop, and clipboard paste
+/** Opens the image picker via native bridge or the hidden file input. */
 async function openImageDialog() {
   if (window.pywebview?.api?.open_image_dialog) {
     try {
@@ -517,6 +518,7 @@ async function openImageDialog() {
   triggerOpenFileDialog();
 }
 
+/** Entry point for the Open action; routes to batch or single-image ingestion. */
 function requestOpenImage() {
   if (state.isProcessing) {
     openConfirmModal(
@@ -613,6 +615,7 @@ window.addEventListener("drop", (e) => {
   files.forEach((f) => ingestImageFile(f));
 });
 
+/** Ingests a file, prompting when it would replace an existing unprocessed image. */
 function ingestWithConfirm(fileOrBlob) {
   if (state.isProcessing) {
     openConfirmModal(
@@ -627,6 +630,7 @@ function ingestWithConfirm(fileOrBlob) {
   }
 }
 
+/** Reads a clipboard image through the native bridge (desktop mode). */
 async function readNativeClipboardImage() {
   if (!window.pywebview?.api?.read_clipboard_image) return null;
   try {
@@ -655,6 +659,7 @@ window.addEventListener("paste", async (e) => {
   if (nativeFile) ingestWithConfirm(nativeFile);
 });
 
+/** Paste handler: prefers native clipboard, falls back to `ClipboardEvent` items. */
 async function pasteImageFromClipboard() {
   const nativeFile = await readNativeClipboardImage();
   if (nativeFile) {
@@ -686,6 +691,7 @@ document.querySelectorAll('a[target="_blank"]').forEach((link) => {
 });
 
 // Menu bar & keyboard shortcut command bridge (also invoked by pywebview native menus)
+/** Closes every open in-app menu dropdown. */
 function closeAllMenus() {
   dom.menuBar?.querySelectorAll(".menu-root.open").forEach((m) => {
     m.classList.remove("open");

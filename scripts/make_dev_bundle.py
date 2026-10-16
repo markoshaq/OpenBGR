@@ -19,6 +19,7 @@ from pathlib import Path
 
 
 def main() -> int:
+    """Builds (idempotently) the `.venv/OpenBGR.app` dev bundle. Returns 0 on success or no-op."""
     root = Path(__file__).resolve().parent.parent
     venv = root / ".venv"
     dev_app = venv / "OpenBGR.app"

@@ -45,6 +45,7 @@ const MODEL_EXPECTED_BYTES = {
 
 let installingModelKey = null;
 
+/** Formats a byte count as `KB`/`MB`/`GB` (compact mode drops the unit suffix padding). */
 export function formatDiskBytes(bytes, compact = false) {
   const n = Number(bytes) || 0;
   const sp = compact ? "" : " ";
@@ -56,16 +57,19 @@ export function formatDiskBytes(bytes, compact = false) {
   return `${Math.max(1, Math.round(n / 1024))}${sp}KB`;
 }
 
+/** Looks up the TIER registry entry for a model key. */
 function getTierInfo(key) {
   const norm = normalizeTierKey(key);
   return state.serverStatus?.tiers?.[norm] || null;
 }
 
+/** Resolves a model's install state to `{cached, repoId, sizeBytes}` from server status. */
 function getTierAvailability(tierInfo) {
   if (tierInfo?.cached) return "ready";
   return navigator.onLine ? "downloadable" : "unavailable";
 }
 
+/** Paints a cache-indicator dot green (cached) or amber (on-demand) and sets its tooltip. */
 function applyDotState(dotEl, status, allowTooltip = true) {
   if (!dotEl) return;
   dotEl.classList.remove("ready", "downloadable", "unavailable");
@@ -84,6 +88,7 @@ function applyDotState(dotEl, status, allowTooltip = true) {
   }
 }
 
+/** Refreshes every model card dot plus the Settings model inventory rows from server status. */
 export function updateCacheIndicator() {
   const tiers = state.serverStatus?.tiers;
   if (!tiers) return;
@@ -166,6 +171,7 @@ export function updateCacheIndicator() {
   }
 }
 
+/** Opens the Hugging Face cache directory in the OS file manager via the API/native bridge. */
 export async function openCacheFolder() {
   try {
     if (window.pywebview?.api?.open_cache_dir) {
@@ -181,6 +187,7 @@ export async function openCacheFolder() {
   }
 }
 
+/** Uninstalls a checkpoint via `/api/models/uninstall` and refreshes indicators/status. */
 export async function uninstallModel(target) {
   if (state.isProcessing) {
     setError("Cannot uninstall model weights while processing is running.");
@@ -222,6 +229,7 @@ export async function uninstallModel(target) {
   }
 }
 
+/** Downloads + compacts a checkpoint via `/api/models/install` and refreshes indicators/status. */
 export async function installModel(target) {
   if (state.isProcessing || installingModelKey) {
     setError("Another model operation is already in progress.");
@@ -263,6 +271,7 @@ export async function installModel(target) {
   }
 }
 
+/** Builds the right-click menu for a model card (title, Install/Uninstall, Manage in Settings). */
 export function showModelContextMenu(key, x, y) {
   const menu = dom.tabContextMenu;
   if (!menu) return;
@@ -324,6 +333,7 @@ export function showModelContextMenu(key, x, y) {
   menu.style.top = `${Math.min(y, window.innerHeight - rect.height - 8)}px`;
 }
 
+/** Fetches `/api/status`, populates hardware/model/cache/system readouts, and syncs default model. */
 export async function syncServerStatus(isInitialLoad = false, onSelectTier = null) {
   try {
     const response = await fetch("/api/status");
@@ -355,6 +365,7 @@ export async function syncServerStatus(isInitialLoad = false, onSelectTier = nul
   }
 }
 
+/** Activates a nav button + pane pair inside the Settings modal. */
 export function selectPrefsPane(paneId) {
   dom.infoModal.querySelectorAll(".prefs-nav-item").forEach((item) => {
     item.classList.toggle("active", item.getAttribute("data-pane") === paneId);
@@ -364,12 +375,14 @@ export function selectPrefsPane(paneId) {
   });
 }
 
+/** Shows the Settings modal on a given pane (default: preferences). */
 export function openPrefsDialog(section) {
   dom.infoModal.classList.add("active");
   const paneId = PREFS_SECTION_MAP[section] || "settings-preferences";
   selectPrefsPane(paneId);
 }
 
+/** Pushes stored prefs into the live UI (theme, swatch, toggles, format, model selection). */
 export function applyPreferences(onSyncMenu) {
   const root = document.documentElement;
   root.classList.toggle("theme-light", prefs.theme === "light");
