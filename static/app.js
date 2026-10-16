@@ -2204,7 +2204,7 @@ function toggleLoupe(forceState) {
  * @param {number} clientY
  */
 function renderLoupeAtPointer(clientX, clientY) {
-  if (!state.loupeEnabled || !state.resultBlob || !dom.loupeCanvas) {
+  if (!state.loupeEnabled || !state.sourceFile || !dom.loupeCanvas) {
     dom.loupeCanvas?.classList.remove("visible");
     return;
   }
