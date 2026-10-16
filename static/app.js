@@ -1334,6 +1334,24 @@ async function runBatch(tab) {
     ? state.serverStatus?.matting
     : state.serverStatus?.tiers?.[snap.tier];
   const isCached = tierInfo ? tierInfo.cached !== false : true;
+
+  // Static run summary for the busy overlay's description line.
+  const PRESET_NAMES = { low: "LITE 1K", mid: "FULL 1K", high: "ULTRA 2K" };
+  const presetName = snap.matting
+    ? "MATTING"
+    : PRESET_NAMES[snap.tier] || snap.tier.toUpperCase();
+  const qualityDesc =
+    snap.exportWidth > 0 || snap.exportHeight > 0
+      ? `${snap.exportWidth || "AUTO"}×${snap.exportHeight || "AUTO"}`
+      : `${Math.round((snap.scale || 1) * 100)}%`;
+  const destDesc = outputDir
+    ? outputDir
+    : "browser downloads (openbgr-cutouts.zip)";
+  const batchDesc =
+    `Exporting to ${destDesc} using ${presetName} preset ` +
+    `at ${qualityDesc} quality.` +
+    (isCached ? "" : " Fetching model weights (first run).");
+
   if (tab.id === state.activeTabId) renderBatchPanel(tab);
   syncMenuBarState();
 
@@ -1348,12 +1366,8 @@ async function runBatch(tab) {
     const label = `${i + 1}/${batch.total}`;
     entry.status = "processing";
     updateBatchRowStatus(tab, i);
-    dom.busyTitle.textContent = `BATCH ${label}`;
-    dom.busySub.textContent = `${entry.name.toUpperCase()} — ${
-      isCached
-        ? "executing local BiRefNet segmentation at full native resolution"
-        : "fetching model weights from Hugging Face Hub (first run only)"
-    }`;
+    dom.busyTitle.textContent = `PROCESSING BATCH (${label})`;
+    dom.busySub.textContent = batchDesc;
     if (tab.id === state.activeTabId) dom.statTime.textContent = label;
 
     try {
