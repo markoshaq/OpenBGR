@@ -56,7 +56,6 @@
   padding: 6px 4px 5px;
 }
 
-.density-compact .preset-desc,
 .density-compact .field-hint {
   font-size: 10px;
 }
@@ -328,17 +327,6 @@ body {
   color: var(--muted);
 }
 
-.hw-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.hw-value {
-  color: var(--text);
-  font-weight: 600;
-}
-
 .info-btn {
   width: 24px;
   height: 24px;
@@ -523,22 +511,13 @@ body {
   font-family: var(--mono);
   font-size: 11px;
   font-weight: 700;
-  padding-right: 14px;
 }
 
-.toggle-card-top {
-  padding-right: 0;
-}
-
-.preset-desc {
-  font-size: 11px;
-  color: var(--muted);
-  line-height: 1.35;
-}
-
-/* Status Dots & Instant Custom Tooltips */
-.tier-dot,
-.status-dot {
+/* Status Dots & Custom Tooltips */
+.tier-dot {
+  position: absolute;
+  top: 12px;
+  right: 10px;
   width: 7px;
   height: 7px;
   border-radius: 50%;
@@ -547,26 +526,17 @@ body {
   flex-shrink: 0;
 }
 
-.tier-dot {
-  position: absolute;
-  top: 12px;
-  right: 10px;
-}
-
-.tier-dot.ready,
-.status-dot.ready {
+.tier-dot.ready {
   background: #10b981;
   box-shadow: 0 0 5px rgba(16, 185, 129, 0.75);
 }
 
-.tier-dot.downloadable,
-.status-dot.downloadable {
+.tier-dot.downloadable {
   background: #f59e0b;
   box-shadow: 0 0 5px rgba(245, 158, 11, 0.75);
 }
 
-.tier-dot.unavailable,
-.status-dot.unavailable {
+.tier-dot.unavailable {
   background: #ef4444;
   box-shadow: 0 0 5px rgba(239, 68, 68, 0.75);
 }
@@ -602,10 +572,9 @@ body {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
 }
 
-/* Keep left-sidebar tooltips inside the sidebar bounds & wrap long text.
-   Anchor to the element's left edge (safe for full-width rows); tier buttons
-   anchor left / center / right by position so none clip the window edge. */
-.sidebar-left .has-tooltip::after {
+/* Keep sidebar tooltips inside the sidebar bounds and wrap long descriptions.
+   Full-width rows anchor left; segmented buttons anchor left / center / right. */
+.sidebar .has-tooltip::after {
   bottom: auto;
   top: calc(100% + 6px);
   left: 0;
@@ -617,18 +586,18 @@ body {
   text-align: left;
 }
 
-.sidebar-left .tier-btn.has-tooltip::after {
+.sidebar .tier-btn.has-tooltip::after {
   left: 50%;
   right: auto;
   transform: translateX(-50%);
 }
 
-.sidebar-left .tier-btn.has-tooltip:first-child::after {
+.sidebar .tier-btn.has-tooltip:first-child::after {
   left: 0;
   transform: none;
 }
 
-.sidebar-left .tier-btn.has-tooltip:last-child::after {
+.sidebar .tier-btn.has-tooltip:last-child::after {
   left: auto;
   right: 0;
   transform: none;
@@ -646,22 +615,6 @@ body {
   opacity: 1;
   visibility: visible;
   transition-delay: 0.2s;
-}
-
-.status-legend {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding-top: 4px;
-  font-family: var(--mono);
-  font-size: 10px;
-  color: var(--muted);
-}
-
-.legend-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
 }
 
 /* Matte Swatches Grid */
@@ -877,17 +830,6 @@ body {
 
 .action-btn.primary:hover {
   filter: brightness(0.88);
-}
-
-.danger-btn {
-  color: var(--muted);
-  border-color: var(--border);
-}
-
-.danger-btn:hover {
-  border-color: #ef4444;
-  color: #fca5a5;
-  background: rgba(239, 68, 68, 0.1);
 }
 
 .action-btn:disabled,
@@ -1875,16 +1817,15 @@ input[type="file"] {
 }
 
 .theme-light .cancel-btn:hover,
-.theme-light .danger-btn:hover,
 .theme-light .tab-close:hover {
   border-color: #dc2626;
   color: #b91c1c;
   background: rgba(220, 38, 38, 0.08);
 }
 
-/* ------------------------------------------------------------------ */
-/* Batch Queue Panel (batch tabs)                                      */
-/* ------------------------------------------------------------------ */
+/* -------------------------------------------------------------------------
+ * 7. Batch Queue Panel, Tab Drag-Merge & Context Menu
+ * ------------------------------------------------------------------------- */
 .batch-panel {
   display: none;
   position: absolute;
@@ -1913,14 +1854,14 @@ input[type="file"] {
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.14em;
-  color: var(--fg);
+  color: var(--text);
 }
 
 .batch-panel-sub {
   font-family: var(--mono);
   font-size: 9px;
   letter-spacing: 0.08em;
-  color: var(--fg-dim);
+  color: var(--muted);
   margin-top: 4px;
 }
 
@@ -1947,22 +1888,31 @@ input[type="file"] {
 
 .batch-empty-hint {
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: 10px;
   letter-spacing: 0.08em;
-  color: var(--fg-dim);
+  color: var(--muted);
   text-align: center;
-  padding: 40px 0;
+  padding: 48px 0;
 }
 
 .batch-row {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 10px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--border);
   font-family: var(--mono);
-  font-size: 9.5px;
+  font-size: 11px;
   letter-spacing: 0.04em;
+  cursor: grab;
+}
+
+.batch-row:active {
+  cursor: grabbing;
+}
+
+.batch-row.dragging {
+  opacity: 0.4;
 }
 
 .batch-row:last-child {
@@ -1970,8 +1920,8 @@ input[type="file"] {
 }
 
 .batch-dot {
-  width: 7px;
-  height: 7px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
   background: var(--border-strong);
@@ -1992,22 +1942,22 @@ input[type="file"] {
 
 .batch-row-name {
   flex: 1;
-  color: var(--fg);
+  color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .batch-row-size {
-  color: var(--fg-dim);
+  color: var(--muted);
   flex-shrink: 0;
 }
 
 .batch-row-status {
-  font-size: 8.5px;
+  font-size: 9px;
   letter-spacing: 0.1em;
-  color: var(--fg-dim);
-  width: 74px;
+  color: var(--muted);
+  width: 82px;
   text-align: right;
   flex-shrink: 0;
 }
@@ -2019,9 +1969,9 @@ input[type="file"] {
 .batch-row-remove {
   background: none;
   border: none;
-  color: var(--fg-dim);
+  color: var(--muted);
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 13px;
   cursor: pointer;
   padding: 0 2px;
   flex-shrink: 0;
@@ -2041,28 +1991,9 @@ input[type="file"] {
   font-family: var(--mono);
   font-size: 8.5px;
   letter-spacing: 0.08em;
-  color: var(--fg-dim);
+  color: var(--muted);
 }
 
-.batch-foot-btn {
-  background: none;
-  border: 1px solid var(--border);
-  color: var(--fg-dim);
-  font-family: var(--mono);
-  font-size: 8.5px;
-  letter-spacing: 0.1em;
-  padding: 4px 8px;
-  cursor: pointer;
-}
-
-.batch-foot-btn:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-/* ------------------------------------------------------------------ */
-/* Tab drag-merge + context menu                                       */
-/* ------------------------------------------------------------------ */
 .tab-item.drop-target {
   outline: 1.5px dashed var(--accent);
   outline-offset: -1.5px;
@@ -2075,6 +2006,12 @@ input[type="file"] {
 
 .tab-item.batch-tab .tab-title {
   color: var(--accent);
+}
+
+.tab-item.tab-ghost {
+  opacity: 0.55;
+  border: 1px dashed var(--accent);
+  pointer-events: none;
 }
 
 .tab-context-menu {
@@ -2101,7 +2038,7 @@ input[type="file"] {
   font-family: var(--mono);
   font-size: 9.5px;
   letter-spacing: 0.08em;
-  color: var(--fg);
+  color: var(--text);
   padding: 7px 10px;
   cursor: pointer;
 }
@@ -2112,7 +2049,7 @@ input[type="file"] {
 }
 
 .tab-context-menu .ctx-item.ctx-disabled {
-  color: var(--fg-dim);
+  color: var(--muted);
   cursor: default;
 }
 
@@ -2125,13 +2062,10 @@ input[type="file"] {
 .tab-context-menu .ctx-head {
   font-size: 8px;
   letter-spacing: 0.12em;
-  color: var(--fg-dim);
+  color: var(--muted);
   padding: 5px 10px 3px;
 }
 
-/* ------------------------------------------------------------------ */
-/* Batch mode: export sidebar drives the batch                         */
-/* ------------------------------------------------------------------ */
 .app-shell.batch-active.no-result .sidebar-right {
   opacity: 1;
   pointer-events: auto;
@@ -2142,82 +2076,6 @@ input[type="file"] {
   opacity: 1;
 }
 
-.app-shell:not(.batch-active) .batch-only,
 .app-shell.batch-active .batch-hide {
   display: none;
-}
-
-/* Batch rows are draggable (drag out to tab bar = new image tab) */
-.batch-row {
-  cursor: grab;
-  font-size: 11px;
-  padding: 10px 12px;
-}
-
-.batch-row:active {
-  cursor: grabbing;
-}
-
-.batch-row.dragging {
-  opacity: 0.4;
-}
-
-.batch-dot {
-  width: 8px;
-  height: 8px;
-}
-
-.batch-row-status {
-  font-size: 9px;
-  width: 82px;
-}
-
-.batch-row-remove {
-  font-size: 13px;
-}
-
-.batch-empty-hint {
-  font-size: 10px;
-  padding: 48px 0;
-}
-
-.tab-bar-drop .tab-item {
-  outline: none;
-}
-
-/* Right-sidebar tooltips: same edge-safe anchoring as the left sidebar */
-.sidebar-right .has-tooltip::after {
-  bottom: auto;
-  top: calc(100% + 6px);
-  left: 0;
-  right: auto;
-  transform: none;
-  white-space: normal;
-  width: max-content;
-  max-width: 226px;
-  text-align: left;
-}
-
-.sidebar-right .tier-btn.has-tooltip::after {
-  left: 50%;
-  right: auto;
-  transform: translateX(-50%);
-}
-
-.sidebar-right .tier-btn.has-tooltip:first-child::after {
-  left: 0;
-  transform: none;
-}
-
-.sidebar-right .tier-btn.has-tooltip:last-child::after {
-  left: auto;
-  right: 0;
-  transform: none;
-}
-
-/* Ghost preview tab shown while dragging a batch row over the tab bar */
-.tab-item.tab-ghost {
-  opacity: 0.55;
-  border: 1px dashed var(--accent);
-  pointer-events: none;
 }

@@ -833,18 +833,22 @@ class DesktopApi:
     def __init__(self) -> None:
         self.window: Any = None
 
+    @staticmethod
+    def _dialog_mode(webview_mod: Any, kind: str) -> Any:
+        file_dialog = getattr(webview_mod, "FileDialog", None)
+        if file_dialog is not None and hasattr(file_dialog, kind):
+            return getattr(file_dialog, kind)
+        return getattr(webview_mod, f"{kind}_DIALOG")
+
     def open_image_dialog(self) -> dict[str, Any]:
-        """
-        Opens the native OS "Open Image" dialog, reads the selected file(s), and
-        returns them base64-encoded so the frontend can ingest them into tabs.
-        """
+        """Opens the native Open File dialog and returns selected images as base64."""
         if self.window is None:
             return {"cancelled": True}
         try:
             import webview
 
             result = self.window.create_file_dialog(
-                webview.OPEN_DIALOG,
+                self._dialog_mode(webview, "OPEN"),
                 allow_multiple=True,
                 file_types=(
                     "Image Files (*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif;*.tif;*.tiff)",
@@ -876,11 +880,7 @@ class DesktopApi:
             if not files_out:
                 return {"cancelled": True}
 
-            return {
-                "files": files_out,
-                "name": files_out[0]["name"],
-                "data_b64": files_out[0]["data_b64"],
-            }
+            return {"files": files_out}
         except Exception as exc:
             return {"cancelled": True, "error": str(exc)}
 
@@ -892,7 +892,7 @@ class DesktopApi:
             import webview
 
             dest = self.window.create_file_dialog(
-                webview.SAVE_DIALOG,
+                self._dialog_mode(webview, "SAVE"),
                 save_filename=default_filename,
             )
             if not dest:
@@ -906,16 +906,15 @@ class DesktopApi:
             return {"saved": False, "error": str(exc)}
 
     def choose_output_dir(self) -> dict[str, Any]:
-        """
-        Opens a native OS folder picker so batch processing can write all
-        exported cutouts into a user-chosen directory.
-        """
+        """Opens a native OS folder picker for direct-to-folder exports."""
         if self.window is None:
             return {"cancelled": True}
         try:
             import webview
 
-            result = self.window.create_file_dialog(webview.FOLDER_DIALOG)
+            result = self.window.create_file_dialog(
+                self._dialog_mode(webview, "FOLDER")
+            )
             if not result:
                 return {"cancelled": True}
             path = result[0] if isinstance(result, (list, tuple)) else str(result)
