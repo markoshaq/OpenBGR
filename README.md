@@ -54,6 +54,60 @@ Output masks are always upsampled (`LANCZOS`) back to the exact pixel dimensions
 
 Weights download on first use of each model into the standard Hugging Face cache (`~/.cache/huggingface`) — only for the models you actually run.
 
+## Right-Click / "Open With" Integration
+
+OpenBGR can be wired into your OS file manager — everything stays 100% local (the cutout is written next to the original as `<name>-cutout.png`; nothing is uploaded).
+
+**macOS** — Finder Quick Action (right-click → Quick Actions → *Remove Background with OpenBGR*):
+
+```bash
+python3 scripts/install_macos_quick_action.py     # --remove to uninstall
+```
+
+The release `OpenBGR.app` also registers itself as an "Open With" target for image files — right-click → Open With → OpenBGR launches the app with the image loaded in a tab. (Drag onto the Dock icon works too.)
+
+**Windows** — Explorer context menu (per-user registry entries, no admin):
+
+```bat
+scripts\install_windows_context_menu.bat           :: uninstall: uninstall_windows_context_menu.bat
+```
+
+Adds *Remove background with OpenBGR* (headless cutout) and *Open in OpenBGR*.
+
+**Linux**:
+
+```bash
+./scripts/install_linux_integration.sh            # --remove to uninstall
+```
+
+Installs an "Open With" `.desktop` entry, a KDE Dolphin service-menu action, and a GNOME Files (Nautilus) script.
+
+**CLI** — the same pipeline is available directly:
+
+```bash
+python app.py --cli photo.png                      # writes photo-cutout.png
+python app.py --cli a.png b.png -o ~/cutouts       # batch to a directory
+python app.py --cli photo.png -o                   # native Save-As dialog
+python app.py --cli photo.png --tier portrait      # pick a model preset
+python app.py photo.png                            # open app with image loaded
+```
+
+When an OpenBGR window is already running, the context-menu action reuses it over localhost (model is warm → near-instant); otherwise it runs `app.py --cli` standalone (~10–20 s cold start while torch + the model load).
+
+### Headless / CLI-Only Install (no GUI)
+
+For scripts, servers, or users who never want a window — same local pipeline, same privacy guarantees:
+
+```bash
+git clone https://github.com/markoshaq/OpenBGR.git && cd OpenBGR
+./start.sh --cli photo.png      # one-time setup: provisions .venv + model, writes photo-cutout.png
+python3 scripts/install_macos_quick_action.py   # optional: registers the right-click entry
+```
+
+(On Windows use `start.bat` and `scripts\install_windows_context_menu.bat`; on Linux `./scripts/install_linux_integration.sh`.)
+
+`start.sh --cli` provisions the environment itself, so this works on a fresh clone. Afterwards use `python app.py --cli` / `--quick-action` from your own scripts — `--quick-action` applies the saved Quick Action preferences (model, format, destination, clipboard, notification), while `--cli` takes explicit flags. It still needs the same torch + model download (~1.5 GB); the difference is that no window, browser, or server is ever opened.
+
 ## API
 
 You can also call the FastAPI server directly:
@@ -66,7 +120,7 @@ curl -X POST "http://127.0.0.1:7860/api/remove-bg" \
   -o photo-cutout.png
 ```
 
-Other endpoints: `GET /api/status` (version, device, RAM, per-model cache state), `POST /api/refine` (re-apply edge filters to the cached job without re-inference), `POST /api/models/install` / `/api/models/uninstall` (checkpoint management), `POST /api/save` (write to a chosen folder), `POST /api/open-cache-dir` (reveal the HF cache in the OS file manager), and `POST /api/cancel` (abort the active job).
+Other endpoints: `GET /api/status` (version, device, RAM, per-model cache state), `POST /api/refine` (re-apply edge filters to the cached job without re-inference), `POST /api/models/install` / `/api/models/uninstall` (checkpoint management), `POST /api/save` (write to a chosen folder), `POST /api/open-cache-dir` (reveal the HF cache in the OS file manager), `POST /api/cancel` (abort the active job), and `GET/POST /api/quick-action-config`, `POST /api/quick-action`, `POST /api/quick-action-install` (Quick Action settings, execution, and OS integration).
 
 ## Tests
 
@@ -74,13 +128,31 @@ Other endpoints: `GET /api/status` (version, device, RAM, per-model cache state)
 python -m unittest discover -s tests -v
 ```
 
-The suite covers the status contract, refine endpoint, save sanitization, FP16 compaction, the edge-refinement pipeline, frontend DOM/module integrity, icon geometry, and release-archive contents. CI runs the same suite on CPU-only PyTorch for every push and pull request (`.github/workflows/release.yml`).
+The suite covers the status contract, refine endpoint, save sanitization, FP16 compaction, the edge-refinement pipeline, end-to-end segmentation with a mocked model, CLI & Quick Action runners, the desktop bridge, frontend DOM/module integrity, icon geometry, and release-archive contents. CI runs the same suite on CPU-only PyTorch for every push and pull request (`.github/workflows/release.yml`).
+
+## Development
+
+The project ships a `pyproject.toml` configured for [Ruff](https://docs.astral.sh/ruff/) and [mypy](https://mypy.readthedocs.io/):
+
+```bash
+pip install ruff mypy
+ruff check . && ruff format --check .   # lint
+mypy app.py openbgr                     # type-check
+```
 
 ## Project Layout
 
 ```text
-├── app.py                  # FastAPI server, model lifecycle & inference pipeline
+├── app.py                  # Entrypoint (CLI / Quick Action / desktop launcher & re-exports)
+├── openbgr/
+│   ├── config.py           # Runtime paths, hardware auto-detection & model tier registry
+│   ├── models.py           # Thread-safe ModelManager, HF cache inspection & FP16 compaction
+│   ├── pipeline.py         # Defringe, color-spill suppression, RGBA composition & segmentation
+│   ├── quick_action.py     # OS Quick Action config, native dialogs, notifications & CLI runner
+│   ├── desktop.py          # Native pywebview bridge (DesktopApi), window state & Cocoa menus
+│   └── api.py              # FastAPI application and HTTP endpoints
 ├── icon_render.py          # Shared macOS squircle icon renderer
+├── pyproject.toml          # Project metadata, ruff & mypy configuration
 ├── static/
 │   ├── index.html          # 3-column studio workspace
 │   ├── styles.css          # Stylesheet
@@ -93,7 +165,12 @@ The suite covers the status contract, refine endpoint, save sanitization, FP16 c
 │   └── app.js              # Event wiring, menus & native bridge
 ├── scripts/
 │   ├── build_release.py    # Builds .dmg / .zip / .tar.gz into dist/
-│   └── make_dev_bundle.py  # Generates the venv-local OpenBGR.app for dev runs
+│   ├── make_dev_bundle.py  # Generates the venv-local OpenBGR.app for dev runs
+│   ├── context_process.sh  # Headless cutout helper (server fast-path → --cli fallback)
+│   ├── install_macos_quick_action.py      # Finder "Remove Background" Quick Action
+│   ├── install_windows_context_menu.bat   # Explorer right-click entries (HKCU)
+│   ├── uninstall_windows_context_menu.bat
+│   └── install_linux_integration.sh       # .desktop / KDE / Nautilus entries
 ├── Start Mac.command       # macOS Finder launcher
 ├── start.sh                # macOS / Linux bootstrapper
 ├── start.bat               # Windows bootstrapper

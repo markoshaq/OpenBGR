@@ -78,7 +78,7 @@ class TestOpenBGR(unittest.TestCase):
 
     def test_edge_refinement_pipeline(self) -> None:
         """Defringe, despill, and `compose_rgba` produce well-formed 32-bit RGBA output."""
-        rgb = Image.fromarray(np.full((32, 32, 3), (40, 200, 60), dtype=np.uint8), mode="RGB")
+        rgb = Image.fromarray(np.full((32, 32, 3), (40, 200, 60), dtype=np.uint8))
         alpha = np.zeros((32, 32), dtype=np.uint8)
         alpha[8:24, 8:24] = 255
         alpha[7, 8:24] = 128
@@ -89,7 +89,7 @@ class TestOpenBGR(unittest.TestCase):
         self.assertEqual(defringed.shape, (32, 32, 3))
         self.assertEqual(defringed.dtype, np.uint8)
 
-        mask_pil = Image.fromarray(alpha, mode="L")
+        mask_pil = Image.fromarray(alpha)
         despilled = openbgr_app.suppress_color_spill(
             defringed, mask_pil, alpha.astype(np.float32) / 255.0
         )
@@ -221,6 +221,13 @@ class TestOpenBGR(unittest.TestCase):
         required_entries = {
             "OpenBGR/app.py",
             "OpenBGR/icon_render.py",
+            "OpenBGR/openbgr/__init__.py",
+            "OpenBGR/openbgr/config.py",
+            "OpenBGR/openbgr/models.py",
+            "OpenBGR/openbgr/pipeline.py",
+            "OpenBGR/openbgr/quick_action.py",
+            "OpenBGR/openbgr/desktop.py",
+            "OpenBGR/openbgr/api.py",
             "OpenBGR/start.sh",
             "OpenBGR/start.bat",
             "OpenBGR/scripts/make_dev_bundle.py",
@@ -242,6 +249,208 @@ class TestOpenBGR(unittest.TestCase):
         with tarfile.open(linux_tar, "r:gz") as tf:
             tar_names = set(tf.getnames())
             self.assertTrue(required_entries.issubset(tar_names))
+
+    def test_quick_action_notification_and_config(self) -> None:
+        """Quick Action notifications, config sanitization, and multi-format encoding behave as specified."""
+        msg_single = openbgr_app.format_quick_action_notification(["image.png"], 0)
+        self.assertEqual(msg_single, 'Background removed for "image.png"')
+        self.assertNotIn("—", msg_single or "")
+
+        msg_multi = openbgr_app.format_quick_action_notification(
+            ["a.png", "b.png", "c.png"], 0
+        )
+        self.assertEqual(msg_multi, "Background removed for 3 images.")
+        self.assertNotIn("—", msg_multi or "")
+
+        clean = openbgr_app.sanitize_quick_action_config(
+            {
+                "tier": "portrait",
+                "save_mode": "ask",
+                "format": "webp",
+                "edge_refine": "false",
+                "copy_clipboard": "true",
+                "notify": "true",
+            }
+        )
+        self.assertEqual(
+            clean,
+            {
+                "tier": "portrait",
+                "save_mode": "ask",
+                "format": "webp",
+                "edge_refine": False,
+                "copy_clipboard": True,
+                "notify": True,
+            },
+        )
+
+        # Fallback on invalid values
+        fallback = openbgr_app.sanitize_quick_action_config(
+            {"tier": "bogus", "save_mode": "somewhere", "format": "gif"}
+        )
+        self.assertEqual(fallback["tier"], "auto")
+        self.assertEqual(fallback["save_mode"], "same_folder")
+        self.assertEqual(fallback["format"], "png")
+
+        # Numeric booleans in a hand-edited config must not fall back
+        numeric = openbgr_app.sanitize_quick_action_config(
+            {"edge_refine": 0, "copy_clipboard": 1, "notify": 0}
+        )
+        self.assertFalse(numeric["edge_refine"])
+        self.assertTrue(numeric["copy_clipboard"])
+        self.assertFalse(numeric["notify"])
+
+    def test_output_path_and_dialog_escaping(self) -> None:
+        """Output paths gain the correct extension, and dialog strings are shell-safe."""
+        self.assertEqual(
+            openbgr_app._with_output_suffix(Path("/tmp/out"), "png"),
+            Path("/tmp/out.png"),
+        )
+        self.assertEqual(
+            openbgr_app._with_output_suffix(Path("/tmp/out.webp"), "png"),
+            Path("/tmp/out.webp"),
+        )
+        self.assertEqual(
+            openbgr_app._osascript_quote('a"b\\c'), 'a\\"b\\\\c'
+        )
+        self.assertEqual(openbgr_app._powershell_quote("it's"), "it''s")
+
+        # Verify all 4 Quick Action export formats encode cleanly
+        rgba = Image.new("RGBA", (16, 16), (200, 50, 50, 128))
+        try:
+            for fmt, expected_mode in (
+                ("png", "RGBA"),
+                ("webp", "RGBA"),
+                ("jpg", "RGB"),
+                ("mask", "L"),
+            ):
+                raw = openbgr_app.encode_cutout_image(rgba, fmt=fmt)
+                with Image.open(io.BytesIO(raw)) as decoded:
+                    self.assertEqual(decoded.mode, expected_mode)
+                    self.assertEqual(decoded.size, (16, 16))
+        finally:
+            rgba.close()
+
+    def test_segment_foreground_and_api_remove_bg_with_mock_model(self) -> None:
+        """Full `segment_foreground` and `/api/remove-bg` flow works with a mocked BiRefNet model."""
+
+        class _DummyBiRefNet(torch.nn.Module):
+            def forward(self, x: torch.Tensor) -> list[torch.Tensor]:
+                b, _c, h, w = x.shape
+                logits = torch.full((b, 1, h, w), -4.0, dtype=torch.float32)
+                logits[:, :, h // 4 : 3 * h // 4, w // 4 : 3 * w // 4] = 4.0
+                return [logits]
+
+        dummy_model = _DummyBiRefNet()
+        with patch.object(
+            openbgr_app.MANAGER, "get_or_load", return_value=dummy_model
+        ):
+            src_img = Image.new("RGB", (64, 48), (30, 200, 50))
+            try:
+                out_img, elapsed_ms, tier_cfg, job_id = (
+                    openbgr_app.segment_foreground(
+                        src_img,
+                        tier="dynamic",
+                        defringe=True,
+                        despill=True,
+                    )
+                )
+                self.assertEqual(out_img.mode, "RGBA")
+                self.assertEqual(out_img.size, (64, 48))
+                self.assertGreaterEqual(elapsed_ms, 0.0)
+                self.assertTrue(tier_cfg["sublabel"].startswith("Dynamic / "))
+                self.assertGreater(job_id, 0)
+                out_img.close()
+            finally:
+                src_img.close()
+
+            # Cancelled epoch raises InterruptedError
+            stale_epoch = openbgr_app.MANAGER.cancel_epoch - 1
+            with self.assertRaises(InterruptedError):
+                openbgr_app.segment_foreground(
+                    Image.new("RGB", (16, 16)), job_epoch=stale_epoch
+                )
+
+            # End-to-end /api/remove-bg HTTP handler test
+            buf = io.BytesIO()
+            Image.new("RGB", (40, 30), (120, 80, 200)).save(buf, format="PNG")
+            upload = UploadFile(
+                filename="sample.png", file=io.BytesIO(buf.getvalue())
+            )
+            res = asyncio.run(
+                openbgr_app.api_remove_bg(
+                    file=upload,
+                    tier="low",
+                    defringe=True,
+                    despill=True,
+                    matting=False,
+                )
+            )
+            self.assertEqual(res.media_type, "image/png")
+            self.assertEqual(res.headers["X-Image-Width"], "40")
+            self.assertEqual(res.headers["X-Image-Height"], "30")
+            self.assertIn("Lite", res.headers["X-Tier-Used"])
+
+            # Empty upload raises HTTP 400
+            empty_up = UploadFile(filename="empty.png", file=io.BytesIO(b""))
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.run(openbgr_app.api_remove_bg(file=empty_up))
+            self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_cli_and_quick_action_execution(self) -> None:
+        """`run_cli` and `run_quick_action` write cutouts to disk when given a mocked pipeline."""
+        fake_rgba = Image.new("RGBA", (20, 20), (255, 100, 50, 255))
+
+        def _fake_segment(img, *args, **kwargs):
+            return fake_rgba.copy(), 12.5, {"label": "General", "sublabel": "1K"}, 99
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src_path = Path(tmp) / "photo.png"
+            Image.new("RGB", (20, 20), (10, 20, 30)).save(src_path, format="PNG")
+            cfg_path = Path(tmp) / "quick_action.json"
+
+            with (
+                patch.object(openbgr_app, "segment_foreground", side_effect=_fake_segment),
+                patch.object(openbgr_app, "QUICK_ACTION_CONFIG_PATH", cfg_path),
+                patch.object(openbgr_app, "send_openbgr_notification"),
+            ):
+                rc = openbgr_app.run_cli(
+                    [str(src_path)],
+                    output=None,
+                    tier="general",
+                    defringe=True,
+                    despill=True,
+                    matting=False,
+                    fmt="png",
+                )
+                self.assertEqual(rc, 0)
+                cutout_1 = Path(tmp) / "photo-cutout.png"
+                self.assertTrue(cutout_1.is_file())
+
+                openbgr_app.save_quick_action_config(
+                    {"tier": "general", "save_mode": "same_folder", "format": "webp", "notify": False}
+                )
+                qa_res = openbgr_app.run_quick_action([str(src_path)])
+                self.assertTrue(qa_res["ok"])
+                self.assertEqual(qa_res["succeeded"], ["photo.png"])
+                self.assertEqual(len(qa_res["outputs"]), 1)
+                self.assertTrue(Path(qa_res["outputs"][0]).is_file())
+
+        fake_rgba.close()
+
+    def test_desktop_api_pending_files_and_bridge(self) -> None:
+        """`DesktopApi` queues and drains pending files and enforces the 48 MB dialog cap."""
+        bridge = openbgr_app.DesktopApi()
+        with tempfile.TemporaryDirectory() as tmp:
+            img_path = Path(tmp) / "test.png"
+            img_path.write_bytes(b"fake-png-content")
+
+            openbgr_app.queue_open_files([str(img_path)])
+            drained = bridge.take_pending_files()
+            self.assertEqual(len(drained["files"]), 1)
+            self.assertEqual(drained["files"][0]["name"], "test.png")
+            # Subsequent drain is empty
+            self.assertEqual(bridge.take_pending_files(), {"files": []})
 
 
 if __name__ == "__main__":

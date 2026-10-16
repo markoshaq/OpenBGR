@@ -47,6 +47,8 @@ import {
   uninstallModel,
   openCacheFolder,
   showModelContextMenu,
+  syncQuickActionConfigToServer,
+  toggleQuickActionInstall,
 } from "./preferences.js";
 import {
   openMultiFileChooser,
@@ -220,11 +222,48 @@ dom.prefDefaultBackdrop?.addEventListener("change", (e) => {
     applyBackdrop(prefs.defaultBackdrop);
   }
 });
+dom.prefQaTier?.addEventListener("change", (e) => {
+  prefs.qaTier = e.target.value;
+  savePrefs();
+  syncQuickActionConfigToServer();
+});
+dom.prefQaSaveMode?.addEventListener("change", (e) => {
+  prefs.qaSaveMode = e.target.value;
+  savePrefs();
+  syncQuickActionConfigToServer();
+});
+dom.prefQaFormat?.addEventListener("change", (e) => {
+  prefs.qaFormat = e.target.value;
+  savePrefs();
+  syncQuickActionConfigToServer();
+});
+dom.btnToggleQaEdgeRefine?.addEventListener("click", () => {
+  prefs.qaEdgeRefine = !prefs.qaEdgeRefine;
+  savePrefs();
+  dom.btnToggleQaEdgeRefine.classList.toggle("active", prefs.qaEdgeRefine);
+  syncQuickActionConfigToServer();
+});
+dom.btnToggleQaClipboard?.addEventListener("click", () => {
+  prefs.qaCopyClipboard = !prefs.qaCopyClipboard;
+  savePrefs();
+  dom.btnToggleQaClipboard.classList.toggle("active", prefs.qaCopyClipboard);
+  syncQuickActionConfigToServer();
+});
+dom.btnToggleQaNotify?.addEventListener("click", () => {
+  prefs.qaNotify = !prefs.qaNotify;
+  savePrefs();
+  dom.btnToggleQaNotify.classList.toggle("active", prefs.qaNotify);
+  syncQuickActionConfigToServer();
+});
+dom.btnQaInstallToggle?.addEventListener("click", () => {
+  toggleQuickActionInstall();
+});
 dom.btnResetPrefs?.addEventListener("click", () => {
   Object.assign(prefs, getDefaultPrefs());
   state.confirmCloseTab = prefs.confirmClose;
   savePrefs();
   applyPreferences(syncMenuBarState);
+  syncQuickActionConfigToServer();
   if (!state.resultBlob) {
     state.exportFormat = prefs.defaultFormat;
     applyBackdrop(prefs.defaultBackdrop);
@@ -570,8 +609,12 @@ window.addEventListener("dragover", (e) => {
   dom.viewport.classList.add("dragover");
 });
 
-window.addEventListener("dragleave", () => {
-  dom.viewport.classList.remove("dragover");
+window.addEventListener("dragleave", (e) => {
+  // Only clear the highlight when the drag leaves the window entirely —
+  // dragleave also fires while crossing between child elements.
+  if (!e.relatedTarget) {
+    dom.viewport.classList.remove("dragover");
+  }
 });
 
 window.addEventListener("drop", (e) => {
@@ -698,7 +741,32 @@ function closeAllMenus() {
   });
 }
 
+/**
+ * Pulls image paths handed over by the OS (argv, Finder "Open With", Dock drops)
+ * from the native bridge and loads them. Called on startup, on a poll interval,
+ * and pushed by the backend whenever a new open-request arrives while running.
+ */
+async function pullPendingFiles() {
+  if (!window.pywebview?.api?.take_pending_files) return;
+  try {
+    const res = await window.pywebview.api.take_pending_files();
+    if (res?.error) {
+      setError(res.error);
+      return;
+    }
+    const files = filesFromDialogResult(res);
+    if (!files.length) return;
+    if (state.isProcessing) cancelProcessing();
+    if (files.length > 1) {
+      openMultiFileChooser(files, "SELECTED");
+    } else {
+      ingestImageFile(files[0]);
+    }
+  } catch (_) {}
+}
+
 window.openBGR = {
+  pullPendingFiles: () => pullPendingFiles(),
   newTab: () => {
     if (state.isProcessing) {
       openConfirmModal(
@@ -984,3 +1052,8 @@ applyPreferences(syncMenuBarState);
 syncFormatButtons();
 applyBackdrop(state.activeBackdrop);
 syncServerStatus(true, selectTier);
+
+// Ingest OS-delivered files (Open With / argv / Dock drops) once the bridge is
+// up, then keep polling so files sent to an already-running instance arrive too.
+pullPendingFiles();
+setInterval(pullPendingFiles, 2000);

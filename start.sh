@@ -17,15 +17,15 @@ launch_openbgr() {
   if [ "$(uname -s)" = "Darwin" ]; then
     ./.venv/bin/python scripts/make_dev_bundle.py 2>/dev/null
     if [ -x ".venv/OpenBGR.app/Contents/MacOS/Python" ]; then
-      exec ./.venv/OpenBGR.app/Contents/MacOS/Python app.py
+      exec ./.venv/OpenBGR.app/Contents/MacOS/Python app.py "$@"
     fi
   fi
-  exec ./.venv/bin/python app.py
+  exec ./.venv/bin/python app.py "$@"
 }
 
 # Fast path: environment is already installed
 if [ -f ".venv/.installed" ] && [ -x ".venv/bin/python" ]; then
-  launch_openbgr
+  launch_openbgr "$@"
 fi
 
 echo "--------------------------------------------------------------------"
@@ -81,4 +81,4 @@ if [ ! -f ".venv/.installed" ]; then
   touch .venv/.installed
 fi
 
-launch_openbgr
+launch_openbgr "$@"

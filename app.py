@@ -23,2139 +23,408 @@ OpenBGR — Local Background Removal Studio
 A self-hosted FastAPI inference engine for background removal powered by BiRefNet
 (Bilateral Reference Network for High-Resolution Dichotomous Image Segmentation).
 
-Key Architectural Features:
----------------------------
-1. Hardware Auto-Detection & Mixed Precision:
-   Automatically dispatches workloads to NVIDIA CUDA, Apple Metal (MPS), or
-   multi-threaded CPU backends. Uses FP16 (16-bit half-precision) on GPU/MPS
-   targets to cut memory bandwidth by 50% and accelerate inference up to 5.5x.
+The core implementation lives in the `openbgr` package:
+- `openbgr.config`       : Runtime paths, hardware auto-detection, model tier registry.
+- `openbgr.models`       : Thread-safe `ModelManager`, HF cache inspection, FP16 compaction.
+- `openbgr.pipeline`     : Defringe, color-spill suppression, RGBA composition, neural segmentation.
+- `openbgr.quick_action` : OS Quick Action config, native dialogs, notifications, CLI runner.
+- `openbgr.desktop`      : Native `pywebview` bridge (`DesktopApi`), window state, Cocoa menus.
+- `openbgr.api`          : FastAPI application and HTTP endpoints.
 
-2. Six Specialized BiRefNet Checkpoints (see `TIERS` for the full registry):
-   - Lite    : `ZhengPeng7/BiRefNet_lite`       (Swin-T @ 1024x1024)
-               Fast general cutouts for CPU-only laptops and quick batches.
-   - General : `ZhengPeng7/BiRefNet`            (Swin-L @ 1024x1024, default)
-               All-round flagship for products, objects, and everyday photos.
-   - Ultra HR: `ZhengPeng7/BiRefNet_HR`         (Swin-L @ 1536-2048)
-               Native 2K inference for 4K/8K photography and fine edges.
-   - Portrait: `ZhengPeng7/BiRefNet-portrait`   (Swin-L @ 1024x1024)
-               Tuned for people, headshots, flyaway hair, and eyelashes.
-   - Matting : `ZhengPeng7/BiRefNet_HR-matting` (Swin-L @ 1536-2048)
-               Soft alpha mattes for glass, smoke, veils, and sheer fabric.
-   - Dynamic : `ZhengPeng7/BiRefNet_dynamic`    (Swin-L @ up to 2048)
-               Preserves the native aspect ratio (32px-aligned) instead of
-               squashing panoramas or tall banners into a square.
-
-3. Deterministic Memory Lifecycle (`ModelManager`):
-   Thread-safe singleton model loader that explicitly evicts inactive backbones
-   and flushes hardware allocator caches (`torch.cuda.empty_cache()` /
-   `torch.mps.empty_cache()`) when switching between checkpoints.
-
-4. Cache-First Air-Gapped Loading:
-   Probes local Hugging Face cache (`local_files_only=True`) before opening any
-   network sockets, ensuring 100% offline operation after initial weight
-   hydration. Checkpoints can be installed/uninstalled on demand via
-   `/api/models/install` and `/api/models/uninstall`.
-
-5. Live Edge Refinement (`/api/refine`):
-   Each segmentation caches its raw RGB + alpha mask under a monotonic job id,
-   so the frontend can re-run the post-processing filters (defringe, color-spill
-   suppression, shadow cutoff) in ~100 ms without neural re-inference.
-
-6. Classical Post-Processing Filters (no extra model):
-   - `decontaminate_edge_colors`: eliminates background color halos in
-     semi-transparent boundary pixels via morphological dilation and
-     box-filtered foreground color propagation.
-   - `suppress_color_spill`: samples the removed background chroma and
-     subtracts ambient light bounce while preserving pixel luminance.
+This module serves as the CLI / desktop / Uvicorn entrypoint (`python app.py`,
+`uvicorn app:app`) and re-exports the public API for backward compatibility.
 """
 
 from __future__ import annotations
 
-import asyncio
-import base64
-import gc
-import io
-import itertools
-import json
+import argparse
 import os
 import platform
-import shutil
 import signal
-import socket
-import subprocess
 import threading
-import time
-import warnings
-import webbrowser
-from contextlib import asynccontextmanager
-from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
-# Must be set before importing PyTorch so any non-native Apple Silicon MPS operator
-# transparently falls back to CPU execution without raising a runtime error.
-os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
-warnings.filterwarnings("ignore", category=FutureWarning)
-
-import numpy as np
-import torch
 import uvicorn
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, Response
-from fastapi.staticfiles import StaticFiles
 from huggingface_hub import snapshot_download, try_to_load_from_cache
-from huggingface_hub.constants import HF_HUB_CACHE
-from huggingface_hub.file_download import repo_folder_name
-from PIL import Image, ImageFilter, ImageOps
-from torchvision import transforms
-from transformers import AutoModelForImageSegmentation
 
-# ---------------------------------------------------------------------------
-# Path & Runtime Configuration
-# ---------------------------------------------------------------------------
-
-BASE_DIR = Path(__file__).resolve().parent
-STATIC_DIR = BASE_DIR / "static"
-STATIC_DIR.mkdir(exist_ok=True)
-
-APP_VERSION = "0.02"
-
-# Scale intra-op CPU parallelism for machines running without a GPU accelerator.
-if os.cpu_count():
-    torch.set_num_threads(max(1, min(8, os.cpu_count() or 4)))
-
-# ImageNet normalization constants required by BiRefNet Swin-T / Swin-L backbones.
-IMAGENET_MEAN = [0.485, 0.456, 0.406]
-IMAGENET_STD = [0.229, 0.224, 0.225]
-
-def get_host_ram_gb() -> float:
-    """Detects total physical system RAM in GiB across macOS, Linux, and Windows."""
-    sys_name = platform.system()
-    if sys_name == "Darwin":
-        try:
-            mem_bytes = int(
-                subprocess.check_output(["sysctl", "-n", "hw.memsize"], text=True).strip()
-            )
-            return mem_bytes / (1024**3)
-        except Exception:
-            pass
-    elif sys_name == "Windows":
-        try:
-            import ctypes
-
-            class _MEMORYSTATUSEX(ctypes.Structure):
-                """Win32 MEMORYSTATUSEX layout for `GlobalMemoryStatusEx` (total RAM field)."""
-
-                _fields_ = [
-                    ("dwLength", ctypes.c_ulong),
-                    ("dwMemoryLoad", ctypes.c_ulong),
-                    ("ullTotalPhys", ctypes.c_ulonglong),
-                    ("ullAvailPhys", ctypes.c_ulonglong),
-                    ("ullTotalPageFile", ctypes.c_ulonglong),
-                    ("ullAvailPageFile", ctypes.c_ulonglong),
-                    ("ullTotalVirtual", ctypes.c_ulonglong),
-                    ("ullAvailVirtual", ctypes.c_ulonglong),
-                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
-                ]
-
-            stat = _MEMORYSTATUSEX()
-            stat.dwLength = ctypes.sizeof(_MEMORYSTATUSEX)
-            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):  # type: ignore[attr-defined]
-                return stat.ullTotalPhys / (1024**3)
-        except Exception:
-            pass
-    try:
-        page_size = os.sysconf("SC_PAGE_SIZE")
-        page_count = os.sysconf("SC_PHYS_PAGES")
-        if page_size > 0 and page_count > 0:
-            return (page_size * page_count) / (1024**3)
-    except Exception:
-        pass
-    return 16.0
-
-
-def get_system_memory_gb() -> float:
-    """Estimates total GPU or system memory in GiB to prevent swap thrashing on 2K tensors."""
-    if torch.cuda.is_available():
-        try:
-            return torch.cuda.get_device_properties(0).total_memory / (1024**3)
-        except Exception:
-            pass
-    return get_host_ram_gb()
-
-
-HOST_RAM_GB: float = get_host_ram_gb()
-SYSTEM_MEMORY_GB: float = get_system_memory_gb()
-# Evaluating BiRefNet_HR at 2048x2048 allocates >6 GB of intermediate attention feature
-# pyramids; on 8 GB systems, 1536x1536 (2.25x pixel density of 1024x1024) prevents swap thrashing.
-HR_RESOLUTION: int = 2048 if SYSTEM_MEMORY_GB >= 14.0 else 1536
-
-# Supported Hugging Face model repositories — each key maps to a distinct official
-# BiRefNet checkpoint from ZhengPeng7.
-MODELS: dict[str, str] = {
-    "lite": "ZhengPeng7/BiRefNet_lite",         # Swin-T @ 1024x1024 (~170 MB -> ~85 MB FP16)
-    "general": "ZhengPeng7/BiRefNet",           # Swin-L @ 1024x1024 (~424 MB FP16)
-    "hr": "ZhengPeng7/BiRefNet_HR",             # Swin-L @ 2048x2048 (~424 MB FP16)
-    "portrait": "ZhengPeng7/BiRefNet-portrait", # Swin-L @ 1024x1024 (~844 MB -> ~424 MB FP16)
-    "matting": "ZhengPeng7/BiRefNet_HR-matting",# Swin-L @ 2048x2048 (~424 MB FP16)
-    "dynamic": "ZhengPeng7/BiRefNet_dynamic",   # Swin-L @ dynamic native aspect ratio (~424 MB FP16)
-}
-
-LEGACY_MATTING_REPO = "ZhengPeng7/BiRefNet-matting"
-
-TIER_ALIASES: dict[str, str] = {
-    "low": "lite",
-    "mid": "general",
-    "full": "general",
-    "high": "hr",
-}
-
-
-def normalize_tier_key(tier: str) -> str:
-    """Resolves legacy preset names (`low`, `mid`, `high`) to canonical model keys."""
-    cleaned = (tier or "").strip().lower()
-    return TIER_ALIASES.get(cleaned, cleaned)
-
-
-# Selectable BiRefNet models exposed in the UI and `/api/status`.
-TIERS: dict[str, dict[str, Any]] = {
-    "lite": {
-        "key": "lite",
-        "label": "Lite",
-        "tech_name": "BiRefNet_lite",
-        "sublabel": "1K · Fast",
-        "model_key": "lite",
-        "repo_id": MODELS["lite"],
-        "expected_bytes": 177_669_592,
-        "resolution": 1024,
-        "dynamic": False,
-        "description": (
-            "BiRefNet_lite (Swin-T @ 1024px). Fast general cutouts for quick batches, "
-            "CPUs, and integrated graphics."
-        ),
-    },
-    "general": {
-        "key": "general",
-        "label": "General",
-        "tech_name": "BiRefNet",
-        "sublabel": "1K · Studio",
-        "model_key": "general",
-        "repo_id": MODELS["general"],
-        "expected_bytes": 444_566_476,
-        "resolution": 1024,
-        "dynamic": False,
-        "description": (
-            "BiRefNet (Swin-L @ 1024px). All-round flagship for products, objects, "
-            "animals, and everyday photography."
-        ),
-    },
-    "hr": {
-        "key": "hr",
-        "label": "Ultra HR",
-        "tech_name": "BiRefNet_HR",
-        "sublabel": f"2K · {HR_RESOLUTION}px",
-        "model_key": "hr",
-        "repo_id": MODELS["hr"],
-        "expected_bytes": 444_566_476,
-        "resolution": HR_RESOLUTION,
-        "dynamic": False,
-        "description": (
-            f"BiRefNet_HR (Swin-L @ {HR_RESOLUTION}px). Native 2K inference for 4K/8K "
-            "photography and intricate micro-edge detail."
-        ),
-    },
-    "portrait": {
-        "key": "portrait",
-        "label": "Portrait",
-        "tech_name": "BiRefNet-portrait",
-        "sublabel": "1K · People",
-        "model_key": "portrait",
-        "repo_id": MODELS["portrait"],
-        "expected_bytes": 444_566_476,
-        "resolution": 1024,
-        "dynamic": False,
-        "description": (
-            "BiRefNet-portrait (Swin-L @ 1024px). Fine-tuned for human subjects, "
-            "headshots, flyaway hair strands, eyelashes, and clothing."
-        ),
-    },
-    "matting": {
-        "key": "matting",
-        "label": "Matting",
-        "tech_name": "BiRefNet_HR-matting",
-        "sublabel": "2K · Alpha",
-        "model_key": "matting",
-        "repo_id": MODELS["matting"],
-        "expected_bytes": 444_566_476,
-        "resolution": HR_RESOLUTION,
-        "dynamic": False,
-        "description": (
-            f"BiRefNet_HR-matting (Swin-L @ {HR_RESOLUTION}px). High-resolution soft alpha "
-            "matting for glass, smoke, veils, sheer fabric, and fine hair."
-        ),
-    },
-    "dynamic": {
-        "key": "dynamic",
-        "label": "Dynamic",
-        "tech_name": "BiRefNet_dynamic",
-        "sublabel": "Native Ratio",
-        "model_key": "dynamic",
-        "repo_id": MODELS["dynamic"],
-        "expected_bytes": 444_566_476,
-        "resolution": HR_RESOLUTION,
-        "dynamic": True,
-        "description": (
-            "BiRefNet_dynamic (Swin-L). Preserves native aspect ratio up to 2K without "
-            "square distortion — ideal for panoramas and vertical banners."
-        ),
-    },
-}
-
-
-# ---------------------------------------------------------------------------
-# Hardware Discovery & Auto-Tuning
-# ---------------------------------------------------------------------------
-
-
-def detect_compute_device() -> torch.device:
-    """
-    Selects the fastest available PyTorch compute device in priority order:
-    1. NVIDIA CUDA / AMD ROCm (`cuda`)
-    2. Apple Silicon Metal Performance Shaders (`mps`)
-    3. Multi-threaded Host CPU (`cpu`)
-    """
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
-
-
-def format_device_label(device: torch.device) -> str:
-    """Returns an ASCII-safe hardware identifier for UI telemetry and HTTP headers."""
-    if device.type == "cuda":
-        try:
-            return f"CUDA / {torch.cuda.get_device_name(0)}"
-        except Exception:
-            return "NVIDIA CUDA GPU"
-
-    if device.type == "mps":
-        chip = "Apple Silicon"
-        if platform.system() == "Darwin":
-            try:
-                out = subprocess.check_output(
-                    ["sysctl", "-n", "machdep.cpu.brand_string"], text=True
-                ).strip()
-                if out:
-                    chip = out
-            except Exception:
-                pass
-        return f"MPS / {chip}"
-
-    cpu_name = platform.processor() or platform.machine() or "CPU"
-    return f"CPU / {cpu_name}"
-
-
-def select_recommended_tier(device: torch.device) -> str:
-    """
-    Heuristically chooses the default model at startup:
-    - CPU hosts default to 'lite' (1024x1024 BiRefNet_lite) for responsive latency.
-    - Dedicated CUDA GPUs with >= 16 GB VRAM default to 'hr' (2048x2048 BiRefNet_HR).
-    - All other GPU/MPS accelerators default to 'general' (1024x1024 BiRefNet Swin-L).
-    """
-    if device.type == "cpu":
-        return "lite"
-    if device.type == "cuda":
-        try:
-            vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-            if vram_gb >= 16.0:
-                return "hr"
-        except Exception:
-            pass
-    return "general"
-
-
-DEVICE: torch.device = detect_compute_device()
-DEVICE_LABEL: str = format_device_label(DEVICE)
-
-# Use FP16 half-precision on GPU accelerators (CUDA / MPS) to halve memory usage
-# and maximize tensor throughput; retain FP32 on CPU for numerical compatibility.
-DTYPE: torch.dtype = torch.float16 if DEVICE.type in ("mps", "cuda") else torch.float32
-PRECISION_LABEL: str = "FP16" if DTYPE == torch.float16 else "FP32"
-RECOMMENDED_TIER: str = select_recommended_tier(DEVICE)
-
-# Cache compiled torchvision transform pipelines keyed by target (height, width).
-_TRANSFORM_CACHE: dict[tuple[int, int], transforms.Compose] = {}
-
-
-def get_preprocess_transform(
-    resolution: int | tuple[int, int],
-) -> transforms.Compose:
-    """
-    Returns a cached torchvision preprocessing pipeline that resizes an RGB PIL
-    image to `(height, width)` and applies ImageNet normalization.
-    """
-    size_hw = (
-        (resolution, resolution)
-        if isinstance(resolution, int)
-        else (int(resolution[0]), int(resolution[1]))
-    )
-    if size_hw not in _TRANSFORM_CACHE:
-        _TRANSFORM_CACHE[size_hw] = transforms.Compose(
-            [
-                transforms.Resize(
-                    size_hw,
-                    interpolation=transforms.InterpolationMode.BILINEAR,
-                ),
-                transforms.ToTensor(),
-                transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD),
-            ]
-        )
-    return _TRANSFORM_CACHE[size_hw]
-
-
-def compute_dynamic_size(orig_w: int, orig_h: int, max_side: int) -> tuple[int, int]:
-    """
-    Computes a `(height, width)` pair for `BiRefNet_dynamic` that preserves the
-    source image's aspect ratio within `[256, max_side]` while rounding both axes
-    to multiples of 32 (required by the 4-stage Swin-L window/patch hierarchy).
-    """
-    long_side = max(1, orig_w, orig_h)
-    if long_side > max_side:
-        scale = max_side / float(long_side)
-    elif long_side < 512:
-        scale = 512.0 / float(long_side)
-    else:
-        scale = 1.0
-    target_w = max(256, min(max_side, int(round((orig_w * scale) / 32.0)) * 32))
-    target_h = max(256, min(max_side, int(round((orig_h * scale) / 32.0)) * 32))
-    return (target_h, target_w)
-
-
-def get_model_cache_dir(repo_id: str) -> Path:
-    """Returns the local Hugging Face Hub cache directory for `repo_id`."""
-    return Path(HF_HUB_CACHE) / repo_folder_name(repo_id=repo_id, repo_type="model")
-
-
-def get_model_disk_bytes(repo_id: str) -> int:
-    """Returns total bytes on disk occupied by `repo_id` inside the HF Hub cache."""
-    try:
-        folder = get_model_cache_dir(repo_id)
-        if not folder.exists():
-            return 0
-        return sum(
-            f.stat().st_size
-            for f in folder.rglob("*")
-            if f.is_file() and not f.is_symlink()
-        )
-    except Exception:
-        return 0
-
-
-def compact_model_cache_fp16(repo_id: str) -> int:
-    """
-    Compacts any FP32 `model.safetensors` checkpoint in the local HF cache (such as
-    `BiRefNet-matting` at 844 MB) down to FP16 (~424 MB) in-place on disk.
-    Returns the number of bytes saved, or 0 if already FP16.
-    """
-    try:
-        from safetensors import safe_open
-        from safetensors.torch import load_file, save_file
-
-        cached_path = try_to_load_from_cache(repo_id, "model.safetensors")
-        if not isinstance(cached_path, str) or not os.path.exists(cached_path):
-            return 0
-        blob_path = Path(os.path.realpath(cached_path))
-        if not blob_path.is_file():
-            return 0
-
-        needs_fp16 = False
-        metadata: dict[str, str] = {}
-        with safe_open(str(blob_path), framework="pt", device="cpu") as f:
-            metadata = f.metadata() or {}
-            for k in list(f.keys())[:8]:
-                if f.get_slice(k).get_dtype() == "F32":
-                    needs_fp16 = True
-                    break
-        if not needs_fp16:
-            return 0
-
-        old_size = blob_path.stat().st_size
-        tensors = load_file(str(blob_path), device="cpu")
-        fp16_tensors = {
-            k: (v.half() if v.is_floating_point() and v.dtype == torch.float32 else v)
-            for k, v in tensors.items()
-        }
-        del tensors
-        tmp_path = blob_path.with_suffix(".fp16.tmp")
-        save_file(fp16_tensors, str(tmp_path), metadata=metadata or {"format": "pt"})
-        del fp16_tensors
-        os.replace(tmp_path, blob_path)
-        new_size = blob_path.stat().st_size
-        saved = max(0, old_size - new_size)
-        if saved > 0:
-            print(
-                f"[Model] Compacted {repo_id} cache to FP16 "
-                f"({old_size / 1024**2:.1f} MB -> {new_size / 1024**2:.1f} MB)."
-            )
-        return saved
-    except Exception:
-        return 0
-
-
-def is_model_cached_locally(repo_id: str) -> bool:
-    """
-    Checks whether a Hugging Face model's weight file (`model.safetensors`) is
-    already present in the local disk cache without making any network requests.
-    """
-    try:
-        cached_path = try_to_load_from_cache(repo_id, "model.safetensors")
-        return isinstance(cached_path, str) and os.path.exists(cached_path)
-    except Exception:
-        return False
-
-
-# ---------------------------------------------------------------------------
-# Thread-Safe Model Lifecycle Manager
-# ---------------------------------------------------------------------------
-
-
-class ModelManager:
-    """
-    Manages the lifecycle of BiRefNet segmentation models in device memory.
-
-    Ensures only one model backbone is resident in VRAM / Unified RAM at any
-    given time. When switching between checkpoints (e.g. `lite` Swin-T vs a
-    Swin-L variant), the previous model is explicitly dereferenced and
-    hardware caches are flushed before allocating the new weights.
-    """
-
-    def __init__(self) -> None:
-        """Initializes the unloaded state, job lock, and cancellation epoch."""
-        self._lock = threading.Lock()
-        self.inference_lock = threading.Lock()
-        self.cancel_epoch: int = 0
-        self.active_model_key: Optional[str] = None
-        self.model: Optional[torch.nn.Module] = None
-
-    def request_cancel(self) -> int:
-        """Increments the cancellation epoch so any queued or active job aborts early."""
-        self.cancel_epoch += 1
-        return self.cancel_epoch
-
-    def check_cancelled(self, job_epoch: int) -> None:
-        """Raises `InterruptedError` if a cancellation occurred since `job_epoch` started."""
-        if job_epoch < self.cancel_epoch:
-            raise InterruptedError("Segmentation job was cancelled by the user.")
-
-    def flush_device_memory(self) -> None:
-        """Forces Python garbage collection and releases unused GPU/MPS cache blocks."""
-        gc.collect()
-        if DEVICE.type == "mps":
-            try:
-                torch.mps.empty_cache()
-            except Exception:
-                pass
-        elif DEVICE.type == "cuda":
-            torch.cuda.empty_cache()
-
-    def unload(self) -> None:
-        """Explicitly unloads the active model and flushes device memory."""
-        with self._lock:
-            if self.model is not None:
-                del self.model
-                self.model = None
-                self.active_model_key = None
-            self.flush_device_memory()
-
-    def get_or_load(self, model_key: str) -> torch.nn.Module:
-        """
-        Returns the requested model instance, loading it into device memory if
-        it is not currently active.
-
-        Attempts an offline cache load (`local_files_only=True`) first so that
-        zero external network calls are made once weights are cached locally.
-        """
-        if model_key not in MODELS:
-            raise ValueError(f"Unsupported model key: {model_key}")
-
-        with self._lock:
-            # Fast path: requested backbone is already resident in memory.
-            if self.active_model_key == model_key and self.model is not None:
-                return self.model
-
-            # Evict currently loaded backbone before allocating a new one.
-            if self.model is not None:
-                print(f"[Memory] Evicting previous backbone ({self.active_model_key})...")
-                del self.model
-                self.model = None
-                self.active_model_key = None
-                self.flush_device_memory()
-
-            repo_id = MODELS[model_key]
-            print(f"[Model] Loading {repo_id} ({PRECISION_LABEL}) on {DEVICE_LABEL}...")
-
-            try:
-                loaded_model = AutoModelForImageSegmentation.from_pretrained(
-                    repo_id,
-                    trust_remote_code=True,
-                    local_files_only=True,
-                )
-                print(f"[Model] Loaded {repo_id} from local offline cache.")
-            except Exception:
-                print(
-                    f"[Model] {repo_id} not found in local cache. "
-                    "Downloading weights from Hugging Face Hub (one-time)..."
-                )
-                loaded_model = AutoModelForImageSegmentation.from_pretrained(
-                    repo_id,
-                    trust_remote_code=True,
-                    local_files_only=False,
-                )
-                print(f"[Model] Download complete for {repo_id}.")
-                compact_model_cache_fp16(repo_id)
-
-            loaded_model.to(device=DEVICE, dtype=DTYPE)
-            loaded_model.eval()
-
-            self.model = loaded_model
-            self.active_model_key = model_key
-            return self.model
-
-
-MANAGER = ModelManager()
-
-
-# ---------------------------------------------------------------------------
-# Computer Vision Post-Processing & Matting Pipeline
-# ---------------------------------------------------------------------------
-
-
-def decontaminate_edge_colors(
-    rgb_np: np.ndarray, alpha_np: np.ndarray
-) -> np.ndarray:
-    """
-    Removes background color bleed ("halos") from semi-transparent edge pixels.
-
-    Why this matters:
-    In natural images, boundary pixels along hair strands or soft edges are a
-    linear mixture of foreground color F and background color B:
-        I = alpha * F + (1 - alpha) * B
-    Simply attaching the predicted alpha mask to the original RGB pixels (`I`)
-    leaves `(1 - alpha) * B` visible when composited onto a new backdrop.
-
-    This function approximates local foreground color `F` in the transition band
-    (0.03 < alpha < 0.94) using a fast C-accelerated 5x5 morphological maximum
-    filter followed by a 3x3 box blur, blending the propagated foreground color
-    into semi-transparent edge pixels proportionally to their transparency.
-    """
-    alpha_norm = alpha_np.astype(np.float32) / 255.0
-
-    # Identify semi-transparent transition pixels (hair strands, soft object borders).
-    edge_mask = (alpha_norm > 0.03) & (alpha_norm < 0.94)
-    if not np.any(edge_mask):
-        return rgb_np
-
-    # Higher alpha pixels retain more of their original RGB; lower alpha pixels
-    # receive stronger foreground color propagation.
-    fg_weight = np.clip((alpha_norm - 0.5) * 2.0, 0.0, 1.0)[..., None]
-    rgb_float = rgb_np.astype(np.float32)
-
-    # Dilate nearby solid foreground colors outward and smooth transitions.
-    dilated_pil = Image.fromarray(rgb_np, mode="RGB").filter(
-        ImageFilter.MaxFilter(5)
-    ).filter(ImageFilter.BoxBlur(1))
-    smooth_fg = np.array(dilated_pil, dtype=np.float32)
-    dilated_pil.close()
-
-    blend_strength = (1.0 - fg_weight) * 0.65
-    cleaned_rgb = np.where(
-        edge_mask[..., None],
-        rgb_float * (1.0 - blend_strength) + smooth_fg * blend_strength,
-        rgb_float,
-    )
-    return np.clip(cleaned_rgb, 0, 255).astype(np.uint8)
-
-
-def suppress_color_spill(
-    rgb_np: np.ndarray, mask_pil: Image.Image, alpha_norm: np.ndarray
-) -> np.ndarray:
-    """
-    Neutralizes background color spill (rim reflections & color bounce) along
-    the outer boundary of the subject and inside semi-transparent glass/hair.
-
-    Algorithm:
-    1. Estimates the local removed background RGB color (`local_bg`) adjacent to
-       the subject via normalized box-filter convolution over background pixels (`alpha < 0.15`).
-    2. Computes a spill receiver weight map combining:
-       - The outer solid rim of the subject (via morphological erosion `MinFilter(15)`).
-       - Semi-transparent regions (`0.02 < alpha < 0.98`, such as hair, glass, or sheer fabric).
-    3. Projects each receiver pixel's chromatic vector (`RGB - Luma`) onto the local
-       background's chromatic vector (`B_local - B_luma`). Any positive chromatic alignment
-       (indicating background color bounce/spill) is subtracted while preserving 100% of
-       the pixel's original luminance and sharpness.
-    """
-    bg_mask = (alpha_norm < 0.15).astype(np.float32)
-    if not np.any(bg_mask > 0):
-        return rgb_np
-
-    rgb_float = rgb_np.astype(np.float32)
-
-    # Compute spatially-varying local background color via fast C-accelerated BoxBlur
-    bg_weight_u8 = (bg_mask * 255.0).astype(np.uint8)
-    bg_weight_blur = (
-        np.array(
-            Image.fromarray(bg_weight_u8, mode="L").filter(ImageFilter.BoxBlur(24)),
-            dtype=np.float32,
-        )
-        / 255.0
-    )
-
-    prem_bg_u8 = np.clip(rgb_float * bg_mask[..., None], 0, 255).astype(np.uint8)
-    prem_bg_blur = np.array(
-        Image.fromarray(prem_bg_u8, mode="RGB").filter(ImageFilter.BoxBlur(24)),
-        dtype=np.float32,
-    )
-
-    # Fall back to global median background color where local background weight is zero
-    global_bg = np.median(rgb_float[bg_mask > 0.5], axis=0)
-    valid_w = bg_weight_blur[..., None] > 0.02
-    local_bg = np.where(
-        valid_w,
-        prem_bg_blur / np.maximum(bg_weight_blur[..., None], 0.02),
-        global_bg,
-    )
-
-    # Build rim + semi-transparent receiver weight map
-    eroded_norm = (
-        np.array(mask_pil.filter(ImageFilter.MinFilter(15)), dtype=np.float32) / 255.0
-    )
-    solid_rim_weight = np.clip(alpha_norm - eroded_norm, 0.0, 1.0)
-    translucent_weight = np.clip(4.0 * alpha_norm * (1.0 - alpha_norm), 0.0, 1.0)
-    receiver_weight = np.clip(
-        np.maximum(solid_rim_weight * 0.7, translucent_weight * 0.85), 0.0, 1.0
-    ) * (alpha_norm > 0.02)
-
-    if not np.any(receiver_weight > 0.01):
-        return rgb_np
-
-    # Chromatic projection: isolate color cast without altering pixel luminance
-    fg_luma = np.mean(rgb_float, axis=-1, keepdims=True)
-    bg_luma = np.mean(local_bg, axis=-1, keepdims=True)
-    fg_chroma = rgb_float - fg_luma
-    bg_chroma = local_bg - bg_luma
-
-    bg_chroma_norm_sq = np.sum(bg_chroma * bg_chroma, axis=-1, keepdims=True) + 1e-5
-    proj = np.sum(fg_chroma * bg_chroma, axis=-1, keepdims=True) / bg_chroma_norm_sq
-    # Only subtract positive chromatic alignment (up to 100% of background chroma)
-    spill_amount = np.clip(proj, 0.0, 1.0) * receiver_weight[..., None]
-
-    despilled = rgb_float - spill_amount * bg_chroma
-    return np.clip(despilled, 0, 255).astype(np.uint8)
-
-
-# Cached raw outputs of the most recent segmentation job. Storing the
-# pre-refinement RGB and alpha lets /api/refine re-apply the edge filters
-# (defringe/despill) in ~20ms without re-running the neural network.
-_JOB_ID_SEQ = itertools.count(1)
-_LAST_JOB: dict[str, Any] = {}
-_LAST_JOB_LOCK = threading.Lock()
-
-
-def compose_rgba(
-    rgb_raw: np.ndarray, alpha_np: np.ndarray, defringe: bool, despill: bool
-) -> Image.Image:
-    """
-    Applies the optional edge-refinement filters onto the raw RGB + alpha and
-    composites the final 32-bit RGBA image. Runs in milliseconds (pure NumPy /
-    Pillow C filters) — no neural network involved.
-    """
-    if defringe:
-        rgb_np = decontaminate_edge_colors(rgb_raw, alpha_np)
-    else:
-        rgb_np = rgb_raw
-    if despill:
-        alpha_norm = alpha_np.astype(np.float32) / 255.0
-        mask_pil = Image.fromarray(alpha_np, mode="L")
-        try:
-            rgb_np = suppress_color_spill(rgb_np, mask_pil, alpha_norm)
-        finally:
-            mask_pil.close()
-    return Image.fromarray(np.dstack((rgb_np, alpha_np)), mode="RGBA")
-
-
-def segment_foreground(
-    raw_image: Image.Image,
-    tier: str = "general",
-    defringe: bool = True,
-    despill: bool = True,
-    matting: bool = False,
-    job_epoch: Optional[int] = None,
-) -> tuple[Image.Image, float, dict[str, Any], int]:
-    """
-    Executes the full background removal pipeline on a PIL image under a thread-safe
-    inference lock with cooperative cancellation checkpoints and explicit tensor cleanup.
-    """
-    if job_epoch is None:
-        job_epoch = MANAGER.cancel_epoch
-
-    norm_tier = "matting" if matting else normalize_tier_key(tier)
-    if norm_tier not in TIERS:
-        norm_tier = RECOMMENDED_TIER
-
-    tier_cfg = dict(TIERS[norm_tier])
-    model_key = tier_cfg["model_key"]
-
-    # Serialize GPU/MPS execution so cancelling and starting a new job never
-    # causes two concurrent forward passes or mid-pass model eviction.
-    with MANAGER.inference_lock:
-        MANAGER.check_cancelled(job_epoch)
-        model = MANAGER.get_or_load(model_key)
-        MANAGER.check_cancelled(job_epoch)
-
-        start_time = time.perf_counter()
-
-        oriented_image = ImageOps.exif_transpose(raw_image)
-        orig_w, orig_h = oriented_image.size
-        rgb_image = oriented_image.convert("RGB")
-        if oriented_image is not raw_image:
-            oriented_image.close()
-
-        if tier_cfg.get("dynamic"):
-            dyn_h, dyn_w = compute_dynamic_size(
-                orig_w, orig_h, int(tier_cfg["resolution"])
-            )
-            preprocess = get_preprocess_transform((dyn_h, dyn_w))
-            tier_cfg["sublabel"] = f"Dynamic / {dyn_w}x{dyn_h}"
-        else:
-            preprocess = get_preprocess_transform(int(tier_cfg["resolution"]))
-        input_tensor: Optional[torch.Tensor] = None
-        outputs: Any = None
-        pred_logits: Optional[torch.Tensor] = None
-        alpha_tensor: Optional[torch.Tensor] = None
-
-        try:
-            input_tensor = (
-                preprocess(rgb_image).unsqueeze(0).to(device=DEVICE, dtype=DTYPE)
-            )
-            MANAGER.check_cancelled(job_epoch)
-
-            with torch.no_grad():
-                outputs = model(input_tensor)
-                pred_logits = (
-                    outputs[-1] if isinstance(outputs, (list, tuple)) else outputs
-                )
-                alpha_tensor = pred_logits.float().sigmoid().cpu()
-
-            MANAGER.check_cancelled(job_epoch)
-
-            mask_pil = transforms.ToPILImage()(alpha_tensor[0].squeeze(0)).resize(
-                (orig_w, orig_h), resample=Image.Resampling.LANCZOS
-            )
-        finally:
-            # Explicitly release GPU/MPS tensors immediately after forward pass
-            del input_tensor, outputs, pred_logits, alpha_tensor
-
-        job_id = next(_JOB_ID_SEQ)
-        try:
-            MANAGER.check_cancelled(job_epoch)
-            alpha_np = np.array(mask_pil, dtype=np.uint8)
-            rgb_np_raw = np.array(rgb_image, dtype=np.uint8)
-
-            # Snapshot the raw RGB + alpha so /api/refine can re-apply the
-            # edge filters later without re-running inference.
-            with _LAST_JOB_LOCK:
-                _LAST_JOB["id"] = job_id
-                _LAST_JOB["rgb"] = rgb_np_raw
-                _LAST_JOB["alpha"] = alpha_np
-
-            MANAGER.check_cancelled(job_epoch)
-            result_image = compose_rgba(rgb_np_raw, alpha_np, defringe, despill)
-        finally:
-            mask_pil.close()
-            rgb_image.close()
-
-        elapsed_ms = (time.perf_counter() - start_time) * 1000.0
-        return result_image, elapsed_ms, tier_cfg, job_id
-
-
-# ---------------------------------------------------------------------------
-# FastAPI Application & HTTP Endpoints
-# ---------------------------------------------------------------------------
-
-
-@asynccontextmanager
-async def lifespan(_app: FastAPI):
-    """
-    Application lifespan hook. Preloads the recommended default model if cached
-    on disk, and ensures all device memory is flushed on server shutdown.
-    """
-    default_model_key = TIERS[RECOMMENDED_TIER]["model_key"]
-    if is_model_cached_locally(MODELS[default_model_key]):
-        threading.Thread(
-            target=lambda: MANAGER.get_or_load(default_model_key),
-            daemon=True,
-        ).start()
-    try:
-        yield
-    finally:
-        MANAGER.unload()
-
-
-app = FastAPI(
-    title="OpenBGR — Local Background Removal Studio",
-    description="Self-hosted, zero-telemetry dichotomous image segmentation powered by BiRefNet",
-    lifespan=lifespan,
+from openbgr import desktop as _desktop_mod
+from openbgr.api import (
+    api_cancel,
+    api_get_quick_action_config,
+    api_install_model,
+    api_open_cache_dir,
+    api_quick_action_install,
+    api_refine,
+    api_remove_bg,
+    api_run_quick_action,
+    api_save,
+    api_save_quick_action_config,
+    api_status,
+    api_uninstall_model,
+    app,
+    lifespan,
+    no_cache_static,
+    serve_favicon,
+    serve_index,
+)
+from openbgr.config import (
+    APP_CONFIG_DIR,
+    APP_ICON_PATH,
+    APP_VERSION,
+    BASE_DIR,
+    DEFAULT_QUICK_ACTION_CONFIG,
+    DEVICE,
+    DEVICE_LABEL,
+    DTYPE,
+    HOST_RAM_GB,
+    HR_RESOLUTION,
+    IMAGENET_MEAN,
+    IMAGENET_STD,
+    LEGACY_MATTING_REPO,
+    MODELS,
+    NOTIFIER_APP_PATH,
+    NOTIFIER_ICNS_PATH,
+    PRECISION_LABEL,
+    QUICK_ACTION_CONFIG_PATH,
+    RECOMMENDED_TIER,
+    STATIC_DIR,
+    SYSTEM_MEMORY_GB,
+    TIER_ALIASES,
+    TIERS,
+    WINDOW_STATE_PATH,
+    _dir_tree_bytes,
+    detect_compute_device,
+    ensure_app_icon,
+    format_device_label,
+    get_app_disk_bytes,
+    get_host_ram_gb,
+    get_system_memory_gb,
+    normalize_tier_key,
+    open_folder_in_file_manager,
+    select_recommended_tier,
+)
+from openbgr.desktop import (
+    _PENDING_OPEN_FILES,
+    _PENDING_OPEN_LOCK,
+    DesktopApi,
+    attach_window_state_persistence,
+    build_native_menus,
+    configure_macos_native_window_and_menus,
+    ensure_window_on_screen,
+    install_macos_open_documents_handler,
+    install_macos_open_files_delegate,
+    is_openbgr_server,
+    load_window_state,
+    open_fallback_app_window,
+    queue_open_files,
+    set_desktop_api,
+    set_macos_app_name,
+    wait_for_server,
+)
+from openbgr.models import (
+    MANAGER,
+    ModelManager,
+    compact_model_cache_fp16,
+    compute_dynamic_size,
+    get_model_cache_dir,
+    get_model_disk_bytes,
+    get_preprocess_transform,
+    is_model_cached_locally,
+)
+from openbgr.pipeline import (
+    _JOB_ID_SEQ,
+    _LAST_JOB,
+    _LAST_JOB_LOCK,
+    compose_rgba,
+    decontaminate_edge_colors,
+    segment_foreground,
+    suppress_color_spill,
+)
+from openbgr.quick_action import (
+    _choose_output_folder_native,
+    _choose_save_path_native,
+    _default_output_path,
+    _osascript_quote,
+    _powershell_quote,
+    _resolve_cli_output,
+    _with_output_suffix,
+    copy_png_bytes_to_clipboard,
+    cutout_filename_for,
+    encode_cutout_image,
+    ensure_macos_notifier_app,
+    format_quick_action_notification,
+    is_quick_action_installed,
+    load_quick_action_config,
+    run_cli,
+    run_quick_action,
+    sanitize_quick_action_config,
+    save_quick_action_config,
+    send_openbgr_notification,
+    set_quick_action_installed,
 )
 
+__all__ = [
+    "APP_CONFIG_DIR",
+    "APP_ICON_PATH",
+    "APP_VERSION",
+    "BASE_DIR",
+    "DEFAULT_QUICK_ACTION_CONFIG",
+    "DEVICE",
+    "DEVICE_LABEL",
+    "DTYPE",
+    "DesktopApi",
+    "HOST_RAM_GB",
+    "HR_RESOLUTION",
+    "IMAGENET_MEAN",
+    "IMAGENET_STD",
+    "LEGACY_MATTING_REPO",
+    "MANAGER",
+    "MODELS",
+    "ModelManager",
+    "NOTIFIER_APP_PATH",
+    "NOTIFIER_ICNS_PATH",
+    "PRECISION_LABEL",
+    "QUICK_ACTION_CONFIG_PATH",
+    "RECOMMENDED_TIER",
+    "STATIC_DIR",
+    "SYSTEM_MEMORY_GB",
+    "TIERS",
+    "TIER_ALIASES",
+    "WINDOW_STATE_PATH",
+    "_JOB_ID_SEQ",
+    "_LAST_JOB",
+    "_LAST_JOB_LOCK",
+    "_PENDING_OPEN_FILES",
+    "_PENDING_OPEN_LOCK",
+    "_choose_output_folder_native",
+    "_choose_save_path_native",
+    "_default_output_path",
+    "_dir_tree_bytes",
+    "_osascript_quote",
+    "_powershell_quote",
+    "_resolve_cli_output",
+    "_with_output_suffix",
+    "api_cancel",
+    "api_get_quick_action_config",
+    "api_install_model",
+    "api_open_cache_dir",
+    "api_quick_action_install",
+    "api_refine",
+    "api_remove_bg",
+    "api_run_quick_action",
+    "api_save",
+    "api_save_quick_action_config",
+    "api_status",
+    "api_uninstall_model",
+    "app",
+    "attach_window_state_persistence",
+    "build_native_menus",
+    "compact_model_cache_fp16",
+    "compose_rgba",
+    "compute_dynamic_size",
+    "configure_macos_native_window_and_menus",
+    "copy_png_bytes_to_clipboard",
+    "cutout_filename_for",
+    "decontaminate_edge_colors",
+    "detect_compute_device",
+    "encode_cutout_image",
+    "ensure_app_icon",
+    "ensure_macos_notifier_app",
+    "ensure_window_on_screen",
+    "format_device_label",
+    "format_quick_action_notification",
+    "get_app_disk_bytes",
+    "get_host_ram_gb",
+    "get_model_cache_dir",
+    "get_model_disk_bytes",
+    "get_preprocess_transform",
+    "get_system_memory_gb",
+    "install_macos_open_documents_handler",
+    "install_macos_open_files_delegate",
+    "is_model_cached_locally",
+    "is_openbgr_server",
+    "is_quick_action_installed",
+    "lifespan",
+    "load_quick_action_config",
+    "load_window_state",
+    "main",
+    "no_cache_static",
+    "normalize_tier_key",
+    "open_fallback_app_window",
+    "open_folder_in_file_manager",
+    "queue_open_files",
+    "run_cli",
+    "run_quick_action",
+    "sanitize_quick_action_config",
+    "save_quick_action_config",
+    "select_recommended_tier",
+    "send_openbgr_notification",
+    "serve_favicon",
+    "serve_index",
+    "set_desktop_api",
+    "set_macos_app_name",
+    "set_quick_action_installed",
+    "snapshot_download",
+    "suppress_color_spill",
+    "try_to_load_from_cache",
+    "wait_for_server",
+]
 
-@app.post("/api/cancel")
-def api_cancel() -> dict[str, Any]:
-    """Signals any queued or active segmentation job to abort at its next checkpoint."""
-    epoch = MANAGER.request_cancel()
-    return {"cancelled": True, "epoch": epoch}
+
+def _graceful_exit(_signum: int, _frame: Any) -> None:
+    """Immediately aborts active jobs, unloads GPU memory, and exits with zero zombie threads."""
+    MANAGER.request_cancel()
+    MANAGER.unload()
+    os._exit(0)
 
 
-_APP_DISK_CACHE: tuple[float, int] = (0.0, 0)
-_APP_DISK_LOCK = threading.Lock()
-
-
-def _dir_tree_bytes(root: Path, skip_top_dirs: set[str] | None = None) -> int:
-    """Recursively sums regular file sizes under `root` using fast `os.scandir`."""
-    total = 0
-    stack: list[tuple[Path, bool]] = [(root, True)]
-    while stack:
-        current, is_top = stack.pop()
-        try:
-            with os.scandir(current) as it:
-                for entry in it:
-                    try:
-                        if entry.is_symlink():
-                            continue
-                        if entry.is_dir(follow_symlinks=False):
-                            if is_top and skip_top_dirs and entry.name in skip_top_dirs:
-                                continue
-                            stack.append((Path(entry.path), False))
-                        elif entry.is_file(follow_symlinks=False):
-                            total += entry.stat(follow_symlinks=False).st_size
-                    except OSError:
-                        continue
-        except OSError:
-            continue
-    return total
-
-
-def get_app_disk_bytes() -> int:
+def _start_signal_watchdog() -> None:
     """
-    Returns total disk usage of the OpenBGR application and its Python runtime
-    environment (`BASE_DIR` including `.venv`, plus `~/.openbgr`). Cached for
-    60 seconds so `/api/status` remains sub-millisecond.
+    When the native desktop window is open, the main thread is parked inside
+    Cocoa's run loop (`webview.start()`), so Python-level signal handlers
+    never execute and SIGTERM would be silently swallowed. `set_wakeup_fd`
+    pushes signal numbers into a pipe at C level; this daemon thread blocks
+    on the pipe and hard-exits on SIGINT/SIGTERM/SIGHUP regardless of what
+    the main thread is doing.
     """
-    global _APP_DISK_CACHE
-    now = time.monotonic()
-    with _APP_DISK_LOCK:
-        cached_at, cached_val = _APP_DISK_CACHE
-        if cached_val > 0 and (now - cached_at) < 60.0:
-            return cached_val
-
-    total = _dir_tree_bytes(BASE_DIR, skip_top_dirs={".git", "dist"})
-    cfg_dir = Path.home() / ".openbgr"
-    if cfg_dir.exists():
-        total += _dir_tree_bytes(cfg_dir)
-
-    with _APP_DISK_LOCK:
-        _APP_DISK_CACHE = (now, total)
-    return total
-
-
-def open_folder_in_file_manager(folder: Path) -> bool:
-    """Opens `folder` in the native OS file manager (Finder / Explorer / xdg-open)."""
     try:
-        folder.mkdir(parents=True, exist_ok=True)
-        resolved = str(folder.resolve())
-        sys_name = platform.system()
-        if sys_name == "Darwin":
-            subprocess.Popen(["open", resolved])
-            return True
-        if sys_name == "Windows":
-            if hasattr(os, "startfile"):
-                os.startfile(resolved)  # type: ignore[attr-defined]
-            else:
-                subprocess.Popen(["explorer", resolved])
-            return True
-        for cmd in ("xdg-open", "gio"):
-            if shutil.which(cmd):
-                args = [cmd, "open", resolved] if cmd == "gio" else [cmd, resolved]
-                subprocess.Popen(
-                    args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                )
-                return True
+        import select
+
+        r_fd, w_fd = os.pipe()
+        os.set_blocking(r_fd, False)
+        os.set_blocking(w_fd, False)
+        signal.set_wakeup_fd(w_fd)
+        lethal = {signal.SIGINT, signal.SIGTERM}
+        if hasattr(signal, "SIGHUP"):
+            lethal.add(signal.SIGHUP)
+
+        def _watch() -> None:
+            """Blocks on the wakeup pipe and force-exits on a lethal signal."""
+            try:
+                while True:
+                    select.select([r_fd], [], [])
+                    data = os.read(r_fd, 64)
+                    if data and any(b in lethal for b in data):
+                        MANAGER.request_cancel()
+                        MANAGER.unload()
+                        os._exit(0)
+            except Exception:
+                os._exit(0)
+
+        threading.Thread(target=_watch, daemon=True).start()
     except Exception:
-        return False
-    return False
+        pass
 
 
-@app.get("/api/status")
-def api_status() -> dict[str, Any]:
-    """
-    Returns detected compute hardware, floating-point precision mode, system RAM,
-    recommended model, and local offline cache availability and disk usage for each model.
-    """
-    tiers_status = {}
-    total_cache_bytes = 0
-    for key, cfg in TIERS.items():
-        size_bytes = get_model_disk_bytes(cfg["repo_id"])
-        total_cache_bytes += size_bytes
-        tiers_status[key] = {
-            **cfg,
-            "cached": is_model_cached_locally(cfg["repo_id"]),
-            "active": MANAGER.active_model_key == cfg["model_key"],
-            "size_bytes": size_bytes,
-        }
-
-    # Include any leftover legacy 1K matting cache in total disk usage so Uninstall All
-    # accurately reflects and reclaims it if present.
-    total_cache_bytes += get_model_disk_bytes(LEGACY_MATTING_REPO)
-    app_size_bytes = get_app_disk_bytes()
-    total_disk_bytes = total_cache_bytes + app_size_bytes
-
-    cache_path = Path(HF_HUB_CACHE)
-    try:
-        cache_display = f"~/{cache_path.relative_to(Path.home())}"
-    except ValueError:
-        cache_display = str(cache_path)
-
-    ram_gb_int = max(1, int(round(HOST_RAM_GB)))
-    return {
-        "device": DEVICE.type,
-        "device_label": DEVICE_LABEL,
-        "precision": PRECISION_LABEL,
-        "ram_gb": ram_gb_int,
-        "ram_label": f"{ram_gb_int} GB",
-        "recommended_tier": RECOMMENDED_TIER,
-        "active_model": MANAGER.active_model_key,
-        "version": APP_VERSION,
-        "total_cache_bytes": total_cache_bytes,
-        "app_size_bytes": app_size_bytes,
-        "total_disk_bytes": total_disk_bytes,
-        "cache_dir": cache_display,
-        "tiers": tiers_status,
-        "matting": tiers_status["matting"],
-    }
-
-
-@app.post("/api/open-cache-dir")
-def api_open_cache_dir() -> dict[str, Any]:
-    """Opens the Hugging Face Hub model cache directory in the system file manager."""
-    cache_path = Path(HF_HUB_CACHE)
-    opened = open_folder_in_file_manager(cache_path)
-    if not opened:
-        raise HTTPException(
-            status_code=500, detail="Could not open the cache folder in file manager."
-        )
-    return {"ok": True, "path": str(cache_path)}
-
-
-@app.post("/api/models/uninstall")
-def api_uninstall_model(target: str = Form(...)) -> dict[str, Any]:
-    """
-    Deletes cached Hugging Face weights for the requested model (`lite`, `general`,
-    `hr`, `portrait`, `matting`, `dynamic`, or `all`) and unloads it if active.
-    """
-    if MANAGER.inference_lock.locked():
-        raise HTTPException(
-            status_code=409,
-            detail="Cannot uninstall model weights while processing is running.",
-        )
-
-    cleaned = target.strip().lower()
-    if cleaned == "all":
-        model_keys = list(MODELS.keys())
-    else:
-        norm = normalize_tier_key(cleaned)
-        model_keys = [norm] if norm in MODELS else []
-
-    if not model_keys:
-        raise HTTPException(status_code=400, detail=f"Unknown model target '{target}'.")
-
-    repos_to_remove: list[str] = []
-    for m_key in model_keys:
-        if MANAGER.active_model_key == m_key:
-            MANAGER.unload()
-        repos_to_remove.append(MODELS[m_key])
-        if m_key == "matting":
-            repos_to_remove.append(LEGACY_MATTING_REPO)
-
-    freed_bytes = 0
-    for repo_id in repos_to_remove:
-        folder = get_model_cache_dir(repo_id)
-        freed_bytes += get_model_disk_bytes(repo_id)
-        if folder.exists():
-            shutil.rmtree(folder, ignore_errors=True)
-        lock_dir = Path(HF_HUB_CACHE) / ".locks" / folder.name
-        if lock_dir.exists():
-            shutil.rmtree(lock_dir, ignore_errors=True)
-
-    return {
-        "ok": True,
-        "freed_bytes": freed_bytes,
-        "status": api_status(),
-    }
-
-
-@app.post("/api/models/install")
-async def api_install_model(target: str = Form(...)) -> dict[str, Any]:
-    """
-    Downloads and caches the requested Hugging Face model checkpoint (`lite`,
-    `general`, `hr`, `portrait`, `matting`, or `dynamic`) in the background and
-    compacts any FP32 weights to FP16 on disk.
-    """
-    norm = normalize_tier_key(target)
-    if norm not in MODELS:
-        raise HTTPException(status_code=400, detail=f"Unknown model target '{target}'.")
-
-    repo_id = MODELS[norm]
-
-    def _download() -> None:
-        """Blocking download + FP16 compaction, run in a worker thread."""
-        snapshot_download(repo_id=repo_id)
-        compact_model_cache_fp16(repo_id)
-
-    try:
-        await asyncio.to_thread(_download)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to download {repo_id}: {exc}"
-        ) from exc
-
-    return {
-        "ok": True,
-        "status": api_status(),
-    }
-
-
-@app.post("/api/save")
-async def api_save(
-    directory: str = Form(...),
-    filename: str = Form(...),
-    file: UploadFile = File(...),
-) -> dict[str, Any]:
-    """
-    Writes a processed image into a user-chosen output directory (batch mode).
-    The filename is sanitized to a plain basename and name collisions are
-    auto-renamed (`name.png` -> `name-1.png`, `name-2.png`, ...).
-    """
-    dest_dir = Path(directory).expanduser()
-    if not dest_dir.is_dir():
-        raise HTTPException(status_code=400, detail="Output folder does not exist.")
-    safe_name = Path(filename).name.strip()
-    if not safe_name or safe_name in (".", ".."):
-        raise HTTPException(status_code=400, detail="Invalid filename.")
-
-    target = dest_dir / safe_name
-    if target.exists():
-        stem, suffix = target.stem, target.suffix
-        counter = 1
-        while (dest_dir / f"{stem}-{counter}{suffix}").exists():
-            counter += 1
-        target = dest_dir / f"{stem}-{counter}{suffix}"
-
-    data = await file.read()
-    target.write_bytes(data)
-    return {"ok": True, "path": str(target), "name": target.name}
-
-
-@app.post("/api/remove-bg")
-async def api_remove_bg(
-    file: UploadFile = File(...),
-    tier: str = Form("general"),
-    defringe: bool = Form(True),
-    despill: bool = Form(True),
-    matting: bool = Form(False),
-) -> Response:
-    """
-    Accepts an uploaded image file and returns a full-resolution, lossless
-    32-bit RGBA PNG along with performance telemetry HTTP headers.
-    """
-    norm_tier = "matting" if matting else normalize_tier_key(tier)
-    if norm_tier not in TIERS:
-        raise HTTPException(status_code=400, detail=f"Invalid model preset '{tier}'.")
-
-    job_epoch = MANAGER.cancel_epoch
-    raw_bytes = await file.read()
-    await file.close()
-    if not raw_bytes:
-        raise HTTPException(status_code=400, detail="Uploaded image file is empty.")
-
-    pil_img: Optional[Image.Image] = None
-    try:
-        pil_img = Image.open(io.BytesIO(raw_bytes))
-        pil_img.load()
-    except Exception as exc:
-        if pil_img is not None:
-            pil_img.close()
-        raise HTTPException(
-            status_code=400, detail=f"Unable to decode image file: {exc}"
-        ) from exc
-    finally:
-        del raw_bytes
-
-    result_img: Optional[Image.Image] = None
-    try:
-        result_img, elapsed_ms, tier_cfg, job_id = await asyncio.to_thread(
-            segment_foreground,
-            pil_img,
-            tier,
-            defringe,
-            despill,
-            matting,
-            job_epoch,
-        )
-    except InterruptedError as exc:
-        raise HTTPException(status_code=499, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500, detail=f"Segmentation pipeline failed: {exc}"
-        ) from exc
-    finally:
-        pil_img.close()
-
-    output_buffer = io.BytesIO()
-    try:
-        result_img.save(output_buffer, format="PNG", compress_level=1)
-        png_bytes = output_buffer.getvalue()
-        img_w, img_h = result_img.width, result_img.height
-    finally:
-        output_buffer.close()
-        if result_img is not None:
-            result_img.close()
-
-    telemetry_headers = {
-        "X-Inference-Time-Ms": f"{elapsed_ms:.1f}",
-        "X-Tier-Used": f"{tier_cfg['label']} ({tier_cfg['sublabel']})",
-        "X-Device": f"{DEVICE_LABEL} / {PRECISION_LABEL}",
-        "X-Image-Width": str(img_w),
-        "X-Image-Height": str(img_h),
-        "X-Refine-Job-Id": str(job_id),
-        "Access-Control-Expose-Headers": (
-            "X-Inference-Time-Ms, X-Tier-Used, X-Device, X-Image-Width, "
-            "X-Image-Height, X-Refine-Job-Id"
+def build_arg_parser() -> argparse.ArgumentParser:
+    """Builds the CLI / desktop launcher argument parser."""
+    parser = argparse.ArgumentParser(
+        prog="OpenBGR",
+        description=(
+            "Local AI background removal studio. With file arguments (or via the "
+            "OS 'Open With' mechanism) the app opens and loads the images; with "
+            "--cli it processes them headlessly and exits."
         ),
-    }
-    safe_headers = {
-        k: v.encode("latin-1", errors="ignore").decode("latin-1")
-        for k, v in telemetry_headers.items()
-    }
-    return Response(
-        content=png_bytes,
-        media_type="image/png",
-        headers=safe_headers,
     )
+    parser.add_argument(
+        "files",
+        nargs="*",
+        help="Image files to open in the GUI (or to process when --cli is given).",
+    )
+    parser.add_argument(
+        "--cli",
+        action="store_true",
+        help="Process the given image files headlessly and exit (no window).",
+    )
+    parser.add_argument(
+        "--quick-action",
+        action="store_true",
+        help="Process the given image files using the user's Quick Action settings and exit.",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        nargs="?",
+        const="ASK",
+        default=None,
+        metavar="PATH",
+        help=(
+            "CLI output: a file (single input) or directory (multi input). "
+            "Omit to write '<name>-cutout.png' beside each source, or pass -o "
+            "with no value to prompt with a native Save dialog."
+        ),
+    )
+    parser.add_argument(
+        "--tier",
+        default=None,
+        metavar="TIER",
+        help=(
+            "Model preset for --cli: "
+            + ", ".join(sorted(TIERS.keys()))
+            + " (legacy aliases accepted; default: hardware-recommended tier)."
+        ),
+    )
+    parser.add_argument(
+        "--format",
+        default="png",
+        choices=["png", "webp", "jpg", "mask"],
+        help="Output format for --cli (png, webp, jpg, mask).",
+    )
+    parser.add_argument(
+        "--matting",
+        action="store_true",
+        help="Use the soft-alpha matting pipeline for --cli.",
+    )
+    parser.add_argument(
+        "--no-defringe",
+        dest="defringe",
+        action="store_false",
+        default=True,
+        help="Disable edge color defringing for --cli.",
+    )
+    parser.add_argument(
+        "--no-despill",
+        dest="despill",
+        action="store_false",
+        default=True,
+        help="Disable color-spill suppression for --cli.",
+    )
+    return parser
 
 
-@app.post("/api/refine")
-async def api_refine(
-    job_id: int = Form(...),
-    defringe: bool = Form(True),
-    despill: bool = Form(True),
-) -> Response:
-    """
-    Re-applies the edge-refinement filters (defringe/despill) onto the cached
-    raw RGB + alpha of the last completed segmentation job — a pure
-    post-processing pass that skips re-running the neural network entirely.
-    Returns HTTP 409 when the referenced job is no longer the latest one.
-    """
+def main(argv: list[str] | None = None) -> None:
+    """Entrypoint for CLI, Quick Action, and native desktop / browser studio modes."""
+    parser = build_arg_parser()
+    args, _unknown = parser.parse_known_args(argv)
 
-    def _render() -> tuple[bytes, int, int]:
-        """Re-composes the cached job's RGBA under a lock; raises LookupError if stale."""
-        with _LAST_JOB_LOCK:
-            job = dict(_LAST_JOB)
-        if job.get("id") != job_id:
-            raise LookupError
-        result_img = compose_rgba(job["rgb"], job["alpha"], defringe, despill)
-        buf = io.BytesIO()
-        try:
-            result_img.save(buf, format="PNG", compress_level=1)
-            return buf.getvalue(), result_img.width, result_img.height
-        finally:
-            buf.close()
-            result_img.close()
+    if args.tier is not None:
+        norm_tier = normalize_tier_key(args.tier)
+        if norm_tier not in TIERS:
+            parser.error(
+                f"invalid --tier value '{args.tier}' "
+                f"(choose from: {', '.join(sorted(TIERS.keys()))})"
+            )
+        args.tier = norm_tier
 
-    try:
-        png_bytes, img_w, img_h = await asyncio.to_thread(_render)
-    except LookupError:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "This cutout is no longer the latest processed job — "
-                "click PROCESS IMAGE to re-apply edge filters."
-            ),
+    if args.quick_action:
+        res = run_quick_action(args.files)
+        raise SystemExit(0 if res.get("ok") or res.get("cancelled") else 1)
+
+    if args.cli:
+        raise SystemExit(
+            run_cli(
+                args.files,
+                args.output,
+                args.tier,
+                args.defringe,
+                args.despill,
+                args.matting,
+                fmt=args.format,
+            )
         )
 
-    return Response(
-        content=png_bytes,
-        media_type="image/png",
-        headers={
-            "X-Refine-Job-Id": str(job_id),
-            "X-Image-Width": str(img_w),
-            "X-Image-Height": str(img_h),
-            "Access-Control-Expose-Headers": (
-                "X-Refine-Job-Id, X-Image-Width, X-Image-Height"
-            ),
-        },
-    )
-
-
-@app.middleware("http")
-async def no_cache_static(request, call_next):
-    """Forces revalidation on the page shell so fresh edits reach the WebView."""
-    response = await call_next(request)
-    if request.url.path == "/" or request.url.path.startswith("/static/"):
-        response.headers["Cache-Control"] = "no-cache"
-    return response
-
-
-@app.get("/")
-def serve_index() -> FileResponse:
-    """Serves the single-page studio interface."""
-    return FileResponse(STATIC_DIR / "index.html")
-
-
-@app.get("/favicon.ico")
-def serve_favicon() -> Response:
-    """Serves the OpenBGR squircle icon for browser tabs."""
-    icon_path = ensure_app_icon()
-    if icon_path and Path(icon_path).is_file():
-        return FileResponse(icon_path, media_type="image/png")
-    return Response(status_code=204)
-
-
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-
-
-# ---------------------------------------------------------------------------
-# Native Desktop Window (pywebview) & Chromeless Browser Fallback
-# ---------------------------------------------------------------------------
-
-
-class DesktopApi:
-    """
-    JavaScript-to-Python bridge exposed as `window.pywebview.api` when running
-    inside the native pywebview desktop window. Provides native OS file dialogs
-    (Open / Save As), native OS clipboard image copy/paste, window fullscreen
-    and theme synchronization, external browser links, and clean Quit.
-    """
-
-    # Safety cap for the base64 bridge payload when reading picked images (~64 MP photos are fine).
-    OPEN_DIALOG_MAX_BYTES = 48 * 1024 * 1024
-
-    def __init__(self) -> None:
-        """The pywebview window handle is attached after `create_window`."""
-        self.window: Any = None
-
-    @staticmethod
-    def _dialog_mode(webview_mod: Any, kind: str) -> Any:
-        """Resolves the open/save dialog constant across pywebview API versions."""
-        file_dialog = getattr(webview_mod, "FileDialog", None)
-        if file_dialog is not None and hasattr(file_dialog, kind):
-            return getattr(file_dialog, kind)
-        return getattr(webview_mod, f"{kind}_DIALOG")
-
-    def open_image_dialog(self) -> dict[str, Any]:
-        """Opens the native Open File dialog and returns selected images as base64."""
-        if self.window is None:
-            return {"cancelled": True}
-        try:
-            import webview
-
-            result = self.window.create_file_dialog(
-                self._dialog_mode(webview, "OPEN"),
-                allow_multiple=True,
-                file_types=(
-                    "Image Files (*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif;*.tif;*.tiff)",
-                    "All files (*.*)",
-                ),
-            )
-            if not result:
-                return {"cancelled": True}
-
-            paths = list(result) if isinstance(result, (list, tuple)) else [str(result)]
-            files_out: list[dict[str, str]] = []
-            for p_str in paths:
-                file_path = Path(p_str)
-                if not file_path.is_file():
-                    continue
-                data = file_path.read_bytes()
-                if len(data) > self.OPEN_DIALOG_MAX_BYTES:
-                    return {
-                        "cancelled": True,
-                        "error": f"'{file_path.name}' exceeds the 48 MB native-dialog limit.",
-                    }
-                files_out.append(
-                    {
-                        "name": file_path.name,
-                        "data_b64": base64.b64encode(data).decode("ascii"),
-                    }
-                )
-
-            if not files_out:
-                return {"cancelled": True}
-
-            return {"files": files_out}
-        except Exception as exc:
-            return {"cancelled": True, "error": str(exc)}
-
-    def save_file(self, data_base64: str, default_filename: str) -> dict[str, Any]:
-        """Opens a native OS Save dialog and writes the base64-encoded image to disk."""
-        if self.window is None:
-            return {"saved": False, "error": "Desktop window is not initialized."}
-        try:
-            import webview
-
-            dest = self.window.create_file_dialog(
-                self._dialog_mode(webview, "SAVE"),
-                save_filename=default_filename,
-            )
-            if not dest:
-                return {"saved": False, "cancelled": True}
-
-            target_path = dest[0] if isinstance(dest, (list, tuple)) else str(dest)
-            raw_bytes = base64.b64decode(data_base64)
-            Path(target_path).write_bytes(raw_bytes)
-            return {"saved": True, "path": target_path}
-        except Exception as exc:
-            return {"saved": False, "error": str(exc)}
-
-    def choose_output_dir(self) -> dict[str, Any]:
-        """Opens a native OS folder picker for direct-to-folder exports."""
-        if self.window is None:
-            return {"cancelled": True}
-        try:
-            import webview
-
-            result = self.window.create_file_dialog(
-                self._dialog_mode(webview, "FOLDER")
-            )
-            if not result:
-                return {"cancelled": True}
-            path = result[0] if isinstance(result, (list, tuple)) else str(result)
-            return {"cancelled": False, "path": str(path)}
-        except Exception as exc:
-            return {"cancelled": True, "error": str(exc)}
-
-    def copy_image(self, data_base64: str) -> dict[str, Any]:
-        """
-        Writes a base64-encoded 32-bit RGBA PNG directly to the native OS clipboard
-        across macOS (NSPasteboard), Windows (.NET Clipboard), and Linux (wl-copy/xclip).
-        """
-        try:
-            raw_bytes = base64.b64decode(data_base64)
-            sys_name = platform.system()
-
-            if sys_name == "Darwin":
-                import AppKit  # type: ignore
-                import Foundation  # type: ignore
-
-                pb = AppKit.NSPasteboard.generalPasteboard()
-                pb.clearContents()
-                ns_data = Foundation.NSData.dataWithBytes_length_(raw_bytes, len(raw_bytes))
-                ok = pb.setData_forType_(ns_data, AppKit.NSPasteboardTypePNG)
-                return {"copied": bool(ok)}
-
-            if sys_name == "Windows":
-                import clr  # type: ignore
-
-                clr.AddReference("System.Windows.Forms")
-                clr.AddReference("System.Drawing")
-                import System.Drawing as Drawing  # type: ignore
-                import System.IO as SysIO  # type: ignore
-                import System.Threading as SysThreading  # type: ignore
-                import System.Windows.Forms as WinForms  # type: ignore
-
-                err_holder: list[str] = []
-
-                def _set_win_clip() -> None:
-                    """Sets both PNG stream and bitmap clipboard formats (must run on an STA thread)."""
-                    try:
-                        ms = SysIO.MemoryStream(raw_bytes)
-                        bmp = Drawing.Bitmap(ms)
-                        data_obj = WinForms.DataObject()
-                        data_obj.SetData("PNG", False, ms)
-                        data_obj.SetImage(bmp)
-                        WinForms.Clipboard.SetDataObject(data_obj, True)
-                    except Exception as e:
-                        err_holder.append(str(e))
-
-                t = SysThreading.Thread(SysThreading.ThreadStart(_set_win_clip))
-                t.SetApartmentState(SysThreading.ApartmentState.STA)
-                t.Start()
-                t.Join(3000)
-                if err_holder:
-                    return {"copied": False, "error": err_holder[0]}
-                return {"copied": True}
-
-            # Linux (Wayland wl-copy or X11 xclip)
-            for cmd in (
-                ["wl-copy", "--type", "image/png"],
-                ["xclip", "-selection", "clipboard", "-t", "image/png", "-i"],
-            ):
-                if shutil.which(cmd[0]):
-                    proc = subprocess.run(cmd, input=raw_bytes, check=False, timeout=4)
-                    if proc.returncode == 0:
-                        return {"copied": True}
-
-            return {"copied": False, "error": "No native clipboard utility found."}
-        except Exception as exc:
-            return {"copied": False, "error": str(exc)}
-
-    def read_clipboard_image(self) -> dict[str, Any]:
-        """
-        Reads an image (or an image file copied in Finder / File Explorer) from
-        the native OS clipboard and returns it as base64 PNG bytes.
-        """
-        try:
-            from PIL import ImageGrab
-
-            grabbed = ImageGrab.grabclipboard()
-            if isinstance(grabbed, Image.Image):
-                buf = io.BytesIO()
-                try:
-                    grabbed.save(buf, format="PNG")
-                    return {
-                        "has_image": True,
-                        "name": "CLIPBOARD.PNG",
-                        "data_b64": base64.b64encode(buf.getvalue()).decode("ascii"),
-                    }
-                finally:
-                    buf.close()
-                    grabbed.close()
-
-            if isinstance(grabbed, (list, tuple)):
-                for item in grabbed:
-                    p = Path(str(item))
-                    if p.is_file() and p.suffix.lower() in {
-                        ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"
-                    }:
-                        data = p.read_bytes()
-                        if len(data) <= self.OPEN_DIALOG_MAX_BYTES:
-                            return {
-                                "has_image": True,
-                                "name": p.name,
-                                "data_b64": base64.b64encode(data).decode("ascii"),
-                            }
-        except Exception:
-            pass
-
-        # Linux fallback via wl-paste or xclip
-        if platform.system() == "Linux":
-            for cmd in (
-                ["wl-paste", "--type", "image/png"],
-                ["xclip", "-selection", "clipboard", "-t", "image/png", "-o"],
-            ):
-                if shutil.which(cmd[0]):
-                    try:
-                        proc = subprocess.run(
-                            cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=3
-                        )
-                        if proc.returncode == 0 and proc.stdout:
-                            return {
-                                "has_image": True,
-                                "name": "CLIPBOARD.PNG",
-                                "data_b64": base64.b64encode(proc.stdout).decode("ascii"),
-                            }
-                    except Exception:
-                        pass
-
-        return {"has_image": False}
-
-    def toggle_fullscreen(self) -> dict[str, Any]:
-        """Toggles native OS fullscreen mode on the desktop window."""
-        try:
-            if self.window is not None:
-                self.window.toggle_fullscreen()
-                return {"toggled": True}
-        except Exception as exc:
-            return {"toggled": False, "error": str(exc)}
-        return {"toggled": False}
-
-    def open_external(self, url: str) -> dict[str, Any]:
-        """Opens an external HTTP(S) link in the user's default system browser."""
-        if isinstance(url, str) and url.startswith(("https://", "http://")):
-            webbrowser.open(url)
-            return {"opened": True}
-        return {"opened": False}
-
-    def open_cache_dir(self) -> dict[str, Any]:
-        """Opens the Hugging Face model cache directory in the system file manager."""
-        cache_path = Path(HF_HUB_CACHE)
-        return {"opened": open_folder_in_file_manager(cache_path), "path": str(cache_path)}
-
-    def set_window_theme(self, theme: str) -> dict[str, Any]:
-        """Synchronizes the native OS window frame appearance with Dark or Light mode."""
-        if platform.system() == "Darwin" and self.window is not None:
-            try:
-                import AppKit  # type: ignore
-                from PyObjCTools import AppHelper  # type: ignore
-
-                def _apply() -> None:
-                    """Applies the NSAppearance on the AppKit main thread."""
-                    try:
-                        ns_win = getattr(self.window, "native", None)
-                        if ns_win is None:
-                            return
-                        appearance_name = (
-                            AppKit.NSAppearanceNameAqua
-                            if theme == "light"
-                            else AppKit.NSAppearanceNameDarkAqua
-                        )
-                        appearance = AppKit.NSAppearance.appearanceNamed_(appearance_name)
-                        if appearance is not None:
-                            ns_win.setAppearance_(appearance)
-                    except Exception:
-                        pass
-
-                AppHelper.callAfter(_apply)
-                return {"updated": True}
-            except Exception:
-                pass
-        return {"updated": False}
-
-    def quit(self) -> dict[str, Any]:
-        """
-        Cancels any active inference job, unloads GPU memory, and destroys the
-        native window so `webview.start()` exits cleanly.
-        """
-        MANAGER.request_cancel()
-        try:
-            if self.window is not None:
-                self.window.destroy()
-        except Exception:
-            pass
-        return {"quit": True}
-
-
-# ---------------------------------------------------------------------------
-# Native Window State Persistence, Icon & Menu Bar
-# ---------------------------------------------------------------------------
-
-# Per-user desktop preferences dir; survives app updates and keeps the repo clean.
-APP_CONFIG_DIR = Path.home() / ".openbgr"
-WINDOW_STATE_PATH = APP_CONFIG_DIR / "window.json"
-APP_ICON_PATH = APP_CONFIG_DIR / "icon.png"
-
-
-def ensure_app_icon() -> Optional[str]:
-    """
-    Generates the macOS-squircle OpenBGR icon in `~/.openbgr/icon.png`
-    so the native window, Dock, and task switcher display the OpenBGR mark.
-    Regenerates when the on-disk file predates the squircle design.
-    """
-    try:
-        icon_src = BASE_DIR / "icon_render.py"
-        if (
-            APP_ICON_PATH.exists()
-            and icon_src.exists()
-            and APP_ICON_PATH.stat().st_mtime < icon_src.stat().st_mtime
-        ):
-            APP_ICON_PATH.unlink()  # stale icon from an older design
-        if not APP_ICON_PATH.exists():
-            import sys
-
-            sys.path.insert(0, str(BASE_DIR))
-            import icon_render
-
-            APP_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-            img = icon_render.render_icon(512)
-            img.save(APP_ICON_PATH, format="PNG")
-            img.close()
-        return str(APP_ICON_PATH)
-    except Exception:
-        return None
-
-
-def load_window_state() -> dict[str, int]:
-    """Returns the last saved native window geometry (x, y, width, height)."""
-    try:
-        data = json.loads(WINDOW_STATE_PATH.read_text(encoding="utf-8"))
-        if isinstance(data, dict):
-            return {
-                k: int(data[k])
-                for k in ("x", "y", "width", "height")
-                if isinstance(data.get(k), (int, float))
-            }
-    except Exception:
-        pass
-    return {}
-
-
-def attach_window_state_persistence(window: Any) -> None:
-    """
-    Saves the window's position and size to `~/.openbgr/window.json` whenever it
-    is moved or resized (debounced), so the app restores its frame on next launch.
-    """
-    debounce_timer: list[Optional[threading.Timer]] = [None]
-
-    def _persist() -> None:
-        """Writes the current window frame to disk, ignoring IO failures."""
-        try:
-            APP_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-            WINDOW_STATE_PATH.write_text(
-                json.dumps(
-                    {
-                        "x": int(window.x),
-                        "y": int(window.y),
-                        "width": int(window.width),
-                        "height": int(window.height),
-                    }
-                ),
-                encoding="utf-8",
-            )
-        except Exception:
-            pass
-
-    def _schedule() -> None:
-        """Debounces move/resize events so rapid drags collapse into one write."""
-        if debounce_timer[0] is not None:
-            debounce_timer[0].cancel()
-        debounce_timer[0] = threading.Timer(0.4, _persist)
-        debounce_timer[0].daemon = True
-        debounce_timer[0].start()
-
-    try:
-        window.events.resized += lambda *a, **k: _schedule()
-        window.events.moved += lambda *a, **k: _schedule()
-    except Exception:
-        pass
-
-
-def ensure_window_on_screen(window: Any) -> None:
-    """
-    Moves the window back to the primary screen if its restored geometry lands
-    fully outside every connected display (e.g. a monitor was unplugged after
-    the position was saved).
-    """
-    def _clamp() -> None:
-        """Re-centers the window on the primary screen when fully off-screen."""
-        try:
-            import webview
-
-            wx, wy = int(window.x), int(window.y)
-            ww, wh = int(window.width), int(window.height)
-            screens = getattr(webview, "screens", [])
-            on_screen = any(
-                wx < s.x + s.width
-                and wx + ww > s.x
-                and wy < s.y + s.height
-                and wy + wh > s.y
-                for s in screens
-            )
-            if not on_screen and screens:
-                primary = screens[0]
-                window.move(
-                    primary.x + max(0, (primary.width - ww) // 2),
-                    primary.y + max(0, (primary.height - wh) // 2),
-                )
-        except Exception:
-            pass
-
-    try:
-        window.events.shown += lambda *a, **k: _clamp()
-    except Exception:
-        pass
-
-
-def set_macos_app_name(name: str) -> None:
-    """
-    Renames the macOS menu-bar application name from "Python" to `name` and
-    updates the bundle metadata before NSApplication finishes launching.
-    """
-    if platform.system() != "Darwin":
-        return
-    try:
-        import Foundation  # type: ignore
-
-        Foundation.NSProcessInfo.processInfo().setProcessName_(name)
-        bundle = Foundation.NSBundle.mainBundle()
-        for info_dict in (
-            bundle.infoDictionary(),
-            bundle.localizedInfoDictionary(),
-        ):
-            if info_dict is not None:
-                info_dict["CFBundleName"] = name
-                info_dict["CFBundleDisplayName"] = name
-                info_dict["CFBundleShortVersionString"] = APP_VERSION
-                info_dict["CFBundleVersion"] = APP_VERSION
-                info_dict["CFBundleGetInfoString"] = f"{name} {APP_VERSION}"
-                info_dict["NSHumanReadableCopyright"] = (
-                    f"{name} — Local AI Background Removal Studio"
-                )
-    except Exception:
-        pass
-
-
-def build_native_menus(window: Any) -> list[Any]:
-    """
-    Builds the native OS menu bar for macOS and Linux.
-
-    On macOS, `Menu("__app__", ...)` injects items directly into the primary
-    "OpenBGR" application menu (between About and Services), while setting
-    `webview.settings["SHOW_DEFAULT_MENUS"] = False` prevents pywebview from
-    adding duplicate Edit and View menus.
-
-    Note: MenuAction titles intentionally use Unicode ellipsis (`…`) and em-dashes
-    (`—`) instead of ASCII periods (`.`) or parentheses (`()`), because Linux GTK's
-    `Gio.SimpleAction` detailed-action parser treats `.` and `(...)` as GVariant
-    action parameters and disables items that contain them.
-    """
-    from webview.menu import Menu, MenuAction, MenuSeparator
-
-    def call(fn: str):
-        """Wraps a `window.openBGR.*` JS invocation in a native-menu-safe closure."""
-        def _run() -> None:
-            """Menu-action thunk: evaluates the JS handler, ignoring bridge failures."""
-            try:
-                window.evaluate_js(f"window.openBGR && window.openBGR.{fn}")
-            except Exception:
-                pass
-
-        return _run
-
-    def toggle_fs() -> None:
-        """Toggles the native window between windowed and full-screen mode."""
-        try:
-            window.toggle_fullscreen()
-        except Exception:
-            pass
-
-    def quit_app() -> None:
-        """Cancels any in-flight job before tearing the window down."""
-        MANAGER.request_cancel()
-        try:
-            window.destroy()
-        except Exception:
-            pass
-
-    app_menu = Menu(
-        "__app__",
-        [
-            MenuAction("Preferences…", call("openSettings('preferences')")),
-        ],
-    )
-
-    file_items: list[Any] = [
-        MenuAction("New Tab", call("newTab()")),
-        MenuAction("Open Image…", call("openImage()")),
-        MenuAction("Batch Process Images…", call("startBatch()")),
-        MenuSeparator(),
-        MenuAction("Export Image…", call("exportImage()")),
-        MenuSeparator(),
-        MenuAction("Close Tab", call("closeActiveTab()")),
-    ]
-    if platform.system() != "Darwin":
-        file_items.extend(
-            [
-                MenuSeparator(),
-                MenuAction("Preferences…", call("openSettings('preferences')")),
-                MenuSeparator(),
-                MenuAction("Quit OpenBGR", quit_app),
-            ]
-        )
-    file_menu = Menu("File", file_items)
-
-    edit_menu = Menu(
-        "Edit",
-        [
-            MenuAction("Copy Cutout", call("copyImage()")),
-            MenuAction("Paste Image", call("pasteImage()")),
-            MenuSeparator(),
-            MenuAction("Cancel Processing", call("cancelProcessing()")),
-        ],
-    )
-
-    view_menu = Menu(
-        "View",
-        [
-            MenuAction("Split Comparison", call("setView('split')")),
-            MenuAction("Cutout Only", call("setView('cutout')")),
-            MenuAction("Original Only", call("setView('original')")),
-            MenuSeparator(),
-            MenuAction("Zoom In", call("zoomIn()")),
-            MenuAction("Zoom Out", call("zoomOut()")),
-            MenuAction("Actual Size", call("zoomReset()")),
-            MenuSeparator(),
-            MenuAction("Toggle 4x Loupe", call("toggleLoupe()")),
-            MenuSeparator(),
-            MenuAction("Light Mode", call("toggleTheme()")),
-            MenuAction("Toggle Full Screen", toggle_fs),
-        ],
-    )
-
-    model_menu = Menu(
-        "Model",
-        [
-            MenuAction("Lite - 1K Fast", call("selectPreset('lite')")),
-            MenuAction("General - 1K Studio", call("selectPreset('general')")),
-            MenuAction("Ultra HR - 2K Detail", call("selectPreset('hr')")),
-            MenuAction("Portrait - 1K People", call("selectPreset('portrait')")),
-            MenuAction("Matting - 2K Soft Alpha", call("selectPreset('matting')")),
-            MenuAction("Dynamic - Native Ratio", call("selectPreset('dynamic')")),
-            MenuSeparator(),
-            MenuAction("Defringe Edges", call("toggleDefringe()")),
-            MenuAction("Suppress Color Spill", call("toggleDespill()")),
-            MenuSeparator(),
-            MenuAction("Re-Run Segmentation", call("rerunSegmentation()")),
-            MenuSeparator(),
-            MenuAction("Manage Model Storage…", call("openSettings('models')")),
-        ],
-    )
-
-    help_menu = Menu(
-        "Help",
-        [
-            MenuAction("Preferences…", call("openSettings('preferences')")),
-            MenuAction("About OpenBGR…", call("openSettings('about')")),
-            MenuSeparator(),
-            MenuAction(
-                "OpenBGR on GitHub",
-                lambda: webbrowser.open("https://github.com/markoshaq/OpenBGR"),
-            ),
-        ],
-    )
-
-    return [app_menu, file_menu, edit_menu, view_menu, model_menu, help_menu]
-
-
-def configure_macos_native_window_and_menus(window: Any) -> None:
-    """
-    Enhances the macOS Cocoa NSMenu and NSWindow once the window is shown:
-    1. Attaches native Cocoa keyboard shortcuts (`keyEquivalent`) to menu items
-       so macOS displays `⌘O`, `⌘E`, `⌘W`, `⌘,`, `⌘1`/`⌘2`/`⌘3`, `⌘+`/`⌘-`/`⌘0`,
-       and `⌃⌘F` in the menu bar — and intercepts `⌘W` to close the active tab
-       instead of closing the entire window.
-    2. Wires the top "About OpenBGR" item in the macOS application menu to open
-       the in-app About / System Info dialog.
-    3. Sets the NSWindow appearance to DarkAqua by default.
-    """
-    if platform.system() != "Darwin":
-        return
-
-    def _enhance() -> None:
-        """Deferred post-show enhancement; imports Cocoa lazily and fails soft."""
-        try:
-            import AppKit  # type: ignore
-            from PyObjCTools import AppHelper  # type: ignore
-            import webview.platforms.cocoa as cocoa_mod  # type: ignore
-
-            def _on_main() -> None:
-                """Applies dark appearance, gesture config, and menu shortcuts on the main run loop."""
-                try:
-                    ns_win = getattr(window, "native", None)
-                    if ns_win is not None:
-                        dark = AppKit.NSAppearance.appearanceNamed_(
-                            AppKit.NSAppearanceNameDarkAqua
-                        )
-                        if dark is not None:
-                            ns_win.setAppearance_(dark)
-
-                        # Keep trackpad pinch available to JS GestureEvents by
-                        # disabling WKWebView's page-level magnification.
-                        def _find_wkwebview(view: Any) -> Any:
-                            """Depth-first search for the WKWebView inside the window's view tree."""
-                            if view is None:
-                                return None
-                            try:
-                                if str(view.className()) == "WKWebView":
-                                    return view
-                                for sub in view.subviews():
-                                    found = _find_wkwebview(sub)
-                                    if found is not None:
-                                        return found
-                            except Exception:
-                                return None
-                            return None
-
-                        wk_view = _find_wkwebview(ns_win.contentView())
-                        if wk_view is not None:
-                            try:
-                                wk_view.setAllowsMagnification_(False)
-                                wk_view.setMagnification_(1.0)
-                            except Exception:
-                                pass
-
-                    main_menu = AppKit.NSApplication.sharedApplication().mainMenu()
-                    if main_menu is None:
-                        return
-
-                    cmd_mask = AppKit.NSEventModifierFlagCommand
-                    shift_cmd = cmd_mask | AppKit.NSEventModifierFlagShift
-                    ctrl_cmd = cmd_mask | AppKit.NSEventModifierFlagControl
-
-                    shortcuts: dict[str, tuple[str, int]] = {
-                        "Preferences…": (",", cmd_mask),
-                        "New Tab": ("t", cmd_mask),
-                        "Open Image…": ("o", cmd_mask),
-                        "Batch Process Images…": ("b", cmd_mask),
-                        "Export Image…": ("e", cmd_mask),
-                        "Close Tab": ("w", cmd_mask),
-                        "Copy Cutout": ("c", shift_cmd),
-                        "Paste Image": ("v", cmd_mask),
-                        "Split Comparison": ("1", cmd_mask),
-                        "Cutout Only": ("2", cmd_mask),
-                        "Original Only": ("3", cmd_mask),
-                        "Zoom In": ("+", cmd_mask),
-                        "Zoom Out": ("-", cmd_mask),
-                        "Actual Size": ("0", cmd_mask),
-                        "Re-Run Segmentation": ("r", cmd_mask),
-                        "Toggle Full Screen": ("f", ctrl_cmd),
-                    }
-
-                    # Wire "About OpenBGR" in the app menu (index 0) to our in-app About modal
-                    app_menu_item = main_menu.itemAtIndex_(0)
-                    if app_menu_item and app_menu_item.submenu():
-                        app_sub = app_menu_item.submenu()
-                        if app_sub.numberOfItems() > 0:
-                            about_item = app_sub.itemAtIndex_(0)
-                            about_id = "openbgr.about"
-                            cocoa_mod.menu_handler.register_action(
-                                about_id,
-                                lambda: window.evaluate_js(
-                                    "window.openBGR && window.openBGR.openSettings('about')"
-                                ),
-                            )
-                            about_item.setTitle_("About OpenBGR")
-                            about_item.setAction_("handleMenuAction:")
-                            about_item.setTarget_(cocoa_mod.menu_handler)
-                            about_item.setRepresentedObject_(about_id)
-
-                    for i in range(main_menu.numberOfItems()):
-                        top_item = main_menu.itemAtIndex_(i)
-                        sub = top_item.submenu() if top_item else None
-                        if sub is None:
-                            continue
-                        for j in range(sub.numberOfItems()):
-                            mi = sub.itemAtIndex_(j)
-                            if mi is None:
-                                continue
-                            title = str(mi.title() or "")
-                            if title in shortcuts:
-                                key_eq, mask = shortcuts[title]
-                                mi.setKeyEquivalent_(key_eq)
-                                mi.setKeyEquivalentModifierMask_(mask)
-                except Exception:
-                    pass
-
-            AppHelper.callAfter(_on_main)
-        except Exception:
-            pass
-
-    try:
-        window.events.shown += lambda *a, **k: _enhance()
-    except Exception:
-        pass
-
-
-def wait_for_server(host: str, port: int, timeout_s: float = 15.0) -> bool:
-    """Polls until the local Uvicorn TCP socket is accepting connections."""
-    deadline = time.perf_counter() + timeout_s
-    while time.perf_counter() < deadline:
-        try:
-            with socket.create_connection((host, port), timeout=0.25):
-                return True
-        except OSError:
-            time.sleep(0.1)
-    return False
-
-
-def is_openbgr_server(url: str) -> bool:
-    """
-    Verifies that whatever is listening on the port is actually OpenBGR's API —
-    guards against opening a foreign service when the port is already in use.
-    """
-    try:
-        import urllib.request
-
-        with urllib.request.urlopen(f"{url}/api/status", timeout=2) as res:
-            payload = json.loads(res.read().decode("utf-8"))
-            return isinstance(payload, dict) and "tiers" in payload
-    except Exception:
-        return False
-
-
-def open_fallback_app_window(url: str) -> None:
-    """
-    Fallback if pywebview is unavailable (e.g. Linux without GTK WebKit).
-    Attempts to open a chromeless standalone `--app` window via Chrome, Edge,
-    or Brave before falling back to the default system web browser.
-    """
-    candidates = [
-        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-        "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
-        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-        "google-chrome",
-        "chromium",
-        "chromium-browser",
-        "brave-browser",
-        "microsoft-edge",
-        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-    ]
-    for binary in candidates:
-        resolved = binary if os.path.exists(binary) else shutil.which(binary)
-        if resolved:
-            try:
-                subprocess.Popen(
-                    [resolved, f"--app={url}", "--window-size=1380,860"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-                return
-            except Exception:
-                continue
-    webbrowser.open(url)
-
-
-if __name__ == "__main__":
-    def _graceful_exit(_signum: int, _frame: Any) -> None:
-        """Immediately aborts active jobs, unloads GPU memory, and exits with zero zombie threads."""
-        MANAGER.request_cancel()
-        MANAGER.unload()
-        os._exit(0)
-
-    def _start_signal_watchdog() -> None:
-        """
-        When the native desktop window is open, the main thread is parked inside
-        Cocoa's run loop (`webview.start()`), so Python-level signal handlers
-        never execute and SIGTERM would be silently swallowed. `set_wakeup_fd`
-        pushes signal numbers into a pipe at C level; this daemon thread blocks
-        on the pipe and hard-exits on SIGINT/SIGTERM/SIGHUP regardless of what
-        the main thread is doing.
-        """
-        try:
-            import select
-
-            r_fd, w_fd = os.pipe()
-            os.set_blocking(r_fd, False)
-            os.set_blocking(w_fd, False)
-            signal.set_wakeup_fd(w_fd)
-            lethal = {signal.SIGINT, signal.SIGTERM}
-            if hasattr(signal, "SIGHUP"):
-                lethal.add(signal.SIGHUP)
-
-            def _watch() -> None:
-                """Blocks on the wakeup pipe and force-exits on a lethal signal."""
-                try:
-                    while True:
-                        select.select([r_fd], [], [])
-                        data = os.read(r_fd, 64)
-                        if data and any(b in lethal for b in data):
-                            MANAGER.request_cancel()
-                            MANAGER.unload()
-                            os._exit(0)
-                except Exception:
-                    os._exit(0)
-
-            threading.Thread(target=_watch, daemon=True).start()
-        except Exception:
-            pass
+    if args.files:
+        queue_open_files(args.files)
 
     signal.signal(signal.SIGINT, _graceful_exit)
     signal.signal(signal.SIGTERM, _graceful_exit)
@@ -2170,7 +439,9 @@ if __name__ == "__main__":
     print("-" * 68)
     print("  OpenBGR // LOCAL AI SEGMENTATION STUDIO")
     print(f"  Compute   : {DEVICE_LABEL} ({PRECISION_LABEL})")
-    print(f"  Default   : {TIERS[RECOMMENDED_TIER]['label']} ({TIERS[RECOMMENDED_TIER]['sublabel']})")
+    print(
+        f"  Default   : {TIERS[RECOMMENDED_TIER]['label']} ({TIERS[RECOMMENDED_TIER]['sublabel']})"
+    )
     print(f"  Interface : {url}")
     print("-" * 68)
 
@@ -2183,14 +454,20 @@ if __name__ == "__main__":
     else:
         # Start FastAPI server in a background daemon thread and open native desktop window
         server_thread = threading.Thread(
-            target=lambda: uvicorn.run(app, host=host, port=port, log_level="warning"),
+            target=lambda: uvicorn.run(
+                app, host=host, port=port, log_level="warning"
+            ),
             daemon=True,
         )
         server_thread.start()
         if wait_for_server(host, port):
             if not is_openbgr_server(url):
-                print(f"[Server] Port {port} is already in use by another application.")
-                print("[Server] Close it or set PORT=<free port> and try again.")
+                print(
+                    f"[Server] Port {port} is already in use by another application."
+                )
+                print(
+                    "[Server] Close it or set PORT=<free port> and try again."
+                )
                 raise SystemExit(1)
         elif not server_thread.is_alive():
             print("[Server] Uvicorn failed to start — see errors above.")
@@ -2202,6 +479,9 @@ if __name__ == "__main__":
 
             webview.settings["SHOW_DEFAULT_MENUS"] = False
             api_bridge = DesktopApi()
+            _desktop_mod.set_desktop_api(api_bridge)
+            install_macos_open_documents_handler()
+            install_macos_open_files_delegate()
             icon_path = ensure_app_icon()
 
             window_kwargs: dict[str, Any] = {}
@@ -2255,6 +535,11 @@ if __name__ == "__main__":
             MANAGER.unload()
             os._exit(0)
         except Exception as exc:
-            print(f"[Desktop] Native window unavailable ({exc}); opening app window...")
+            print(
+                f"[Desktop] Native window unavailable ({exc}); opening app window..."
+            )
             open_fallback_app_window(url)
-            server_thread.join()
+
+
+if __name__ == "__main__":
+    main()

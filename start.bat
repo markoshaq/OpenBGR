@@ -14,8 +14,8 @@ set "PATH=%USERPROFILE%\.local\bin;%USERPROFILE%\.cargo\bin;%PATH%"
 
 if exist ".venv\.installed" (
     if exist ".venv\Scripts\python.exe" (
-        call ".venv\Scripts\python.exe" app.py
-        exit /b 0
+        call ".venv\Scripts\python.exe" app.py %*
+        exit /b !errorlevel!
     )
 )
 
@@ -67,5 +67,7 @@ if not exist ".venv\.installed" (
     type nul > ".venv\.installed"
 )
 
-call ".venv\Scripts\python.exe" app.py
-pause
+call ".venv\Scripts\python.exe" app.py %*
+set "RC=%ERRORLEVEL%"
+if "%~1"=="" pause
+exit /b %RC%

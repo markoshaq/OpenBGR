@@ -12,6 +12,7 @@ bundle already exists.
 """
 
 import platform
+import plistlib
 import shutil
 import subprocess
 import sys
@@ -51,6 +52,27 @@ def main() -> int:
             ["plutil", "-replace", key, "-string", value, str(info_plist)],
             check=False,
         )
+
+    # Register image UTIs so Finder offers "Open With → OpenBGR" for the dev
+    # bundle; files arrive through the 'odoc' AppleEvent handled in app.py.
+    try:
+        with open(info_plist, "rb") as fh:
+            plist = plistlib.load(fh)
+        plist["CFBundleDocumentTypes"] = [
+            {
+                "CFBundleTypeName": "Image",
+                "CFBundleTypeRole": "Viewer",
+                "LSHandlerRank": "Alternate",
+                "LSItemContentTypes": ["public.image"],
+            }
+        ]
+        # Keep Launch Services from running the universal stub under Rosetta.
+        plist["LSArchitecturePriority"] = ["arm64", "x86_64"]
+        plist["LSRequiresNativeExecution"] = True
+        with open(info_plist, "wb") as fh:
+            plistlib.dump(plist, fh)
+    except Exception:
+        pass
 
     # Make the bundled stub resolve the venv: pyvenv.cfg sets sys.prefix to
     # Contents/, and the lib symlink maps Contents/lib -> .venv/lib.

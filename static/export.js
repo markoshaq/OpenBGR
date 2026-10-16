@@ -188,6 +188,20 @@ export async function buildBatchExportBlob(blob, snap) {
   }
 }
 
+/**
+ * Settings signature identifying which export options a preview blob was
+ * rendered under — used to detect stale `state.previewBlob` contents.
+ */
+function exportSignature() {
+  return JSON.stringify({
+    format: state.exportFormat,
+    w: state.exportWidth,
+    h: state.exportHeight,
+    cutoff: state.shadowCutoff,
+    backdrop: state.activeBackdrop,
+  });
+}
+
 /** Re-renders the processed preview on canvas after backdrop/scale changes. */
 export async function updateLiveStagePreview() {
   if (
@@ -199,11 +213,15 @@ export async function updateLiveStagePreview() {
   }
 
   const token = ++state.previewRenderToken;
+  const signature = exportSignature();
+  const source = state.resultBlob;
   try {
     const blob = await buildExportBlob(state.exportFormat);
     if (token !== state.previewRenderToken) return;
 
     state.previewBlob = blob;
+    state.previewSignature = signature;
+    state.previewSource = source;
     if (
       state.previewObjectUrl &&
       state.previewObjectUrl !== state.resultObjectUrl
@@ -374,8 +392,15 @@ export async function saveBatchFile(dir, filename, blob) {
 export async function exportActiveImage() {
   if (!state.resultBlob) return;
   try {
+    // Reuse the live preview only when it was rendered under the exact current
+    // export settings and from the current cutout — otherwise re-encode so the
+    // downloaded file always matches its extension and options.
     const exportBlob =
-      state.previewBlob || (await buildExportBlob(state.exportFormat));
+      state.previewBlob &&
+      state.previewSignature === exportSignature() &&
+      state.previewSource === state.resultBlob
+        ? state.previewBlob
+        : await buildExportBlob(state.exportFormat);
     const suffix = state.exportFormat === "mask" ? "mask" : "cutout";
     const isNativeSize =
       state.exportWidth === state.naturalWidth &&

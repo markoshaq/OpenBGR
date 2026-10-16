@@ -1445,10 +1445,12 @@ body {
 }
 
 .status-center {
+  grid-column: 2;
   justify-content: center;
 }
 
 .status-right {
+  grid-column: 3;
   justify-content: flex-end;
   padding: 0 16px;
 }

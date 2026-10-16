@@ -19,6 +19,8 @@ const PREFS_SECTION_MAP = {
   appearance: "settings-preferences",
   general: "settings-general",
   behavior: "settings-general",
+  quickaction: "settings-quick-action",
+  "quick-action": "settings-quick-action",
   models: "settings-models",
   storage: "settings-models",
   system: "settings-system",
@@ -333,6 +335,77 @@ export function showModelContextMenu(key, x, y) {
   menu.style.top = `${Math.min(y, window.innerHeight - rect.height - 8)}px`;
 }
 
+/** Persists the current Quick Action preferences to `~/.openbgr/quick_action.json` via the server. */
+export async function syncQuickActionConfigToServer() {
+  try {
+    const fd = new FormData();
+    fd.append("tier", prefs.qaTier || "auto");
+    fd.append("save_mode", prefs.qaSaveMode || "same_folder");
+    fd.append("format", prefs.qaFormat || "png");
+    fd.append("edge_refine", String(Boolean(prefs.qaEdgeRefine)));
+    fd.append("copy_clipboard", String(Boolean(prefs.qaCopyClipboard)));
+    fd.append("notify", String(Boolean(prefs.qaNotify)));
+    const res = await fetch("/api/quick-action-config", {
+      method: "POST",
+      body: fd,
+    });
+    if (res.ok) {
+      const qa = await res.json();
+      if (state.serverStatus) {
+        state.serverStatus.quick_action = qa;
+      }
+      updateQuickActionInstallStatus();
+    }
+  } catch (_) {}
+}
+
+/** Updates the Quick Action system-integration status text and install/uninstall button. */
+export function updateQuickActionInstallStatus() {
+  const qa = state.serverStatus?.quick_action;
+  const installed = Boolean(qa?.installed);
+  if (dom.btnQaInstallToggle) {
+    dom.btnQaInstallToggle.disabled = false;
+    dom.btnQaInstallToggle.textContent = installed ? "UNINSTALL" : "INSTALL";
+  }
+  if (dom.qaInstallStatusDesc) {
+    dom.qaInstallStatusDesc.textContent = installed
+      ? 'Installed ("Remove Background with OpenBGR" is active in your right-click menu).'
+      : 'Adds "Remove Background with OpenBGR" when right-clicking one or more images.';
+  }
+}
+
+/** Installs or removes the OS right-click Quick Action via `/api/quick-action-install`. */
+export async function toggleQuickActionInstall() {
+  const currentlyInstalled = Boolean(state.serverStatus?.quick_action?.installed);
+  const action = currentlyInstalled ? "remove" : "install";
+  if (dom.btnQaInstallToggle) {
+    dom.btnQaInstallToggle.disabled = true;
+    dom.btnQaInstallToggle.textContent = currentlyInstalled
+      ? "REMOVING…"
+      : "INSTALLING…";
+  }
+  try {
+    const fd = new FormData();
+    fd.append("action", action);
+    const res = await fetch("/api/quick-action-install", {
+      method: "POST",
+      body: fd,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err?.detail || `HTTP ${res.status}`);
+    }
+    const payload = await res.json();
+    if (payload?.quick_action && state.serverStatus) {
+      state.serverStatus.quick_action = payload.quick_action;
+    }
+    updateQuickActionInstallStatus();
+  } catch (err) {
+    setError(err?.message || "Failed to update Quick Action integration.");
+    updateQuickActionInstallStatus();
+  }
+}
+
 /** Fetches `/api/status`, populates hardware/model/cache/system readouts, and syncs default model. */
 export async function syncServerStatus(isInitialLoad = false, onSelectTier = null) {
   try {
@@ -359,6 +432,10 @@ export async function syncServerStatus(isInitialLoad = false, onSelectTier = nul
           : recommended_tier || "general";
       onSelectTier(targetTier);
     }
+    if (isInitialLoad) {
+      syncQuickActionConfigToServer();
+    }
+    updateQuickActionInstallStatus();
     updateCacheIndicator();
   } catch (_) {
     dom.hwCompute.textContent = "LOCAL ENGINE";
@@ -405,6 +482,13 @@ export function applyPreferences(onSyncMenu) {
   if (dom.prefDefaultFormat) dom.prefDefaultFormat.value = prefs.defaultFormat;
   if (dom.prefDefaultBackdrop) dom.prefDefaultBackdrop.value = prefs.defaultBackdrop;
   dom.btnToggleConfirmClose?.classList.toggle("active", prefs.confirmClose);
+
+  if (dom.prefQaTier) dom.prefQaTier.value = prefs.qaTier || "auto";
+  if (dom.prefQaSaveMode) dom.prefQaSaveMode.value = prefs.qaSaveMode || "same_folder";
+  if (dom.prefQaFormat) dom.prefQaFormat.value = prefs.qaFormat || "png";
+  dom.btnToggleQaEdgeRefine?.classList.toggle("active", Boolean(prefs.qaEdgeRefine));
+  dom.btnToggleQaClipboard?.classList.toggle("active", Boolean(prefs.qaCopyClipboard));
+  dom.btnToggleQaNotify?.classList.toggle("active", Boolean(prefs.qaNotify));
 
   try {
     window.pywebview?.api?.set_window_theme?.(prefs.theme);

@@ -46,17 +46,38 @@ def copy_project_payload(dest_dir: Path) -> None:
         if src.exists():
             shutil.copy2(src, dest_dir / filename)
 
-    dev_bundle_script = ROOT_DIR / "scripts" / "make_dev_bundle.py"
-    if dev_bundle_script.exists():
-        scripts_dst = dest_dir / "scripts"
-        scripts_dst.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(dev_bundle_script, scripts_dst / "make_dev_bundle.py")
+    for script_name in (
+        "make_dev_bundle.py",
+        "context_process.sh",
+        "install_macos_quick_action.py",
+        "install_windows_context_menu.bat",
+        "uninstall_windows_context_menu.bat",
+        "install_linux_integration.sh",
+    ):
+        script_src = ROOT_DIR / "scripts" / script_name
+        if script_src.exists():
+            scripts_dst = dest_dir / "scripts"
+            scripts_dst.mkdir(parents=True, exist_ok=True)
+            dst = scripts_dst / script_name
+            shutil.copy2(script_src, dst)
+            make_executable(dst)
 
     static_src = ROOT_DIR / "static"
     static_dst = dest_dir / "static"
     if static_dst.exists():
         shutil.rmtree(static_dst)
     shutil.copytree(static_src, static_dst)
+
+    pkg_src = ROOT_DIR / "openbgr"
+    pkg_dst = dest_dir / "openbgr"
+    if pkg_dst.exists():
+        shutil.rmtree(pkg_dst)
+    if pkg_src.is_dir():
+        shutil.copytree(
+            pkg_src,
+            pkg_dst,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
 
 
 def make_executable(path: Path) -> None:
@@ -133,12 +154,34 @@ def build_macos_dmg() -> Path:
     <string>OpenBGR</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Image</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.image</string>
+            </array>
+        </dict>
+    </array>
     <key>CFBundleShortVersionString</key>
     <string>0.02</string>
     <key>CFBundleVersion</key>
     <string>0.02</string>
     <key>LSMinimumSystemVersion</key>
     <string>11.0</string>
+    <key>LSArchitecturePriority</key>
+    <array>
+        <string>arm64</string>
+        <string>x86_64</string>
+    </array>
+    <key>LSRequiresNativeExecution</key>
+    <true/>
     <key>NSHighResolutionCapable</key>
     <true/>
 </dict>
@@ -183,7 +226,13 @@ if [ ! -f "$VENV_DIR/.installed" ]; then
 fi
 
 cd "$DIR"
-exec "$VENV_DIR/bin/python" "$DIR/app.py" >>"$LOG_FILE" 2>&1
+# Launch Services can pick the x86_64 slice of the universal `bash` stub under
+# Rosetta; pin the interpreter to arm64 on Apple Silicon so MPS stays usable.
+PY="$VENV_DIR/bin/python"
+if [ "$(uname -m)" = "arm64" ] && command -v arch >/dev/null 2>&1; then
+  exec arch -arm64 "$PY" "$DIR/app.py" "$@" >>"$LOG_FILE" 2>&1
+fi
+exec "$PY" "$DIR/app.py" "$@" >>"$LOG_FILE" 2>&1
 """
     launcher_path = macos_dir / "OpenBGR"
     launcher_path.write_text(launcher_script, encoding="utf-8")
@@ -256,13 +305,22 @@ using System.IO;
 
 class OpenBGRLauncher {
     [STAThread]
-    static void Main() {
+    static void Main(string[] args) {
         string dir = AppDomain.CurrentDomain.BaseDirectory;
+        string argLine = "";
+        foreach (string a in args) argLine += " \"" + a.Replace("\"", "\"\"") + "\"";
         ProcessStartInfo psi = new ProcessStartInfo();
         psi.FileName = "cmd.exe";
-        psi.Arguments = "/c \"\"" + Path.Combine(dir, "start.bat") + "\"\"";
+        psi.Arguments = "/c \"\"" + Path.Combine(dir, "start.bat") + "\"" + argLine + "\"";
         psi.WorkingDirectory = dir;
         psi.UseShellExecute = false;
+        // Headless invocations (right-click "Remove background") must not flash
+        // a console window; GUI launches keep it so setup progress is visible.
+        bool headless = Array.Exists(args, a => a == "--quick-action" || a == "--cli");
+        if (headless) {
+            psi.CreateNoWindow = true;
+            psi.WindowStyle = ProcessWindowStyle.Hidden;
+        }
         Process.Start(psi);
     }
 }
@@ -304,7 +362,8 @@ def build_linux_release() -> Path:
 Type=Application
 Name=OpenBGR
 Comment=Local AI Background Removal Studio
-Exec=sh -c 'cd "$(dirname "$1")" && exec ./start.sh' _ %k
+Exec=sh -c 'cd "$(dirname "$1")" && shift && exec ./start.sh "$@"' _ %k %F
+MimeType=image/png;image/jpeg;image/webp;image/bmp;image/tiff;image/gif;
 Terminal=false
 Categories=Graphics;Photography;
 """

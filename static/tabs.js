@@ -314,6 +314,8 @@ export function resetToEmptyWorkspace() {
   state.resultBlob = null;
   state.refineJobId = null;
   state.previewBlob = null;
+  state.previewSignature = null;
+  state.previewSource = null;
   state.originalObjectUrl = null;
   state.resultObjectUrl = null;
   state.previewObjectUrl = null;
@@ -359,6 +361,8 @@ export async function switchToTab(tabId) {
   state.originalObjectUrl = tab.originalObjectUrl;
   state.resultBlob = tab.resultBlob;
   state.previewBlob = tab.previewBlob;
+  state.previewSignature = tab.previewSignature ?? null;
+  state.previewSource = tab.previewSource ?? null;
   state.resultObjectUrl = tab.resultObjectUrl;
   state.previewObjectUrl = tab.previewObjectUrl;
   state.naturalWidth = tab.naturalWidth;
@@ -746,6 +750,7 @@ export async function runSegmentation() {
     ) {
       URL.revokeObjectURL(state.previewObjectUrl);
     }
+    state.previewBlob = null;
     state.previewObjectUrl = null;
     if (state.resultObjectUrl) {
       URL.revokeObjectURL(state.resultObjectUrl);
@@ -825,6 +830,7 @@ export async function applyEdgeRefinement() {
     if (token !== state.refineToken) return;
 
     state.resultBlob = blob;
+    state.previewBlob = null;
     if (
       state.previewObjectUrl &&
       state.previewObjectUrl !== state.resultObjectUrl

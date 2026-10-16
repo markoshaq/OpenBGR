@@ -68,6 +68,12 @@ export function getDefaultPrefs() {
     defaultFormat: "png",
     defaultBackdrop: "checker",
     confirmClose: true,
+    qaTier: "auto",
+    qaSaveMode: "same_folder",
+    qaFormat: "png",
+    qaEdgeRefine: true,
+    qaCopyClipboard: false,
+    qaNotify: true,
   };
 }
 
@@ -84,6 +90,18 @@ const PREF_SCHEMA = {
     fallback: "checker",
   },
   confirmClose: { type: "boolean", fallback: true },
+  qaTier: {
+    values: ["auto", ...TIER_KEYS],
+    fallback: "auto",
+  },
+  qaSaveMode: {
+    values: ["same_folder", "ask"],
+    fallback: "same_folder",
+  },
+  qaFormat: { values: ["png", "webp", "jpg", "mask"], fallback: "png" },
+  qaEdgeRefine: { type: "boolean", fallback: true },
+  qaCopyClipboard: { type: "boolean", fallback: false },
+  qaNotify: { type: "boolean", fallback: true },
 };
 
 /** Validates a stored preference object against the schema; unknown/invalid values fall back to defaults. */
@@ -91,7 +109,11 @@ function sanitizePrefs(stored) {
   const clean = {};
   for (const [key, rule] of Object.entries(PREF_SCHEMA)) {
     let v = stored[key];
-    if (key === "defaultTier" && typeof v === "string" && v !== "auto") {
+    if (
+      (key === "defaultTier" || key === "qaTier") &&
+      typeof v === "string" &&
+      v !== "auto"
+    ) {
       v = normalizeTierKey(v);
     }
     if (rule.type === "boolean") {
@@ -150,6 +172,8 @@ export const state = {
   refineJobId: null,
   refineToken: 0,
   previewBlob: null,
+  previewSignature: null,
+  previewSource: null,
   originalObjectUrl: null,
   resultObjectUrl: null,
   previewObjectUrl: null,
@@ -230,6 +254,14 @@ export const dom = {
   prefDefaultTier: document.getElementById("prefDefaultTier"),
   prefDefaultFormat: document.getElementById("prefDefaultFormat"),
   prefDefaultBackdrop: document.getElementById("prefDefaultBackdrop"),
+  prefQaTier: document.getElementById("prefQaTier"),
+  prefQaSaveMode: document.getElementById("prefQaSaveMode"),
+  prefQaFormat: document.getElementById("prefQaFormat"),
+  btnToggleQaEdgeRefine: document.getElementById("btnToggleQaEdgeRefine"),
+  btnToggleQaClipboard: document.getElementById("btnToggleQaClipboard"),
+  btnToggleQaNotify: document.getElementById("btnToggleQaNotify"),
+  qaInstallStatusDesc: document.getElementById("qaInstallStatusDesc"),
+  btnQaInstallToggle: document.getElementById("btnQaInstallToggle"),
   btnOpenCacheDir: document.getElementById("btnOpenCacheDir"),
 
   fileInput: document.getElementById("fileInput"),
@@ -293,6 +325,8 @@ export function createTabRecord(overrides = {}) {
     resultObjectUrl: null,
     previewBlob: null,
     previewObjectUrl: null,
+    previewSignature: null,
+    previewSource: null,
     naturalWidth: 0,
     naturalHeight: 0,
     tier: state.tier,
@@ -344,6 +378,8 @@ export function saveStateToActiveTab() {
   tab.resultBlob = state.resultBlob;
   tab.refineJobId = state.refineJobId;
   tab.previewBlob = state.previewBlob;
+  tab.previewSignature = state.previewSignature;
+  tab.previewSource = state.previewSource;
   tab.resultObjectUrl = state.resultObjectUrl;
   tab.previewObjectUrl = state.previewObjectUrl;
   tab.naturalWidth = state.naturalWidth;

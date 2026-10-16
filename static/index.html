@@ -635,6 +635,7 @@
           <nav class="prefs-nav" aria-label="Preference sections">
             <button type="button" class="prefs-nav-item active" data-pane="settings-preferences">APPEARANCE</button>
             <button type="button" class="prefs-nav-item" data-pane="settings-general">GENERAL</button>
+            <button type="button" class="prefs-nav-item" data-pane="settings-quick-action">QUICK ACTION</button>
             <button type="button" class="prefs-nav-item" data-pane="settings-models">MODELS</button>
             <button type="button" class="prefs-nav-item" data-pane="settings-system">SYSTEM</button>
             <button type="button" class="prefs-nav-item" data-pane="settings-about">ABOUT</button>
@@ -707,7 +708,7 @@
                     <option value="png">.png</option>
                     <option value="webp">.webp</option>
                     <option value="jpg">.jpg</option>
-                    <option value="mask">.mask</option>
+                    <option value="mask">.png (Alpha Mask)</option>
                   </select>
                 </div>
                 <div class="pref-row">
@@ -721,6 +722,82 @@
                     <option value="#000000">Pure Black</option>
                     <option value="#18181b">Studio Dark Gray</option>
                   </select>
+                </div>
+              </div>
+            </section>
+
+            <!-- QUICK ACTION PANE -->
+            <section class="prefs-pane" id="settings-quick-action">
+              <div class="pane-heading">QUICK ACTION</div>
+              <div class="pref-card">
+                <div class="pref-row">
+                  <div class="pref-text">
+                    <span class="pref-label">QUICK ACTION MODEL</span>
+                    <span class="pref-desc">Model used when removing backgrounds from the right-click menu.</span>
+                  </div>
+                  <select class="studio-select pref-select" id="prefQaTier">
+                    <option value="auto">Auto (Recommended)</option>
+                    <option value="lite">Lite (BiRefNet_lite)</option>
+                    <option value="general">General (BiRefNet)</option>
+                    <option value="hr">Ultra HR (BiRefNet_HR)</option>
+                    <option value="portrait">Portrait (BiRefNet-portrait)</option>
+                    <option value="matting">Matting (BiRefNet_HR-matting)</option>
+                    <option value="dynamic">Dynamic (BiRefNet_dynamic)</option>
+                  </select>
+                </div>
+                <div class="pref-row">
+                  <div class="pref-text">
+                    <span class="pref-label">SAVE DESTINATION</span>
+                    <span class="pref-desc">Save beside the original image automatically or open a Save dialog.</span>
+                  </div>
+                  <select class="studio-select pref-select" id="prefQaSaveMode">
+                    <option value="same_folder">Same Folder as Original</option>
+                    <option value="ask">Ask Every Time (File Dialog)</option>
+                  </select>
+                </div>
+                <div class="pref-row">
+                  <div class="pref-text">
+                    <span class="pref-label">OUTPUT FORMAT</span>
+                    <span class="pref-desc">File format written by the right-click Quick Action.</span>
+                  </div>
+                  <select class="studio-select pref-select" id="prefQaFormat">
+                    <option value="png">.png (Transparent RGBA)</option>
+                    <option value="webp">.webp (Lossless Transparent)</option>
+                    <option value="jpg">.jpg (White Matte)</option>
+                    <option value="mask">.png (Alpha Mask)</option>
+                  </select>
+                </div>
+                <button type="button" class="pref-switch-row active" id="btnToggleQaEdgeRefine">
+                  <span class="pref-switch-text">
+                    <span class="pref-label">EDGE DEFRINGE &amp; DESPILL</span>
+                    <span class="pref-desc">Clean background color halos and rim spill along soft borders.</span>
+                  </span>
+                  <span class="toggle-switch" aria-hidden="true"><span class="toggle-knob"></span></span>
+                </button>
+                <button type="button" class="pref-switch-row" id="btnToggleQaClipboard">
+                  <span class="pref-switch-text">
+                    <span class="pref-label">COPY CUTOUT TO CLIPBOARD</span>
+                    <span class="pref-desc">Also copy single-image cutouts to the clipboard for instant pasting.</span>
+                  </span>
+                  <span class="toggle-switch" aria-hidden="true"><span class="toggle-knob"></span></span>
+                </button>
+                <button type="button" class="pref-switch-row active" id="btnToggleQaNotify">
+                  <span class="pref-switch-text">
+                    <span class="pref-label">COMPLETION NOTIFICATION</span>
+                    <span class="pref-desc">Show an OpenBGR desktop notification when background removal finishes.</span>
+                  </span>
+                  <span class="toggle-switch" aria-hidden="true"><span class="toggle-knob"></span></span>
+                </button>
+              </div>
+
+              <div class="pane-subheading">SYSTEM INTEGRATION</div>
+              <div class="pref-card">
+                <div class="pref-row">
+                  <div class="pref-text">
+                    <span class="pref-label">RIGHT-CLICK CONTEXT MENU</span>
+                    <span class="pref-desc" id="qaInstallStatusDesc">Adds "Remove Background with OpenBGR" when right-clicking one or more images.</span>
+                  </div>
+                  <button type="button" class="action-btn model-uninstall-btn" id="btnQaInstallToggle">INSTALL</button>
                 </div>
               </div>
             </section>
