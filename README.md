@@ -36,9 +36,9 @@ On first run the launcher sets up a standalone Python runtime and downloads the 
 
 - **OS:** macOS 11+, Windows 10+, or a modern Linux desktop (Wayland or X11).
 - **RAM:** 8 GB recommended for `General` and the 2K models; the `Lite` model runs comfortably on 4 GB.
-- **Disk:** ~2-3 GB for the provisioned Python runtime and PyTorch, plus ~85-425 MB per model you download.
+- **Disk:** ~2-3 GB for the provisioned Python runtime and PyTorch, plus ~170-845 MB per model you download (FP32 checkpoints are compacted to FP16 on disk, ~85-425 MB installed).
 - **GPU:** optional. CUDA and Apple MPS get `FP16` inference; everything also works on CPU.
-- No Python install needed — release builds bundle a runtime, and the source launcher auto-provisions one via `uv` if none is found.
+- No Python install needed: release builds bundle a runtime, and the source launcher auto-provisions one via `uv` if none is found.
 
 ### From source
 
@@ -118,10 +118,10 @@ When an OpenBGR window is already running, the context-menu action reuses it ove
 
 | Model | Checkpoint | Backbone | Native Resolution | FP16 Size | Best For |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Lite** (`lite`) | `ZhengPeng7/BiRefNet_lite` | Swin-T | `1024 × 1024` | ~85-170 MB | Quick batches, CPUs & integrated graphics |
+| **Lite** (`lite`) | `ZhengPeng7/BiRefNet_lite` | Swin-T | `1024 × 1024` | ~85 MB | Quick batches, CPUs & integrated graphics |
 | **General** (`general`, *Default*) | `ZhengPeng7/BiRefNet` | Swin-L | `1024 × 1024` | ~424 MB | Products, objects, animals & everyday photos |
 | **Ultra HR** (`hr`) | `ZhengPeng7/BiRefNet_HR` | Swin-L | `1536` / `2048` | ~424 MB | 4K/8K studio photos & micro-edge detail |
-| **Portrait** (`portrait`) | `ZhengPeng7/BiRefNet-portrait` | Swin-L | `1024 × 1024` | ~424 MB | People, headshots, flyaway hair & eyelashes |
+| **Portrait** (`portrait`) | `ZhengPeng7/BiRefNet-portrait` | Swin-L | `1024 × 1024` | ~425 MB (845 MB download) | People, headshots, flyaway hair & eyelashes |
 | **Matting** (`matting`) | `ZhengPeng7/BiRefNet_HR-matting` | Swin-L | `1536` / `2048` | ~424 MB | Glass, smoke, veils, sheer fabric & soft alpha |
 | **Dynamic** (`dynamic`) | `ZhengPeng7/BiRefNet_dynamic` | Swin-L | Up to `2048` (native ratio) | ~424 MB | Ultrawide panoramas & tall vertical banners |
 

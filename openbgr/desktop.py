@@ -74,7 +74,7 @@ def queue_open_files(paths: Any) -> None:
         _OPEN_FILES_RECEIVED += len(file_list)
     bridge = _DESKTOP_API
     if bridge is not None and bridge.window is not None:
-        # evaluate_js blocks on a semaphore until JS runs — calling it directly
+        # evaluate_js blocks on a semaphore until JS runs; calling it directly
         # from the main thread (odoc/delegate callbacks) would deadlock the run
         # loop, so the push happens on a daemon thread. The frontend's poll
         # covers the case where this races the page load.
@@ -481,7 +481,7 @@ def set_macos_app_name(name: str) -> None:
                 info_dict["CFBundleVersion"] = APP_VERSION
                 info_dict["CFBundleGetInfoString"] = f"{name} {APP_VERSION}"
                 info_dict["NSHumanReadableCopyright"] = (
-                    f"{name} — Local AI Background Removal Studio"
+                    f"{name} - Local AI Background Removal Studio"
                 )
     except Exception:
         pass
@@ -496,10 +496,10 @@ def build_native_menus(window: Any) -> list[Any]:
     `webview.settings["SHOW_DEFAULT_MENUS"] = False` prevents pywebview from
     adding duplicate Edit and View menus.
 
-    Note: MenuAction titles intentionally use Unicode ellipsis (`…`) and em-dashes
-    (`—`) instead of ASCII periods (`.`) or parentheses (`()`), because Linux GTK's
-    `Gio.SimpleAction` detailed-action parser treats `.` and `(...)` as GVariant
-    action parameters and disables items that contain them.
+    Note: MenuAction titles intentionally use Unicode ellipsis (`…`) instead of
+    ASCII periods, because Linux GTK's `Gio.SimpleAction` detailed-action parser
+    treats `.` and `(...)` as GVariant action parameters and disables items that
+    contain them.
     """
     from webview.menu import Menu, MenuAction, MenuSeparator
 
@@ -625,7 +625,7 @@ def configure_macos_native_window_and_menus(window: Any) -> None:
     Enhances the macOS Cocoa NSMenu and NSWindow once the window is shown:
     1. Attaches native Cocoa keyboard shortcuts (`keyEquivalent`) to menu items
       so macOS displays `⌘O`, `⌘E`, `⌘W`, `⌘,`, `⌘1`/`⌘2`/`⌘3`, `⌘+`/`⌘-`/`⌘0`,
-       and `⌃⌘F` in the menu bar — and intercepts `⌘W` to close the active tab
+       and `⌃⌘F` in the menu bar, and intercepts `⌘W` to close the active tab
        instead of closing the entire window.
     2. Wires the top "About OpenBGR" item in the macOS application menu to open
        the in-app About / System Info dialog.
@@ -825,7 +825,7 @@ def install_macos_open_documents_handler() -> None:
 
         # AppKit installs its own 'odoc' handler while NSApplication finishes
         # launching (it forwards to the app delegate, which pywebview does not
-        # implement for openFiles:) — re-register ours once that happens so the
+        # implement for openFiles:); re-register ours once that happens so the
         # event dispatches to us, both at launch and for "Open With" while running.
         class _LaunchObserver(Foundation.NSObject):  # type: ignore
             def didFinishLaunching_(self, _notif):
@@ -849,7 +849,7 @@ def install_macos_open_files_delegate() -> None:
     Subclasses pywebview's Cocoa `AppDelegate` before `webview.create_window`
     instantiates it, adding `application:openFiles:` / `openFile:` / `openURLs:`.
     AppKit forwards 'odoc' AppleEvents (Finder "Open With", Dock drops,
-    `open -a App file`) to these delegate methods — including the launch-time
+    `open -a App file`) to these delegate methods, including the launch-time
     event that the AppleEvent-manager path alone can miss.
     """
     if platform.system() != "Darwin":
@@ -868,7 +868,7 @@ def install_macos_open_files_delegate() -> None:
                 return True
 
             def application_openURLs_(self, _app, urls):
-                paths = [str(u.path()) for u in urls if getattr(u, "path", None)]
+                paths = [str(p) for u in urls if (p := u.path()) is not None]
                 if paths:
                     queue_open_files(paths)
 
@@ -892,7 +892,7 @@ def wait_for_server(host: str, port: int, timeout_s: float = 15.0) -> bool:
 
 def is_openbgr_server(url: str, timeout_s: float = 10.0) -> bool:
     """
-    Verifies that whatever is listening on the port is actually OpenBGR's API —
+    Verifies that whatever is listening on the port is actually OpenBGR's API;
     guards against opening a foreign service when the port is already in use.
     """
     import urllib.error

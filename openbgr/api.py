@@ -45,9 +45,13 @@ from .models import (
     JOB_PROGRESS_LOCK,
     MANAGER,
     compact_model_cache_fp16,
+    expected_model_bytes,
     get_model_cache_dir,
     get_model_disk_bytes,
     is_model_cached_locally,
+    model_download_active,
+    model_download_guard,
+    refresh_expected_sizes,
     set_job_phase,
     track_model_download,
 )
@@ -85,6 +89,7 @@ async def lifespan(_app: FastAPI):
         timer = threading.Timer(0.5, lambda: MANAGER.get_or_load(default_model_key))
         timer.daemon = True
         timer.start()
+    threading.Thread(target=refresh_expected_sizes, daemon=True).start()
     try:
         yield
     finally:
@@ -92,7 +97,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(
-    title="OpenBGR — Local Background Removal Studio",
+    title="OpenBGR - Local Background Removal Studio",
     description="Self-hosted, zero-telemetry dichotomous image segmentation powered by BiRefNet",
     lifespan=lifespan,
 )
@@ -121,6 +126,9 @@ def api_status() -> dict[str, Any]:
             "cached": is_model_cached_locally(cfg["repo_id"]),
             "active": MANAGER.active_model_key == cfg["model_key"],
             "size_bytes": size_bytes,
+            "expected_bytes": expected_model_bytes(
+                cfg["repo_id"], int(cfg.get("expected_bytes", 0))
+            ),
         }
 
     # Include any leftover legacy 1K matting cache in total disk usage so Uninstall All
@@ -279,6 +287,13 @@ def api_uninstall_model(target: str = Form(...)) -> dict[str, Any]:
             status_code=409,
             detail="Cannot uninstall model weights while processing is running.",
         )
+    with JOB_PROGRESS_LOCK:
+        job_phase = JOB_PROGRESS["phase"]
+    if model_download_active() or job_phase in ("download", "load"):
+        raise HTTPException(
+            status_code=409,
+            detail="A model is still downloading or loading. Wait for it to finish before uninstalling.",
+        )
 
     cleaned = target.strip().lower()
     if cleaned == "all":
@@ -290,23 +305,47 @@ def api_uninstall_model(target: str = Form(...)) -> dict[str, Any]:
     if not model_keys:
         raise HTTPException(status_code=400, detail=f"Unknown model target '{target}'.")
 
-    repos_to_remove: list[str] = []
+    # Unload BEFORE taking the download lock: unload() acquires the manager's
+    # model lock internally, and a load in progress holds that lock while it
+    # acquires the download lock, so nesting the load lock inside the download
+    # lock here would deadlock.
     for m_key in model_keys:
         if MANAGER.active_model_key == m_key:
             MANAGER.unload()
-        repos_to_remove.append(MODELS[m_key])
-        if m_key == "matting":
-            repos_to_remove.append(LEGACY_MATTING_REPO)
 
-    freed_bytes = 0
-    for repo_id in repos_to_remove:
-        folder = get_model_cache_dir(repo_id)
-        freed_bytes += get_model_disk_bytes(repo_id)
-        if folder.exists():
-            shutil.rmtree(folder, ignore_errors=True)
-        lock_dir = Path(HF_HUB_CACHE) / ".locks" / folder.name
-        if lock_dir.exists():
-            shutil.rmtree(lock_dir, ignore_errors=True)
+    # Hold both locks for the whole deletion so a download or job cannot
+    # start between the fast-fail checks above and the rmtree calls below.
+    # Non-blocking acquires convert the residual race into a fast 409
+    # rather than hanging on a whole download/inference.
+    if not MANAGER.inference_lock.acquire(blocking=False):
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot uninstall model weights while processing is running.",
+        )
+    try:
+        with model_download_guard(blocking=False):
+            repos_to_remove: list[str] = []
+            for m_key in model_keys:
+                repos_to_remove.append(MODELS[m_key])
+                if m_key == "matting":
+                    repos_to_remove.append(LEGACY_MATTING_REPO)
+
+            freed_bytes = 0
+            for repo_id in repos_to_remove:
+                folder = get_model_cache_dir(repo_id)
+                freed_bytes += get_model_disk_bytes(repo_id)
+                if folder.exists():
+                    shutil.rmtree(folder, ignore_errors=True)
+                lock_dir = Path(HF_HUB_CACHE) / ".locks" / folder.name
+                if lock_dir.exists():
+                    shutil.rmtree(lock_dir, ignore_errors=True)
+    except BlockingIOError:
+        raise HTTPException(
+            status_code=409,
+            detail="A model is still downloading or loading. Wait for it to finish before uninstalling.",
+        ) from None
+    finally:
+        MANAGER.inference_lock.release()
 
     return {
         "ok": True,
@@ -325,6 +364,11 @@ async def api_install_model(target: str = Form(...)) -> dict[str, Any]:
     norm = normalize_tier_key(target)
     if norm not in MODELS:
         raise HTTPException(status_code=400, detail=f"Unknown model target '{target}'.")
+    if model_download_active():
+        raise HTTPException(
+            status_code=409,
+            detail="Another model is already downloading. Wait for it to finish first.",
+        )
 
     repo_id = MODELS[norm]
     dl_fn = _resolve_app_symbol("snapshot_download", snapshot_download)
@@ -332,8 +376,8 @@ async def api_install_model(target: str = Form(...)) -> dict[str, Any]:
 
     def _download() -> None:
         """Blocking download + FP16 compaction, run in a worker thread."""
-        with track_model_download(repo_id, norm):
-            dl_fn(repo_id=repo_id)
+        with track_model_download(repo_id, norm) as dl_tqdm:
+            dl_fn(repo_id=repo_id, tqdm_class=dl_tqdm)
         set_job_phase("load", norm)
         compact_fn(repo_id)
 
@@ -358,7 +402,16 @@ def api_job_progress() -> dict[str, Any]:
     plus live model-download byte counts, for the frontend busy overlay.
     """
     with JOB_PROGRESS_LOCK:
-        return dict(JOB_PROGRESS)
+        snap = dict(JOB_PROGRESS)
+        dl_key = snap.pop("_dl_key", None)
+    # The download phase is a fact (the serialization lock is held), not a
+    # label: a concurrent load/idle/inference phase write from another
+    # operation must not hide an active download's progress.
+    if model_download_active():
+        snap["phase"] = "download"
+        if dl_key is not None:
+            snap["model_key"] = dl_key
+    return snap
 
 
 @app.post("/api/save")
@@ -487,7 +540,7 @@ async def api_refine(
 ) -> Response:
     """
     Re-applies the edge-refinement filters (defringe/despill) onto the cached
-    raw RGB + alpha of the last completed segmentation job — a pure
+    raw RGB + alpha of the last completed segmentation job: a pure
     post-processing pass that skips re-running the neural network entirely.
     Returns HTTP 409 when the referenced job is no longer the latest one.
     """
@@ -513,8 +566,8 @@ async def api_refine(
         raise HTTPException(
             status_code=409,
             detail=(
-                "This cutout is no longer the latest processed job — "
-                "click PROCESS IMAGE to re-apply edge filters."
+                "This cutout is no longer the latest processed job. "
+                "Click PROCESS IMAGE to re-apply edge filters."
             ),
         ) from exc
 

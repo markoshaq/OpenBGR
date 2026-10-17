@@ -3,7 +3,7 @@ setlocal EnableDelayedExpansion
 cd /d "%~dp0"
 
 :: ============================================================================
-:: OpenBGR — Zero-Config Bootstrapper for Windows
+:: OpenBGR - Zero-Config Bootstrapper for Windows
 :: ============================================================================
 :: 1. Launches immediately (<1s) if .venv\.installed exists.
 :: 2. Auto-installs standalone Python 3.12 via uv if Python is not installed.
@@ -20,10 +20,10 @@ if exist ".venv\.installed" (
 )
 
 echo --------------------------------------------------------------------
-echo   OpenBGR // FIRST-TIME LOCAL SETUP
+echo   OpenBGR - FIRST-TIME LOCAL SETUP
 echo --------------------------------------------------------------------
 
-:: A .venv directory without a working python binary is broken — rebuild it.
+:: A .venv directory without a working python binary is broken; rebuild it.
 if exist ".venv" if not exist ".venv\Scripts\python.exe" rmdir /s /q ".venv"
 
 if not exist ".venv" (
@@ -51,7 +51,7 @@ if not exist ".venv\.installed" (
     if !errorlevel! equ 0 (
         where nvidia-smi >nul 2>nul
         if !errorlevel! equ 0 (
-            echo       NVIDIA GPU detected — installing CUDA-accelerated PyTorch...
+            echo       NVIDIA GPU detected - installing CUDA-accelerated PyTorch...
             uv pip install --python ".venv\Scripts\python.exe" torch torchvision --index-url https://download.pytorch.org/whl/cu124
         )
         uv pip install --python ".venv\Scripts\python.exe" -r requirements.txt
@@ -59,7 +59,7 @@ if not exist ".venv\.installed" (
         call ".venv\Scripts\pip.exe" install --upgrade pip -q
         where nvidia-smi >nul 2>nul
         if !errorlevel! equ 0 (
-            echo       NVIDIA GPU detected — installing CUDA-accelerated PyTorch...
+            echo       NVIDIA GPU detected - installing CUDA-accelerated PyTorch...
             call ".venv\Scripts\pip.exe" install torch torchvision --index-url https://download.pytorch.org/whl/cu124
         )
         call ".venv\Scripts\pip.exe" install -r requirements.txt

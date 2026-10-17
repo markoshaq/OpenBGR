@@ -3,7 +3,7 @@
 Installs a macOS Finder Quick Action: right-click an image →
 Quick Actions → "Remove Background with OpenBGR".
 
-Generates `~/Library/Services/Remove Background with OpenBGR.workflow` — a
+Generates `~/Library/Services/Remove Background with OpenBGR.workflow`, a
 standard Automator servicesMenu workflow wrapping `scripts/context_process.sh`
 (which prefers the already-running local server and falls back to
 `app.py --cli`). No AppleScript UI, no Xcode, no admin rights; the workflow is

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-OpenBGR — Cross-Platform Lightweight Desktop Release Builder
+OpenBGR - Cross-Platform Lightweight Desktop Release Builder
 ============================================================
 Builds lightweight native desktop packages (Option 2 architecture) that keep
 download sizes under ~1 MB while automatically provisioning the local AI

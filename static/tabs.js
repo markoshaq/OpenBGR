@@ -10,6 +10,7 @@ import {
   masterCutoutImg,
   getActiveTab,
   defaultTierForNewTab,
+  createByteSmoother,
   createTabRecord,
   nextClipboardName,
   revokeTabUrls,
@@ -20,6 +21,9 @@ import {
   closeConfirmModal,
   normalizeTierKey,
   PRESET_NAMES,
+  updateTierDownloadUI,
+  clearTierDownloadProgress,
+  formatDiskBytes,
 } from "./state.js";
 import { renderStageGeometry, applyZoomTransform } from "./stage.js";
 import {
@@ -29,7 +33,11 @@ import {
   applyBackdrop,
   updateLiveStagePreview,
 } from "./export.js";
-import { updateCacheIndicator, syncServerStatus } from "./preferences.js";
+import {
+  updateCacheIndicator,
+  syncServerStatus,
+  isModelInstallInProgress,
+} from "./preferences.js";
 import {
   renderBatchPanel,
   mergeTabsIntoBatch,
@@ -342,8 +350,8 @@ export function resetToEmptyWorkspace() {
   dom.exportWidthInput.value = "";
   dom.exportHeightInput.value = "";
   dom.statFile.textContent = "NONE";
-  dom.statDim.textContent = "—";
-  dom.statTime.textContent = "—";
+  dom.statDim.textContent = "--";
+  dom.statTime.textContent = "--";
 
   dom.btnDownload.classList.add("disabled");
   dom.btnCopy.classList.add("disabled");
@@ -414,8 +422,8 @@ export async function switchToTab(tabId) {
     dom.appShell?.classList.add("batch-active");
     dom.btnCopy.classList.add("disabled");
     dom.statFile.textContent = `BATCH · ${tab.batchFiles.length} FILE${tab.batchFiles.length === 1 ? "" : "S"}`;
-    dom.statDim.textContent = "—";
-    dom.statTime.textContent = tab.elapsedText || "—";
+    dom.statDim.textContent = "--";
+    dom.statTime.textContent = tab.elapsedText || "--";
     syncMenuBarState();
     return;
   }
@@ -430,6 +438,9 @@ export async function switchToTab(tabId) {
   dom.emptyState.style.display = "none";
   dom.stage.classList.add("visible");
   dom.beforeImg.onload = () => {
+    // Guard: switching to a batch tab leaves this handler installed; a late
+    // decode must not overwrite the batch view's statDim or global dims.
+    if (state.activeTabId !== tab.id) return;
     if (dom.beforeImg.naturalWidth > 0 && dom.beforeImg.naturalHeight > 0) {
       if (!state.naturalWidth || !state.naturalHeight) {
         state.naturalWidth = dom.beforeImg.naturalWidth;
@@ -446,8 +457,8 @@ export async function switchToTab(tabId) {
   dom.statDim.textContent =
     state.naturalWidth > 0 && state.naturalHeight > 0
       ? `${state.naturalWidth}×${state.naturalHeight} PX`
-      : "—";
-  dom.statTime.textContent = tab.elapsedText || "—";
+      : "--";
+  dom.statTime.textContent = tab.elapsedText || "--";
 
   if (state.resultBlob && state.resultObjectUrl) {
     if (
@@ -529,16 +540,17 @@ export function ingestImageFile(file) {
   dom.exportHeightInput.value = "";
 
   dom.stageSizerImg.src = state.originalObjectUrl;
+  const ingestedTab = getActiveTab();
   dom.beforeImg.onload = () => {
+    // Stale-handler guard: if the user switched away (e.g. to a batch tab)
+    // before the decode finished, this load no longer belongs to the view.
+    if (!ingestedTab || state.activeTabId !== ingestedTab.id) return;
     if (dom.beforeImg.naturalWidth > 0 && dom.beforeImg.naturalHeight > 0) {
       state.naturalWidth = dom.beforeImg.naturalWidth;
       state.naturalHeight = dom.beforeImg.naturalHeight;
       dom.statDim.textContent = `${state.naturalWidth}×${state.naturalHeight} PX`;
-      const active = getActiveTab();
-      if (active && active.kind !== "batch") {
-        active.naturalWidth = state.naturalWidth;
-        active.naturalHeight = state.naturalHeight;
-      }
+      ingestedTab.naturalWidth = state.naturalWidth;
+      ingestedTab.naturalHeight = state.naturalHeight;
     }
   };
   dom.beforeImg.src = state.originalObjectUrl;
@@ -547,7 +559,7 @@ export function ingestImageFile(file) {
   dom.emptyState.style.display = "none";
   dom.stage.classList.add("visible");
   dom.statFile.textContent = rawName.toUpperCase();
-  dom.statDim.textContent = "—";
+  dom.statDim.textContent = "--";
   dom.statTime.textContent = "READY";
 
   renderTabBar();
@@ -667,9 +679,10 @@ export function cancelProcessing() {
 
 let jobProgressTimer = null;
 let inferPhaseStartedAt = 0;
-let dlRate = 0; // bytes/sec, estimated from consecutive samples
-let dlLastBytes = 0;
-let dlLastAt = 0;
+let byteSmoother = createByteSmoother();
+let downloadPeak = 0;
+let downloadKey = null;
+let busyBaseSub = "";
 
 /** Sets the busy-overlay bar to a determinate percent, or back to indeterminate. */
 function setBusyProgress(pct) {
@@ -692,49 +705,48 @@ async function pollJobProgress() {
     if (!res.ok) return;
     const p = await res.json();
     if (!state.isProcessing) return;
+    const modelKey = p.model_key || state.tier;
     if (p.phase !== "download") {
-      dlRate = 0;
-      dlLastBytes = 0;
-      dlLastAt = 0;
+      byteSmoother = createByteSmoother();
+      downloadPeak = 0;
+      if (downloadKey) {
+        clearTierDownloadProgress(downloadKey);
+        downloadKey = null;
+      }
     }
 
     if (p.phase === "download") {
       inferPhaseStartedAt = 0;
       const dl = Number(p.downloaded_bytes) || 0;
       const tot = Number(p.total_bytes) || 0;
-      const modelName = PRESET_NAMES[state.tier] || "MODEL";
-      const now = performance.now();
-      // Xet flushes land in coarse bursts — extrapolate at the observed rate
-      // between samples so the bar animates smoothly instead of stepping.
-      if (dl > dlLastBytes) {
-        if (dlLastAt) {
-          const rate = (dl - dlLastBytes) / ((now - dlLastAt) / 1000);
-          dlRate = dlRate ? dlRate * 0.5 + rate * 0.5 : rate;
-        }
-        dlLastBytes = dl;
-        dlLastAt = now;
-      }
-      const shown = Math.min(
-        tot > 0 ? tot : dlLastBytes,
-        dlLastBytes + dlRate * ((now - dlLastAt) / 1000)
-      );
+      const modelName = PRESET_NAMES[modelKey] || "MODEL";
+      const shown = Math.max(byteSmoother(dl, tot), downloadPeak);
+      downloadPeak = shown;
+      const expectedBytes =
+        Number(state.serverStatus?.tiers?.[modelKey]?.expected_bytes) || 0;
+      downloadKey = modelKey;
       dom.busyTitle.textContent = "DOWNLOADING MODEL WEIGHTS";
       dom.busySub.textContent =
         tot > 0
-          ? `${(shown / 1e6).toFixed(0)} / ${(tot / 1e6).toFixed(0)} MB — ${modelName}`
-          : `${(shown / 1e6).toFixed(0)} MB downloaded — ${modelName}`;
+          ? `${formatDiskBytes(shown, true)} / ${formatDiskBytes(tot, true)} · ${modelName}`
+          : `${formatDiskBytes(shown, true)} downloaded · ${modelName}`;
       setBusyProgress(tot > 0 ? (shown / tot) * 100 : null);
+      updateTierDownloadUI(modelKey, shown, tot, expectedBytes);
     } else if (p.phase === "load") {
+      // Model is cached and being restored into device memory; present this
+      // as part of "processing", not a separate user-facing stage.
       inferPhaseStartedAt = 0;
-      dom.busyTitle.textContent = "LOADING MODEL";
-      dom.busySub.textContent = "Loading checkpoint into device memory.";
+      if (!state.batch.running) {
+        dom.busyTitle.textContent = "PROCESSING IMAGE";
+        if (busyBaseSub) dom.busySub.textContent = busyBaseSub;
+      }
       setBusyProgress(null);
     } else if (p.phase === "inference") {
       if (!inferPhaseStartedAt) inferPhaseStartedAt = performance.now();
-      const est = Number(prefs.inferEstimates?.[state.tier]) || 4000;
+      const est = Number(prefs.inferEstimates?.[modelKey]) || 4000;
       const elapsed = performance.now() - inferPhaseStartedAt;
       if (!state.batch.running) {
-        dom.busyTitle.textContent = "RUNNING INFERENCE";
+        dom.busyTitle.textContent = "PROCESSING IMAGE";
       }
       setBusyProgress(Math.min(97, (elapsed / (elapsed + est * 0.6)) * 100));
     }
@@ -755,15 +767,24 @@ export function stopJobProgressPolling() {
     jobProgressTimer = null;
   }
   inferPhaseStartedAt = 0;
-  dlRate = 0;
-  dlLastBytes = 0;
-  dlLastAt = 0;
+  byteSmoother = createByteSmoother();
+  downloadPeak = 0;
+  if (downloadKey) {
+    clearTierDownloadProgress(downloadKey);
+    downloadKey = null;
+  }
   setBusyProgress(null);
 }
 
 /** POSTs the active image to `/api/remove-bg` and applies the returned cutout + job id. */
 export async function runSegmentation() {
   if (!state.sourceFile) return;
+  if (isModelInstallInProgress()) {
+    setError(
+      "A model download is in progress. Wait for it to finish before processing."
+    );
+    return;
+  }
 
   const tierInfo = state.serverStatus?.tiers?.[state.tier];
   if (tierInfo && !tierInfo.cached && !navigator.onLine) {
@@ -799,11 +820,11 @@ export async function runSegmentation() {
 
   dom.busyTitle.textContent = isCached
     ? "PROCESSING IMAGE"
-    : "PROCESSING IMAGE — FETCHING MODEL WEIGHTS";
-  dom.busySub.textContent =
-    `Exporting to ${destDesc} using ${presetName} model ` +
-    `at ${qualityDesc} quality.` +
-    (isCached ? "" : " Downloading model weights first.");
+    : "PROCESSING IMAGE · FETCHING MODEL WEIGHTS";
+  busyBaseSub =
+    `Processing using ${presetName}...` +
+    (isCached ? "" : " Downloading model weights...");
+  dom.busySub.textContent = busyBaseSub;
 
   const formData = new FormData();
   formData.append("file", state.sourceFile);
@@ -904,7 +925,7 @@ export async function runSegmentation() {
 
 /**
  * Re-applies the edge-refinement filters (DEFRINGE / SUPPRESS COLOR SPILL) on
- * the server-side cached raw RGB + alpha of the last job — a pure NumPy
+ * the server-side cached raw RGB + alpha of the last job: a pure NumPy
  * post-processing pass (~20 ms), no neural-network re-inference required.
  * No-ops when the active tab has no fresh cutout job on the server.
  */

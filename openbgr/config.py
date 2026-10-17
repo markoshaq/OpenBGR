@@ -184,7 +184,7 @@ SYSTEM_MEMORY_GB: float = get_system_memory_gb()
 # pyramids; on 8 GB systems, 1536x1536 (2.25x pixel density of 1024x1024) prevents swap thrashing.
 HR_RESOLUTION: int = 2048 if SYSTEM_MEMORY_GB >= 14.0 else 1536
 
-# Supported Hugging Face model repositories — each key maps to a distinct official
+# Supported Hugging Face model repositories. Each key maps to a distinct official
 # BiRefNet checkpoint from ZhengPeng7.
 MODELS: dict[str, str] = {
     "lite": "ZhengPeng7/BiRefNet_lite",  # Swin-T @ 1024x1024 (~170 MB -> ~85 MB FP16)
@@ -220,7 +220,7 @@ TIERS: dict[str, dict[str, Any]] = {
         "sublabel": "1K · Fast",
         "model_key": "lite",
         "repo_id": MODELS["lite"],
-        "expected_bytes": 177_669_592,
+        "expected_bytes": 177742341,
         "resolution": 1024,
         "dynamic": False,
         "description": (
@@ -235,7 +235,7 @@ TIERS: dict[str, dict[str, Any]] = {
         "sublabel": "1K · Studio",
         "model_key": "general",
         "repo_id": MODELS["general"],
-        "expected_bytes": 444_566_476,
+        "expected_bytes": 444584498,
         "resolution": 1024,
         "dynamic": False,
         "description": (
@@ -250,7 +250,7 @@ TIERS: dict[str, dict[str, Any]] = {
         "sublabel": f"2K · {HR_RESOLUTION}px",
         "model_key": "hr",
         "repo_id": MODELS["hr"],
-        "expected_bytes": 444_566_476,
+        "expected_bytes": 444583809,
         "resolution": HR_RESOLUTION,
         "dynamic": False,
         "description": (
@@ -265,7 +265,7 @@ TIERS: dict[str, dict[str, Any]] = {
         "sublabel": "1K · People",
         "model_key": "portrait",
         "repo_id": MODELS["portrait"],
-        "expected_bytes": 444_566_476,
+        "expected_bytes": 884984566,
         "resolution": 1024,
         "dynamic": False,
         "description": (
@@ -280,7 +280,7 @@ TIERS: dict[str, dict[str, Any]] = {
         "sublabel": "2K · Alpha",
         "model_key": "matting",
         "repo_id": MODELS["matting"],
-        "expected_bytes": 444_566_476,
+        "expected_bytes": 444584399,
         "resolution": HR_RESOLUTION,
         "dynamic": False,
         "description": (
@@ -295,12 +295,12 @@ TIERS: dict[str, dict[str, Any]] = {
         "sublabel": "Native Ratio",
         "model_key": "dynamic",
         "repo_id": MODELS["dynamic"],
-        "expected_bytes": 444_566_476,
+        "expected_bytes": 444584549,
         "resolution": HR_RESOLUTION,
         "dynamic": True,
         "description": (
             "BiRefNet_dynamic (Swin-L). Preserves native aspect ratio up to 2K without "
-            "square distortion — ideal for panoramas and vertical banners."
+            "square distortion, ideal for panoramas and vertical banners."
         ),
     },
 }

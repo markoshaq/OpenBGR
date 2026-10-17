@@ -190,7 +190,7 @@ export async function buildBatchExportBlob(blob, snap) {
 
 /**
  * Settings signature identifying which export options a preview blob was
- * rendered under — used to detect stale `state.previewBlob` contents.
+ * rendered under; used to detect stale `state.previewBlob` contents.
  */
 function exportSignature() {
   return JSON.stringify({
@@ -393,7 +393,7 @@ export async function exportActiveImage() {
   if (!state.resultBlob) return;
   try {
     // Reuse the live preview only when it was rendered under the exact current
-    // export settings and from the current cutout — otherwise re-encode so the
+    // export settings and from the current cutout; otherwise re-encode so the
     // downloaded file always matches its extension and options.
     const exportBlob =
       state.previewBlob &&
@@ -504,11 +504,14 @@ export function buildZip(entries) {
 
   for (const { name, data } of entries) {
     const nameBytes = enc.encode(name);
+    // Bit 11 marks the entry name as UTF-8; without it, extractors assume
+    // CP437 and non-ASCII filenames come out as mojibake.
+    const utf8Flag = nameBytes.length !== name.length ? 0x0800 : 0;
     const crc = crc32(data);
     const local = new DataView(new ArrayBuffer(30));
     local.setUint32(0, 0x04034b50, true);
     local.setUint16(4, 20, true);
-    local.setUint16(6, 0, true);
+    local.setUint16(6, utf8Flag, true);
     local.setUint16(8, 0, true);
     local.setUint16(10, 0, true);
     local.setUint16(12, 0, true);
@@ -518,7 +521,7 @@ export function buildZip(entries) {
     local.setUint16(26, nameBytes.length, true);
     local.setUint16(28, 0, true);
     chunks.push(local.buffer, nameBytes, data);
-    central.push({ nameBytes, crc, size: data.length, offset });
+    central.push({ nameBytes, crc, size: data.length, offset, utf8Flag });
     offset += 30 + nameBytes.length + data.length;
   }
 
@@ -528,7 +531,7 @@ export function buildZip(entries) {
     cd.setUint32(0, 0x02014b50, true);
     cd.setUint16(4, 20, true);
     cd.setUint16(6, 20, true);
-    cd.setUint16(8, 0, true);
+    cd.setUint16(8, e.utf8Flag, true);
     cd.setUint16(10, 0, true);
     cd.setUint16(12, 0, true);
     cd.setUint16(14, 0, true);

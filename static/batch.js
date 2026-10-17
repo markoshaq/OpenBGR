@@ -36,6 +36,7 @@ import {
   startJobProgressPolling,
   stopJobProgressPolling,
 } from "./tabs.js";
+import { isModelInstallInProgress } from "./preferences.js";
 
 /** Opens the hidden multi-file input (or native dialog) routing results to a callback. */
 export function openMultiFileChooser(files, noun) {
@@ -119,7 +120,7 @@ export function addFilesToBatchTab(tab, files) {
 
 /** Formats a byte count for batch row file-size labels. */
 function formatBytes(n) {
-  if (!n) return "—";
+  if (!n) return "--";
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
@@ -145,7 +146,7 @@ export function renderBatchPanel(tab) {
   if (n === 0) {
     const hint = document.createElement("div");
     hint.className = "batch-empty-hint";
-    hint.textContent = "EMPTY BATCH — DROP IMAGES OR USE ADD IMAGES";
+    hint.textContent = "EMPTY BATCH · DROP IMAGES OR USE ADD IMAGES";
     dom.batchList.appendChild(hint);
   }
 
@@ -434,6 +435,12 @@ export async function runBatch(tab) {
     setError("Selected model is not cached on disk and device is currently offline.");
     return;
   }
+  if (isModelInstallInProgress()) {
+    setError(
+      "A model download is in progress. Wait for it to finish before processing."
+    );
+    return;
+  }
 
   let outputDir = tab.outputDir || null;
   if (!outputDir && window.pywebview?.api?.choose_output_dir) {
@@ -475,9 +482,8 @@ export async function runBatch(tab) {
     ? outputDir
     : "browser downloads (openbgr-cutouts.zip)";
   const batchDesc =
-    `Exporting to ${destDesc} using ${presetName} model ` +
-    `at ${qualityDesc} quality.` +
-    (isCached ? "" : " Fetching model weights first.");
+    `Processing using ${presetName}...` +
+    (isCached ? "" : " Fetching model weights...");
 
   if (tab.id === state.activeTabId) renderBatchPanel(tab);
   syncMenuBarState();
@@ -592,10 +598,10 @@ export async function runBatch(tab) {
       title: "BATCH COMPLETE",
       message:
         `${completed} of ${batch.total} image${batch.total > 1 ? "s" : ""} processed` +
-        (batch.failed > 0 ? ` — ${batch.failed} failed` : "") +
+        (batch.failed > 0 ? `, ${batch.failed} failed` : "") +
         (outputDir
           ? `.\nSaved to: ${outputDir}`
-          : " — downloaded as openbgr-cutouts.zip."),
+          : ".\nDownloaded as openbgr-cutouts.zip."),
       confirmText: "DONE",
       hideCancel: true,
     },

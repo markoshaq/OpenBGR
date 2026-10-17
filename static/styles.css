@@ -1,5 +1,5 @@
 /**
- * OpenBGR — Industrial Studio Stylesheet
+ * OpenBGR - Industrial Studio Stylesheet
  * ======================================
  * Design Language:
  * - 3-Column Studio Workstation (Left Settings Sidebar | Center Viewport | Right Export Sidebar)
@@ -313,7 +313,7 @@ body {
   background: var(--border);
 }
 
-/* Pinned to grid column 3 — auto-placement would shift it into the 1fr
+/* Pinned to grid column 3; auto-placement would shift it into the 1fr
  * column whenever .topbar-center is display:none (blank/batch states) */
 .hardware-readout {
   grid-column: 3;
@@ -462,6 +462,100 @@ body {
   padding: 7px 18px 7px 9px;
   background: var(--bg);
   border: 1px solid var(--border);
+  overflow: hidden;
+  transition: background 0.35s ease;
+}
+
+.model-list .tier-btn .tier-label,
+.model-list .tier-btn .tier-tech,
+.model-list .tier-btn .tier-desc {
+  transition: opacity 0.35s ease;
+}
+
+.model-list .tier-btn.uncached {
+  background: var(--surface-2);
+}
+
+.model-list .tier-btn.uncached .tier-label,
+.model-list .tier-btn.uncached .tier-tech,
+.model-list .tier-btn.uncached .tier-desc {
+  opacity: 0.5;
+}
+
+.model-list .tier-btn.uncached.downloading .tier-label,
+.model-list .tier-btn.uncached.downloading .tier-tech,
+.model-list .tier-btn.uncached.downloading .tier-desc {
+  opacity: 1;
+}
+
+.model-list .tier-btn::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: var(--dl, 0%);
+  background: var(--bg);
+  pointer-events: none;
+  transition: width 0.3s ease;
+}
+
+.model-list .tier-btn.downloading::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.05) 50%,
+    transparent 100%
+  );
+  transform: translateX(-100%);
+  animation: tier-dl-sweep 1.6s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes tier-dl-sweep {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* Uninstall: the installed fill drains away over the uncached background. */
+.model-list .tier-btn.uninstalling::before {
+  width: 100%;
+  transition: none;
+  animation: tier-dl-drain 1.1s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+@keyframes tier-dl-drain {
+  from {
+    width: 100%;
+  }
+  to {
+    width: 0%;
+  }
+}
+
+.model-list .tier-btn.uninstalling .tier-dot {
+  animation: tier-dot-pulse 0.8s ease-in-out infinite alternate;
+}
+
+@keyframes tier-dot-pulse {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0.35;
+  }
+}
+
+.model-list .tier-btn .tier-head,
+.model-list .tier-btn .tier-desc {
+  position: relative;
+  z-index: 1;
+}
+
+.model-list .tier-btn .tier-dot {
+  z-index: 1;
 }
 
 .model-list .tier-btn.active {
@@ -584,6 +678,7 @@ body {
   background: var(--border-strong);
   display: inline-block;
   flex-shrink: 0;
+  transition: background 0.45s ease, box-shadow 0.45s ease;
 }
 
 .tier-dot.ready {
@@ -1432,6 +1527,8 @@ body {
   padding: 8px 14px;
   z-index: 40;
   display: none;
+  cursor: pointer;
+  user-select: none;
 }
 
 .error-toast.visible {
@@ -1478,7 +1575,7 @@ input[type="file"] {
 }
 
 /* -------------------------------------------------------------------------
- * 6. Preferences Dialog — Sidebar Navigation Layout
+ * 6. Preferences Dialog - Sidebar Navigation Layout
  * ------------------------------------------------------------------------- */
 .modal-backdrop.active .modal-dialog {
   animation: modalIn 0.18s cubic-bezier(0.2, 0.9, 0.25, 1);
@@ -1651,7 +1748,7 @@ input[type="file"] {
   text-transform: uppercase;
 }
 
-/* Grouped settings card — rows separated by hairlines */
+/* Grouped settings card; rows separated by hairlines */
 .pref-card {
   border: 1px solid var(--border);
   background: var(--bg);

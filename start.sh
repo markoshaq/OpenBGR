@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# OpenBGR — Zero-Config Bootstrapper for macOS & Linux
+# OpenBGR - Zero-Config Bootstrapper for macOS & Linux
 # =============================================================================
 # 1. Uses existing .venv if already provisioned (<1s startup).
 # 2. Auto-provisions Python 3.12 via `uv` if Python 3.10+ is not installed.
@@ -29,7 +29,7 @@ if [ -f ".venv/.installed" ] && [ -x ".venv/bin/python" ]; then
 fi
 
 echo "--------------------------------------------------------------------"
-echo "  OpenBGR // FIRST-TIME LOCAL SETUP"
+echo "  OpenBGR - FIRST-TIME LOCAL SETUP"
 echo "--------------------------------------------------------------------"
 
 # Check if Python 3.10+ is available; if not, bootstrap via uv
@@ -42,7 +42,7 @@ if command -v python3 >/dev/null 2>&1; then
 fi
 
 # A .venv directory without a working python binary is broken (interrupted
-# setup or partial delete) — rebuild it instead of failing on missing pip.
+# setup or partial delete); rebuild it instead of failing on missing pip.
 if [ -d ".venv" ] && [ ! -x ".venv/bin/python" ]; then
   rm -rf .venv
 fi
@@ -66,14 +66,14 @@ if [ ! -f ".venv/.installed" ]; then
   echo "[2/2] Installing AI engine dependencies (one-time setup)..."
   if command -v uv >/dev/null 2>&1; then
     if [ "$(uname -s)" = "Linux" ] && command -v nvidia-smi >/dev/null 2>&1; then
-      echo "      NVIDIA GPU detected — installing CUDA-accelerated PyTorch..."
+      echo "      NVIDIA GPU detected - installing CUDA-accelerated PyTorch..."
       uv pip install --python .venv/bin/python torch torchvision --index-url https://download.pytorch.org/whl/cu124
     fi
     uv pip install --python .venv/bin/python -r requirements.txt
   else
     ./.venv/bin/pip install --upgrade pip -q
     if [ "$(uname -s)" = "Linux" ] && command -v nvidia-smi >/dev/null 2>&1; then
-      echo "      NVIDIA GPU detected — installing CUDA-accelerated PyTorch..."
+      echo "      NVIDIA GPU detected - installing CUDA-accelerated PyTorch..."
       ./.venv/bin/pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
     fi
     ./.venv/bin/pip install -r requirements.txt

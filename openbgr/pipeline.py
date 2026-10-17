@@ -163,7 +163,7 @@ def compose_rgba(
     """
     Applies the optional edge-refinement filters onto the raw RGB + alpha and
     composites the final 32-bit RGBA image. Runs in milliseconds (pure NumPy /
-    Pillow C filters) — no neural network involved.
+    Pillow C filters); no neural network involved.
     """
     if defringe:
         rgb_np = decontaminate_edge_colors(rgb_raw, alpha_np)

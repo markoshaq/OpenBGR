@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-OpenBGR — macOS Squircle App Icon Renderer
+OpenBGR - macOS Squircle App Icon Renderer
 ==========================================
 Pure-Pillow renderer shared by `app.py` (runtime Dock/window icon) and
 `scripts/build_release.py` (packaged `OpenBGR.icns`).
@@ -12,7 +12,7 @@ downscaled with Lanczos for crisp continuous-curve edges.
 
 Motif: the left half is solid white (the subject) and the right half is a
 dark checkerboard (the removed background / transparency preview), split by
-a two-tone center seam — the "cutout" metaphor.
+a two-tone center seam: the "cutout" metaphor.
 """
 
 from __future__ import annotations
@@ -93,7 +93,7 @@ def render_icon(size: int = 1024) -> Image.Image:
             sd.line((left, top + i, right, top + i), fill=(255, 255, 255, alpha))
     layer = Image.alpha_composite(layer, sheen)
 
-    # Soft inner edge stroke so the icon reads on light wallpapers too —
+    # Soft inner edge stroke so the icon reads on light wallpapers too;
     # drawn onto the artwork layer, then clipped so only the inner half shows.
     ImageDraw.Draw(layer).line(
         squircle + [squircle[0]],

@@ -1,5 +1,5 @@
 """
-OpenBGR — Local Background Removal Studio package.
+OpenBGR - Local Background Removal Studio package.
 
 Submodules:
 - `openbgr.config`       : Runtime paths, hardware auto-detection, model tier registry.

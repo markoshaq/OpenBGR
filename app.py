@@ -17,7 +17,7 @@
 # ]
 # ///
 """
-OpenBGR — Local Background Removal Studio
+OpenBGR - Local Background Removal Studio
 =========================================
 
 A self-hosted FastAPI inference engine for background removal powered by BiRefNet
@@ -443,7 +443,7 @@ def main(argv: list[str] | None = None) -> None:
     url = f"http://{host}:{port}"
 
     logger.info("-" * 68)
-    logger.info("  OpenBGR // LOCAL AI SEGMENTATION STUDIO")
+    logger.info("  OpenBGR - LOCAL AI SEGMENTATION STUDIO")
     logger.info("  Compute   : %s (%s)", DEVICE_LABEL, PRECISION_LABEL)
     logger.info(
         "  Default   : %s (%s)",
@@ -472,7 +472,7 @@ def main(argv: list[str] | None = None) -> None:
                 logger.error("[Server] Close it or set PORT=<free port> and try again.")
                 raise SystemExit(1)
         elif not server_thread.is_alive():
-            logger.error("[Server] Uvicorn failed to start — see errors above.")
+            logger.error("[Server] Uvicorn failed to start; see errors above.")
             raise SystemExit(1)
 
         try:
@@ -539,6 +539,9 @@ def main(argv: list[str] | None = None) -> None:
         except Exception as exc:
             logger.warning("[Desktop] Native window unavailable (%s); opening app window...", exc)
             open_fallback_app_window(url)
+            # Keep the daemon server thread alive; without this, main() returns
+            # and the browser window opens a dead URL (Ctrl+C exits the join).
+            server_thread.join()
 
 
 if __name__ == "__main__":

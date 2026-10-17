@@ -1,5 +1,5 @@
 /**
- * OpenBGR — Frontend Entry Point
+ * OpenBGR - Frontend Entry Point
  * Wires DOM controls, pointer/keyboard gestures, clipboard and file dialogs,
  * the in-app menu bar, and the `window.openBGR` bridge for native OS menus.
  */
@@ -361,7 +361,7 @@ document.querySelectorAll(".quick-scale-btn").forEach((btn) => {
 dom.exportWidthInput.addEventListener("input", (e) => {
   const val = parseInt(e.target.value, 10);
   if (!val || val < 1) {
-    // Cleared input = "auto" — fall back to the scale-derived size.
+    // Cleared input = "auto"; fall back to the scale-derived size.
     state.exportWidth = 0;
     state.exportHeight = 0;
     updateExportTelemetry();
@@ -609,7 +609,7 @@ window.addEventListener("dragover", (e) => {
 });
 
 window.addEventListener("dragleave", (e) => {
-  // Only clear the highlight when the drag leaves the window entirely —
+  // Only clear the highlight when the drag leaves the window entirely;
   // dragleave also fires while crossing between child elements.
   if (!e.relatedTarget) {
     dom.viewport.classList.remove("dragover");
@@ -881,8 +881,11 @@ window.addEventListener("keydown", (e) => {
     return;
   }
 
+  const isCloseTabKey =
+    e.key.toLowerCase() === "w" && (e.metaKey || e.ctrlKey);
   if (
     e.target &&
+    !isCloseTabKey &&
     (e.target.tagName === "INPUT" ||
       e.target.tagName === "SELECT" ||
       e.target.tagName === "TEXTAREA" ||

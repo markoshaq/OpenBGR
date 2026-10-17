@@ -33,7 +33,7 @@ from .config import (
     logger,
     normalize_tier_key,
 )
-from .models import MANAGER
+from .models import MANAGER, set_job_phase
 from .pipeline import segment_foreground
 
 
@@ -534,7 +534,7 @@ def ensure_macos_notifier_app() -> Path | None:
         plist["LSUIElement"] = True
         plist["CFBundleIconFile"] = "applet"
         # CFBundleIconName resolves the banner icon from Assets.car, which
-        # osacompile builds with the generic Script Editor scroll — drop both
+        # osacompile builds with the generic Script Editor scroll; drop both
         # so macOS falls back to applet.icns (the OpenBGR squircle).
         plist.pop("CFBundleIconName", None)
         with open(plist_path, "wb") as fh:
@@ -789,6 +789,7 @@ def run_quick_action(inputs: list[str]) -> dict[str, Any]:
             logger.warning("[QuickAction] Failed %s: %s", src.name, exc)
             failed += 1
         finally:
+            set_job_phase("idle")
             if result_img is not None:
                 result_img.close()
             if pil_img is not None:
@@ -873,6 +874,7 @@ def run_cli(
             logger.warning("[CLI] Failed %s: %s", src.name, exc)
             rc = 1
         finally:
+            set_job_phase("idle")
             if pil_img is not None:
                 pil_img.close()
     return rc

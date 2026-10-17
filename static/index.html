@@ -294,7 +294,7 @@
             >
               <div class="tier-head">
                 <span class="tier-label">LITE</span>
-                <span class="tier-tech" id="tech-lite">BiRefNet_lite (169.4MB)</span>
+                <span class="tier-tech" id="tech-lite">BiRefNet_lite</span>
               </div>
               <div class="tier-desc">Fastest for quick batches &amp; CPU.</div>
               <span class="tier-dot" id="dot-lite"></span>
@@ -307,7 +307,7 @@
             >
               <div class="tier-head">
                 <span class="tier-label">GENERAL</span>
-                <span class="tier-tech" id="tech-general">BiRefNet (424.0MB)</span>
+                <span class="tier-tech" id="tech-general">BiRefNet</span>
               </div>
               <div class="tier-desc">Best all-rounder for everyday photos.</div>
               <span class="tier-dot" id="dot-general"></span>
@@ -320,7 +320,7 @@
             >
               <div class="tier-head">
                 <span class="tier-label">ULTRA HR</span>
-                <span class="tier-tech" id="tech-hr">BiRefNet_HR (424.0MB)</span>
+                <span class="tier-tech" id="tech-hr">BiRefNet_HR</span>
               </div>
               <div class="tier-desc">Best for 4K/8K detail &amp; fine edges.</div>
               <span class="tier-dot" id="dot-hr"></span>
@@ -333,7 +333,7 @@
             >
               <div class="tier-head">
                 <span class="tier-label">PORTRAIT</span>
-                <span class="tier-tech" id="tech-portrait">BiRefNet-portrait (424.0MB)</span>
+                <span class="tier-tech" id="tech-portrait">BiRefNet-portrait</span>
               </div>
               <div class="tier-desc">Best for portraits, hair &amp; eyelashes.</div>
               <span class="tier-dot" id="dot-portrait"></span>
@@ -346,7 +346,7 @@
             >
               <div class="tier-head">
                 <span class="tier-label">MATTING</span>
-                <span class="tier-tech" id="tech-matting">BiRefNet_HR-matting (424.0MB)</span>
+                <span class="tier-tech" id="tech-matting">BiRefNet_HR-matting</span>
               </div>
               <div class="tier-desc">Best for glass, smoke &amp; sheer fabric.</div>
               <span class="tier-dot" id="dot-matting"></span>
@@ -359,7 +359,7 @@
             >
               <div class="tier-head">
                 <span class="tier-label">DYNAMIC</span>
-                <span class="tier-tech" id="tech-dynamic">BiRefNet_dynamic (424.0MB)</span>
+                <span class="tier-tech" id="tech-dynamic">BiRefNet_dynamic</span>
               </div>
               <div class="tier-desc">Best for panoramas &amp; tall banners.</div>
               <span class="tier-dot" id="dot-dynamic"></span>
@@ -432,9 +432,9 @@
         <div class="tabbar" id="tabBar" role="tablist" aria-label="Open image tabs"></div>
 
         <main class="viewport checkerboard-canvas" id="viewport">
-          <div class="error-toast" id="errorToast" role="alert" aria-live="polite"></div>
+          <div class="error-toast" id="errorToast" role="alert" aria-live="polite" title="Click to copy" tabindex="0"></div>
 
-          <!-- Empty / Dropzone State — doubles as the welcome splash -->
+          <!-- Empty / Dropzone State - doubles as the welcome splash -->
           <div class="empty-state" id="emptyState">
             <div class="empty-head">
               <img class="empty-logo" src="/favicon.ico" alt="OpenBGR" />
@@ -562,7 +562,7 @@
                 id="exportWidthInput"
                 min="1"
                 max="16384"
-                placeholder="—"
+                placeholder="--"
               />
             </div>
             <span class="px-sep">×</span>
@@ -574,7 +574,7 @@
                 id="exportHeightInput"
                 min="1"
                 max="16384"
-                placeholder="—"
+                placeholder="--"
               />
             </div>
           </div>
@@ -593,8 +593,8 @@
       <div class="status-spacer"></div>
       <div class="status-group status-center">
         <div class="status-kv status-kv-file">FILE: <span id="statFile">NONE</span></div>
-        <div class="status-kv status-kv-dim">DIMENSIONS: <span id="statDim">—</span></div>
-        <div class="status-kv status-kv-time">ELAPSED: <span id="statTime">—</span></div>
+        <div class="status-kv status-kv-dim">DIMENSIONS: <span id="statDim">--</span></div>
+        <div class="status-kv status-kv-time">ELAPSED: <span id="statTime">--</span></div>
       </div>
       <div class="status-group status-right">
         <a href="https://github.com/markoshaq" target="_blank" rel="noopener noreferrer" class="credit-link">
@@ -840,7 +840,7 @@
                     <span class="model-desc">Fast general cutouts for quick batches and CPUs.</span>
                   </div>
                   <div class="model-actions">
-                    <span class="model-size" id="syssize-lite">—</span>
+                    <span class="model-size" id="syssize-lite">--</span>
                     <button type="button" class="action-btn model-uninstall-btn" data-uninstall-model="lite" id="sysbtn-lite" disabled>NOT INSTALLED</button>
                   </div>
                 </div>
@@ -851,7 +851,7 @@
                     <span class="model-desc">All-round model for products, objects, and everyday photos.</span>
                   </div>
                   <div class="model-actions">
-                    <span class="model-size" id="syssize-general">—</span>
+                    <span class="model-size" id="syssize-general">--</span>
                     <button type="button" class="action-btn model-uninstall-btn" data-uninstall-model="general" id="sysbtn-general" disabled>NOT INSTALLED</button>
                   </div>
                 </div>
@@ -862,7 +862,7 @@
                     <span class="model-desc">Native 2048px model for 4K/8K photos and fine edge detail.</span>
                   </div>
                   <div class="model-actions">
-                    <span class="model-size" id="syssize-hr">—</span>
+                    <span class="model-size" id="syssize-hr">--</span>
                     <button type="button" class="action-btn model-uninstall-btn" data-uninstall-model="hr" id="sysbtn-hr" disabled>NOT INSTALLED</button>
                   </div>
                 </div>
@@ -873,7 +873,7 @@
                     <span class="model-desc">Tuned for people, headshots, flyaway hair, and eyelashes.</span>
                   </div>
                   <div class="model-actions">
-                    <span class="model-size" id="syssize-portrait">—</span>
+                    <span class="model-size" id="syssize-portrait">--</span>
                     <button type="button" class="action-btn model-uninstall-btn" data-uninstall-model="portrait" id="sysbtn-portrait" disabled>NOT INSTALLED</button>
                   </div>
                 </div>
@@ -884,7 +884,7 @@
                     <span class="model-desc">Soft alpha matting for glass, smoke, sheer fabric, and fine hair.</span>
                   </div>
                   <div class="model-actions">
-                    <span class="model-size" id="syssize-matting">—</span>
+                    <span class="model-size" id="syssize-matting">--</span>
                     <button type="button" class="action-btn model-uninstall-btn" data-uninstall-model="matting" id="sysbtn-matting" disabled>NOT INSTALLED</button>
                   </div>
                 </div>
@@ -895,7 +895,7 @@
                     <span class="model-desc">Preserves native aspect ratio up to 2K for panoramas and banners.</span>
                   </div>
                   <div class="model-actions">
-                    <span class="model-size" id="syssize-dynamic">—</span>
+                    <span class="model-size" id="syssize-dynamic">--</span>
                     <button type="button" class="action-btn model-uninstall-btn" data-uninstall-model="dynamic" id="sysbtn-dynamic" disabled>NOT INSTALLED</button>
                   </div>
                 </div>
@@ -912,15 +912,15 @@
                 </div>
                 <div class="spec-row">
                   <span class="spec-key">PRECISION</span>
-                  <span class="spec-val" id="hwPrecision">—</span>
+                  <span class="spec-val" id="hwPrecision">--</span>
                 </div>
                 <div class="spec-row">
                   <span class="spec-key">RAM</span>
-                  <span class="spec-val" id="hwMemory">—</span>
+                  <span class="spec-val" id="hwMemory">--</span>
                 </div>
                 <div class="spec-row">
                   <span class="spec-key">VERSION</span>
-                  <span class="spec-val" id="sysVersion">—</span>
+                  <span class="spec-val" id="sysVersion">--</span>
                 </div>
                 <div class="spec-row">
                   <span class="spec-key">DIAGNOSTIC LOGS</span>

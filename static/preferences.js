@@ -12,7 +12,15 @@ import {
   ACCENTS,
   normalizeTierKey,
   setError,
+  openConfirmModal,
+  createByteSmoother,
+  updateTierDownloadUI,
+  clearTierDownloadProgress,
+  getTierDownloadText,
+  formatDiskBytes,
 } from "./state.js";
+
+export { formatDiskBytes };
 
 const PREFS_SECTION_MAP = {
   preferences: "settings-preferences",
@@ -36,27 +44,11 @@ const MODEL_TECH_NAMES = {
   dynamic: "BiRefNet_dynamic",
 };
 
-const MODEL_EXPECTED_BYTES = {
-  lite: 177669592,
-  general: 444566476,
-  hr: 444566476,
-  portrait: 444566476,
-  matting: 444566476,
-  dynamic: 444566476,
-};
-
 let installingModelKey = null;
 
-/** Formats a byte count as `KB`/`MB`/`GB` (compact mode drops the unit suffix padding). */
-export function formatDiskBytes(bytes, compact = false) {
-  const n = Number(bytes) || 0;
-  const sp = compact ? "" : " ";
-  if (n <= 0) return `0${sp}MB`;
-  const gb = n / (1024 * 1024 * 1024);
-  if (gb >= 1) return `${gb.toFixed(2)}${sp}GB`;
-  const mb = n / (1024 * 1024);
-  if (mb >= 1) return `${mb.toFixed(1)}${sp}MB`;
-  return `${Math.max(1, Math.round(n / 1024))}${sp}KB`;
+/** True while a Settings/context-menu model install is in flight. */
+export function isModelInstallInProgress() {
+  return installingModelKey !== null;
 }
 
 /** Looks up the TIER registry entry for a model key. */
@@ -102,27 +94,31 @@ export function updateCacheIndicator() {
     const tierInfo = tiers[key];
     const status = getTierAvailability(tierInfo);
     const sizeBytes = Number(tierInfo?.size_bytes) || 0;
-    const expectedBytes =
-      Number(tierInfo?.expected_bytes) || MODEL_EXPECTED_BYTES[key] || 0;
+    const expectedBytes = Number(tierInfo?.expected_bytes) || 0;
     const isInstalled = Boolean(tierInfo?.cached || sizeBytes > 0);
     if (isInstalled) installedCount++;
     totalBytes += sizeBytes;
     const sizeLabel = isInstalled ? formatDiskBytes(sizeBytes) : "0 MB";
-    const compactSize = formatDiskBytes(
-      isInstalled && sizeBytes > 0 ? sizeBytes : expectedBytes,
-      true
-    );
     const techName = tierInfo?.tech_name || MODEL_TECH_NAMES[key] || key;
 
     applyDotState(document.getElementById(`dot-${key}`), status, false);
     applyDotState(document.getElementById(`sysdot-${key}`), status, true);
 
+    const tierBtn = document.querySelector(
+      `#tierSelector .tier-btn[data-tier="${key}"]`
+    );
+    tierBtn?.classList.toggle("uncached", !isInstalled);
+    if (isInstalled) tierBtn?.style.removeProperty("--dl");
+
     const techEl = document.getElementById(`tech-${key}`);
     if (techEl) {
-      techEl.textContent =
-        installingModelKey === key
-          ? `${techName} (Installing…)`
-          : `${techName} (${compactSize})`;
+      techEl.dataset.name = techName;
+      // Always show the download size so the label matches install progress;
+      // installed disk footprint (FP16-compacted) lives in the Settings pane.
+      const dlText = getTierDownloadText(key);
+      const sizeText =
+        dlText || (expectedBytes > 0 ? formatDiskBytes(expectedBytes, true) : "");
+      techEl.textContent = sizeText ? `${techName} (${sizeText})` : techName;
     }
 
     const sizeEl = document.getElementById(`syssize-${key}`);
@@ -142,7 +138,9 @@ export function updateCacheIndicator() {
       } else {
         uninstallBtn.disabled = true;
         uninstallBtn.textContent =
-          installingModelKey === key ? "INSTALLING…" : "NOT INSTALLED";
+          installingModelKey === key
+            ? getTierDownloadText(key) || "0MB"
+            : "NOT INSTALLED";
       }
     }
   });
@@ -221,6 +219,18 @@ export async function uninstallModel(target) {
     btn.textContent = "REMOVING…";
   }
 
+  const keys =
+    target === "all" ? TIER_KEYS : [normalizeTierKey(target)];
+  const tierBtns = keys
+    .map((key) =>
+      document.querySelector(`#tierSelector .tier-btn[data-tier="${key}"]`)
+    )
+    .filter(Boolean);
+  tierBtns.forEach((tb) => {
+    tb.classList.add("uninstalling");
+    tb.classList.add("uncached");
+  });
+
   try {
     const fd = new FormData();
     fd.append("target", target);
@@ -244,6 +254,12 @@ export async function uninstallModel(target) {
   } catch (err) {
     setError(err?.message || "Failed to uninstall model weights.");
     updateCacheIndicator();
+  } finally {
+    // Keep `.uninstalling` long enough for the 1.1s drain animation to
+    // complete even when the delete request finishes quickly.
+    tierBtns.forEach((tb) =>
+      setTimeout(() => tb.classList.remove("uninstalling"), 1150)
+    );
   }
 }
 
@@ -262,6 +278,8 @@ export async function installModel(target) {
   installingModelKey = norm;
   updateCacheIndicator();
 
+  const smooth = createByteSmoother();
+  let dlPeak = 0;
   const installPoll = setInterval(() => {
     fetch("/api/progress")
       .then((r) => (r.ok ? r.json() : null))
@@ -269,20 +287,21 @@ export async function installModel(target) {
         if (!p || p.phase !== "download") return;
         const dl = Number(p.downloaded_bytes) || 0;
         const tot = Number(p.total_bytes) || 0;
-        const btn = document.getElementById(`sysbtn-${norm}`);
+        const shown = Math.max(smooth(dl, tot), dlPeak);
+        dlPeak = shown;
+        const expectedBytes =
+          Number(state.serverStatus?.tiers?.[norm]?.expected_bytes) || 0;
         const sizeEl = document.getElementById(`syssize-${norm}`);
-        if (btn && tot > 0) {
-          btn.textContent = `INSTALLING ${Math.round((dl / tot) * 100)}%`;
-        }
         if (sizeEl) {
           sizeEl.textContent =
             tot > 0
-              ? `${(dl / 1e6).toFixed(0)} / ${(tot / 1e6).toFixed(0)} MB`
-              : `${(dl / 1e6).toFixed(0)} MB`;
+              ? `${formatDiskBytes(shown, true)} / ${formatDiskBytes(tot, true)}`
+              : formatDiskBytes(shown, true);
         }
+        updateTierDownloadUI(norm, shown, tot, expectedBytes);
       })
       .catch(() => {});
-  }, 400);
+  }, 250);
 
   try {
     const fd = new FormData();
@@ -308,6 +327,7 @@ export async function installModel(target) {
   } finally {
     clearInterval(installPoll);
     installingModelKey = null;
+    clearTierDownloadProgress(norm);
     updateCacheIndicator();
   }
 }
@@ -321,13 +341,11 @@ export function showModelContextMenu(key, x, y) {
   const norm = normalizeTierKey(key);
   const tierInfo = getTierInfo(norm);
   const sizeBytes = Number(tierInfo?.size_bytes) || 0;
-  const expectedBytes =
-    Number(tierInfo?.expected_bytes) || MODEL_EXPECTED_BYTES[norm] || 0;
+  const expectedBytes = Number(tierInfo?.expected_bytes) || 0;
   const isInstalled = Boolean(tierInfo?.cached || sizeBytes > 0);
-  const compactSize = formatDiskBytes(
-    isInstalled && sizeBytes > 0 ? sizeBytes : expectedBytes,
-    true
-  );
+  const sizeNum = isInstalled && sizeBytes > 0 ? sizeBytes : expectedBytes;
+  const compactSize = sizeNum > 0 ? formatDiskBytes(sizeNum, true) : null;
+  const sizeSuffix = compactSize ? ` (${compactSize})` : "";
   const techName = tierInfo?.tech_name || MODEL_TECH_NAMES[norm] || norm;
 
   const head = document.createElement("div");
@@ -351,12 +369,23 @@ export function showModelContextMenu(key, x, y) {
 
   const busy = state.isProcessing || Boolean(installingModelKey);
   if (isInstalled) {
-    addItem(`Uninstall (${compactSize})`, () => uninstallModel(norm), busy);
+    addItem(
+      `Uninstall${sizeSuffix}`,
+      () =>
+        openConfirmModal(
+          {
+            title: `UNINSTALL ${String(techName).toUpperCase()}?`,
+            message: `This deletes ${compactSize || "the cached model weights"} from disk. You will need to re-download the model to use it again.`,
+            confirmText: "UNINSTALL",
+            cancelText: "KEEP MODEL",
+          },
+          () => uninstallModel(norm)
+        ),
+      busy
+    );
   } else {
     addItem(
-      installingModelKey === norm
-        ? `Installing (${compactSize})…`
-        : `Install (${compactSize})`,
+      `Install${sizeSuffix}`,
       () => installModel(norm),
       busy || !navigator.onLine
     );
@@ -456,12 +485,12 @@ export async function syncServerStatus(isInitialLoad = false, onSelectTier = nul
     const { device_label, precision, ram_label, ram_gb, recommended_tier, version } =
       state.serverStatus;
     dom.hwCompute.textContent = (device_label || "LOCAL ENGINE").toUpperCase();
-    if (dom.hwPrecision) dom.hwPrecision.textContent = (precision || "—").toUpperCase();
+    if (dom.hwPrecision) dom.hwPrecision.textContent = (precision || "--").toUpperCase();
     if (dom.hwMemory) {
-      const memText = ram_label || (ram_gb ? `${ram_gb} GB` : "—");
+      const memText = ram_label || (ram_gb ? `${ram_gb} GB` : "--");
       dom.hwMemory.textContent = String(memText).toUpperCase();
     }
-    const verLabel = version ? `V${version}` : "V—";
+    const verLabel = version ? `V${version}` : "V--";
     if (dom.prefsVersion) dom.prefsVersion.textContent = verLabel;
     if (dom.sysVersion) dom.sysVersion.textContent = verLabel;
     if (dom.aboutVersion) dom.aboutVersion.textContent = verLabel;

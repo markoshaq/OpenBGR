@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# OpenBGR — Headless context-menu helper (macOS Quick Action / Linux services)
+# OpenBGR - Headless context-menu helper (macOS Quick Action / Linux services)
 # =============================================================================
 # Processes 1 or more selected images using the user's Quick Action settings in
 # ~/.openbgr/quick_action.json (model preset, save destination, output format,

@@ -141,6 +141,106 @@ function loadPrefs() {
 
 export const prefs = loadPrefs();
 
+/**
+ * Returns a function `(downloadedBytes, totalBytes) => shownBytes` that
+ * extrapolates the last observed download rate between samples, so coarse
+ * xet chunk flushes still render as smooth progress.
+ */
+export function createByteSmoother() {
+  let rate = 0;
+  let lastBytes = 0;
+  let lastAt = 0;
+  return (dl, tot) => {
+    const now = performance.now();
+    if (dl > lastBytes) {
+      if (lastAt) {
+        const r = (dl - lastBytes) / ((now - lastAt) / 1000);
+        rate = rate ? rate * 0.5 + r * 0.5 : r;
+      }
+      lastBytes = dl;
+      lastAt = now;
+    }
+    return Math.min(
+      tot > 0 ? tot : lastBytes,
+      lastBytes + rate * ((now - lastAt) / 1000)
+    );
+  };
+}
+
+/** Formats a byte count for display (MiB/GiB units). */
+export function formatDiskBytes(bytes, compact = false) {
+  const n = Number(bytes) || 0;
+  const sp = compact ? "" : " ";
+  if (n <= 0) return `0${sp}MB`;
+  const gb = n / (1024 * 1024 * 1024);
+  if (gb >= 1) return `${gb.toFixed(2)}${sp}GB`;
+  const mb = n / (1024 * 1024);
+  if (mb >= 1) return `${mb.toFixed(1)}${sp}MB`;
+  return `${Math.max(1, Math.round(n / 1024))}${sp}KB`;
+}
+
+/** Live "XMB/YMB" download text per model key, shared by every progress poller. */
+const tierDownloadText = new Map();
+
+/** Highest rendered download byte count per model key; displayed progress never regresses. */
+const tierDownloadPeak = new Map();
+
+/**
+ * Paints live model-download progress onto a sidebar tier button (fill +
+ * label). The label's total uses `expectedBytes` (same source as the static
+ * label) so the number can't drift mid-download; the fill uses the real
+ * downloaded/total ratio.
+ */
+export function updateTierDownloadUI(key, shownBytes, totBytes, expectedBytes) {
+  if (!key) return;
+  const peak = Math.max(shownBytes, tierDownloadPeak.get(key) || 0);
+  tierDownloadPeak.set(key, peak);
+  const totalShown = expectedBytes > 0 ? expectedBytes : totBytes;
+  const text =
+    totalShown > 0
+      ? `${formatDiskBytes(peak, true)}/${formatDiskBytes(totalShown, true)}`
+      : formatDiskBytes(peak, true);
+  tierDownloadText.set(key, text);
+  const tierBtn = document.querySelector(
+    `#tierSelector .tier-btn[data-tier="${key}"]`
+  );
+  if (tierBtn) {
+    tierBtn.classList.add("downloading");
+    if (totBytes > 0) {
+      tierBtn.style.setProperty(
+        "--dl",
+        `${Math.min(100, (peak / totBytes) * 100)}%`
+      );
+    }
+  }
+  const techEl = document.getElementById(`tech-${key}`);
+  if (techEl) {
+    const name =
+      techEl.dataset.name ||
+      techEl.textContent.replace(/\s*\([^)]*\)\s*$/, "").trim();
+    techEl.textContent = `${name} (${text})`;
+  }
+}
+
+/** Clears live download progress from a sidebar tier button. */
+export function clearTierDownloadProgress(key) {
+  if (!key) return;
+  tierDownloadText.delete(key);
+  tierDownloadPeak.delete(key);
+  const tierBtn = document.querySelector(
+    `#tierSelector .tier-btn[data-tier="${key}"]`
+  );
+  if (tierBtn) {
+    tierBtn.classList.remove("downloading");
+    tierBtn.style.removeProperty("--dl");
+  }
+}
+
+/** Returns the live "XMB/YMB" label for a downloading model, or null. */
+export function getTierDownloadText(key) {
+  return tierDownloadText.get(key) || null;
+}
+
 /** Persists the current preference object to `localStorage` as JSON. */
 export function savePrefs() {
   try {
@@ -346,7 +446,7 @@ export function createTabRecord(overrides = {}) {
     zoom: 1,
     panX: 0,
     panY: 0,
-    elapsedText: "—",
+    elapsedText: "--",
     batchFiles: [],
     ...overrides,
   };
@@ -398,16 +498,68 @@ export function saveStateToActiveTab() {
   tab.elapsedText = dom.statTime.textContent;
 }
 
+let errorCopyResetTimer = null;
+
 /** Shows (or clears, with empty message) the transient error toast. */
 export function setError(message) {
   if (!message) {
     dom.errorToast.classList.remove("visible");
     dom.errorToast.textContent = "";
+    delete dom.errorToast.dataset.raw;
     return;
   }
-  dom.errorToast.textContent = `ERROR // ${message}`;
+  dom.errorToast.dataset.raw = message;
+  dom.errorToast.textContent = `ERROR: ${message}`;
   dom.errorToast.classList.add("visible");
 }
+
+/** Copies `text` to the clipboard; resolves false if every method failed. */
+async function copyTextToClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (_) {}
+  }
+  // Fallback for contexts where the async Clipboard API is unavailable.
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    return document.execCommand("copy");
+  } catch (_) {
+    return false;
+  } finally {
+    ta.remove();
+  }
+}
+
+/** Clicking (or Enter/Space on) the error toast copies its message to the clipboard. */
+function handleErrorToastCopy() {
+  const raw = dom.errorToast.dataset.raw;
+  if (!raw) return;
+  copyTextToClipboard(raw).then((ok) => {
+    if (!ok) return;
+    dom.errorToast.textContent = "COPIED TO CLIPBOARD";
+    clearTimeout(errorCopyResetTimer);
+    errorCopyResetTimer = setTimeout(() => {
+      if (dom.errorToast.dataset.raw) {
+        dom.errorToast.textContent = `ERROR: ${dom.errorToast.dataset.raw}`;
+      }
+    }, 1200);
+  });
+}
+
+dom.errorToast?.addEventListener("click", handleErrorToastCopy);
+dom.errorToast?.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    handleErrorToastCopy();
+  }
+});
 
 let lastConfirmFocus = null;
 

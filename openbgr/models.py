@@ -6,6 +6,7 @@ FP16 weight compaction, and preprocessing transforms.
 from __future__ import annotations
 
 import gc
+import importlib
 import os
 import sys
 import threading
@@ -15,10 +16,11 @@ from pathlib import Path
 from typing import Any
 
 import torch
-from huggingface_hub import HfApi, try_to_load_from_cache
+from huggingface_hub import HfApi, snapshot_download, try_to_load_from_cache
 from huggingface_hub.constants import HF_HUB_CACHE
 from huggingface_hub.file_download import repo_folder_name
 from torchvision import transforms
+from tqdm.auto import tqdm as _TqdmAuto
 from transformers import AutoModelForImageSegmentation
 
 from .config import (
@@ -107,9 +109,38 @@ JOB_PROGRESS: dict[str, Any] = {
     "model_key": None,
     "downloaded_bytes": 0,
     "total_bytes": 0,
+    # Private: model key of the download currently holding
+    # `_MODEL_DOWNLOAD_LOCK`, consumed by /api/progress (popped before return).
+    "_dl_key": None,
 }
 
 _VALID_PHASES = {"idle", "download", "load", "inference"}
+
+# Serializes model downloads so the shared progress state (and the module-
+# level tqdm patch below) is only ever driven by one download at a time.
+_MODEL_DOWNLOAD_LOCK = threading.Lock()
+
+
+def model_download_active() -> bool:
+    """True while a model download holds the serialization lock."""
+    return _MODEL_DOWNLOAD_LOCK.locked()
+
+
+@contextmanager
+def model_download_guard(blocking: bool = True) -> Iterator[None]:
+    """
+    Serializes an arbitrary critical section against in-flight model
+    downloads (and blocks new ones while held). Used by the uninstall
+    endpoint so a download cannot start between its fast-fail checks and
+    the cache deletion itself. With `blocking=False`, raises
+    `BlockingIOError` instead of waiting when a download is active.
+    """
+    if not _MODEL_DOWNLOAD_LOCK.acquire(blocking):
+        raise BlockingIOError("a model download is in progress")
+    try:
+        yield
+    finally:
+        _MODEL_DOWNLOAD_LOCK.release()
 
 
 def set_job_phase(phase: str, model_key: str | None = None) -> None:
@@ -123,65 +154,139 @@ def set_job_phase(phase: str, model_key: str | None = None) -> None:
         JOB_PROGRESS["phase"] = phase
         if model_key is not None:
             JOB_PROGRESS["model_key"] = model_key
-        if phase != "download":
+        # When a download owned by another operation is in flight, its byte
+        # counters must survive this operation's phase transitions (the
+        # /api/progress endpoint derives the download phase from the lock).
+        if phase != "download" and not _MODEL_DOWNLOAD_LOCK.locked():
             JOB_PROGRESS["downloaded_bytes"] = 0
             JOB_PROGRESS["total_bytes"] = 0
 
 
-def _expected_download_bytes(repo_id: str) -> int:
-    """Returns total remote bytes for `repo_id` via HF metadata (0 on failure)."""
-    try:
-        info = HfApi().model_info(repo_id, files_metadata=True)
-        return int(sum(f.size or 0 for f in (info.siblings or [])))
-    except Exception:
-        return 0
+# The module object behind `huggingface_hub.utils.tqdm`, NOT the `tqdm`
+# class re-exported under the same attribute name.
+_HF_TQDM_MODULE = importlib.import_module("huggingface_hub.utils.tqdm")
 
 
-def _download_progress_watcher(
-    repo_id: str, model_key: str | None, stop: threading.Event
-) -> None:
-    """Polls the HF `blobs/` dir (including `*.incomplete` files) for byte progress."""
-    blob_dir = get_model_cache_dir(repo_id) / "blobs"
-    total = _expected_download_bytes(repo_id)
-    while not stop.is_set():
-        try:
-            downloaded = (
-                sum(f.stat().st_size for f in blob_dir.rglob("*") if f.is_file())
-                if blob_dir.exists()
-                else 0
-            )
-        except OSError:
-            downloaded = 0
+class _JobDownloadTqdm(_TqdmAuto):
+    """
+    `tqdm` subclass swapped into `huggingface_hub.utils.tqdm.tqdm` while a
+    model download is active. Every per-file progress bar the HF downloader
+    creates (HTTP `iter_content` chunks and hf-xet `progress_updater` deltas
+    alike, including inside `from_pretrained`) then reports real byte
+    progress into `JOB_PROGRESS`, instead of relying on coarse
+    `.incomplete` flushes on disk.
+    """
+
+    # False for `snapshot_download`'s outer `thread_map` bar: its `total` is a
+    # file count and `update(1)` fires per completed file, not bytes.
+    _track_bytes = True
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        # Capture before super(): tqdm short-circuits `__init__` when
+        # `disable=True` and never sets `self.total`/`self.initial`.
+        initial = kwargs.get("initial", 0) or 0
+        total = kwargs.get("total") or 0
+        kwargs["disable"] = True
+        super().__init__(*args, **kwargs)
+        if not self._track_bytes:
+            return
         with JOB_PROGRESS_LOCK:
-            JOB_PROGRESS["phase"] = "download"
-            if model_key is not None:
-                JOB_PROGRESS["model_key"] = model_key
-            JOB_PROGRESS["downloaded_bytes"] = downloaded
-            if total:
-                JOB_PROGRESS["total_bytes"] = total
-        stop.wait(0.25)
+            if total > 0:
+                JOB_PROGRESS["total_bytes"] += int(total)
+            if initial > 0:
+                JOB_PROGRESS["downloaded_bytes"] += int(initial)
+
+    def update(self, n: Any = 1) -> Any:
+        if not self._track_bytes:
+            return super().update(n)
+        try:
+            amount = int(n)
+        except (TypeError, ValueError):
+            amount = 0
+        if amount > 0:
+            with JOB_PROGRESS_LOCK:
+                new_total = JOB_PROGRESS["downloaded_bytes"] + amount
+                if JOB_PROGRESS["total_bytes"] > 0:
+                    new_total = min(new_total, JOB_PROGRESS["total_bytes"])
+                JOB_PROGRESS["downloaded_bytes"] = new_total
+        return super().update(n)
+
+
+class _JobOuterBarTqdm(_JobDownloadTqdm):
+    """Suppresses byte accounting for `snapshot_download`'s outer file-count bar."""
+
+    _track_bytes = False
+
+
+def _resolve_snapshot_download() -> Any:
+    """Returns `snapshot_download`, honoring any test patch on `app`."""
+    app_mod = sys.modules.get("app")
+    if app_mod is not None and hasattr(app_mod, "snapshot_download"):
+        return app_mod.snapshot_download
+    return snapshot_download
 
 
 @contextmanager
-def track_model_download(repo_id: str, model_key: str | None = None) -> Iterator[None]:
+def track_model_download(repo_id: str, model_key: str | None = None) -> Iterator[type]:
     """
-    Reports live Hugging Face download progress into `JOB_PROGRESS` while the
-    wrapped block fetches weights. Works for both `snapshot_download` and
-    `from_pretrained`, since both stream into `blobs/*.incomplete` on disk.
+    Sets the `download` job phase and yields a tqdm class (for callers that
+    pass `tqdm_class`, e.g. `snapshot_download`'s outer bar). Per-file
+    progress is captured by temporarily swapping the class inside
+    `huggingface_hub.utils.tqdm`, since `tqdm_class` alone only reaches the outer
+    "Fetching N files" bar, not individual downloads.
     """
-    set_job_phase("download", model_key)
-    stop = threading.Event()
-    watcher = threading.Thread(
-        target=_download_progress_watcher,
-        args=(repo_id, model_key, stop),
-        daemon=True,
-    )
-    watcher.start()
+    del repo_id  # kept in the signature for call-site clarity
+    # Serialize: a second tracked download waits for the current one so the
+    # shared tqdm patch and JOB_PROGRESS bytes never interleave.
+    _MODEL_DOWNLOAD_LOCK.acquire()
     try:
-        yield
+        with JOB_PROGRESS_LOCK:
+            JOB_PROGRESS["_dl_key"] = model_key
+        set_job_phase("download", model_key)
+        with JOB_PROGRESS_LOCK:
+            JOB_PROGRESS["downloaded_bytes"] = 0
+            JOB_PROGRESS["total_bytes"] = 0
+        # Swap the tqdm class used by `huggingface_hub`'s internal progress-bar
+        # factory so per-file download bars (and their chunk deltas) report into
+        # `JOB_PROGRESS`. Restored on exit regardless of outcome.
+        original_tqdm = _HF_TQDM_MODULE.tqdm  # type: ignore[attr-defined]
+        _HF_TQDM_MODULE.tqdm = _JobDownloadTqdm  # type: ignore[attr-defined]
+        try:
+            yield _JobOuterBarTqdm
+        finally:
+            _HF_TQDM_MODULE.tqdm = original_tqdm  # type: ignore[attr-defined]
+            with JOB_PROGRESS_LOCK:
+                JOB_PROGRESS["_dl_key"] = None
     finally:
-        stop.set()
-        watcher.join(timeout=2.0)
+        _MODEL_DOWNLOAD_LOCK.release()
+
+
+_EXPECTED_BYTES_LOCK = threading.Lock()
+_EXPECTED_BYTES_LIVE: dict[str, int] = {}
+
+
+def expected_model_bytes(repo_id: str, fallback: int = 0) -> int:
+    """Returns the live remote download size for `repo_id`, or `fallback` if unknown."""
+    with _EXPECTED_BYTES_LOCK:
+        return _EXPECTED_BYTES_LIVE.get(repo_id, fallback)
+
+
+def refresh_expected_sizes() -> None:
+    """
+    Fetches the real remote download size of every model repo in the
+    background so `/api/status` can report accurate figures instead of
+    relying solely on the bundled `expected_bytes` constants.
+    """
+    api = HfApi()
+    for repo_id in MODELS.values():
+        try:
+            info = api.model_info(repo_id, files_metadata=True)
+            total = int(sum(f.size or 0 for f in (info.siblings or [])))
+        except Exception:
+            continue
+        if total > 0:
+            with _EXPECTED_BYTES_LOCK:
+                _EXPECTED_BYTES_LIVE[repo_id] = total
 
 
 def _resolve_cache_lookup() -> Any:
@@ -339,36 +444,66 @@ class ModelManager:
 
             repo_id = MODELS[model_key]
             logger.info("[Model] Loading %s (%s) on %s...", repo_id, PRECISION_LABEL, DEVICE_LABEL)
-            set_job_phase("load", model_key)
-
+            # Only own the phase when no foreign inference is in flight: a
+            # concurrent warmup load must not clobber an active job's
+            # "inference" phase or reset it on exit.
+            with JOB_PROGRESS_LOCK:
+                owns_phase = JOB_PROGRESS["phase"] != "inference"
             try:
-                loaded_model = AutoModelForImageSegmentation.from_pretrained(
-                    repo_id,
-                    trust_remote_code=True,
-                    local_files_only=True,
-                )
-                logger.info("[Model] Loaded %s from local offline cache.", repo_id)
-            except Exception:
-                logger.info(
-                    "[Model] %s not found in local cache. "
-                    "Downloading weights from Hugging Face Hub (one-time)...",
-                    repo_id,
-                )
-                with track_model_download(repo_id, model_key):
+                if owns_phase:
+                    set_job_phase("load", model_key)
+                try:
                     loaded_model = AutoModelForImageSegmentation.from_pretrained(
                         repo_id,
                         trust_remote_code=True,
-                        local_files_only=False,
+                        local_files_only=True,
                     )
-                logger.info("[Model] Download complete for %s.", repo_id)
-                set_job_phase("load", model_key)
-                compact_model_cache_fp16(repo_id)
+                    logger.info("[Model] Loaded %s from local offline cache.", repo_id)
+                except Exception:
+                    logger.info(
+                        "[Model] %s not found in local cache. "
+                        "Downloading weights from Hugging Face Hub (one-time)...",
+                        repo_id,
+                    )
+                    with track_model_download(repo_id, model_key) as dl_tqdm:
+                        try:
+                            _resolve_snapshot_download()(repo_id=repo_id, tqdm_class=dl_tqdm)
+                        except Exception:
+                            # Fall back to transformers' own downloader (no byte
+                            # progress) so unusual repo layouts still work.
+                            logger.warning(
+                                "[Model] Snapshot download failed for %s; "
+                                "falling back to the transformers downloader.",
+                                repo_id,
+                            )
+                            loaded_model = AutoModelForImageSegmentation.from_pretrained(
+                                repo_id,
+                                trust_remote_code=True,
+                                local_files_only=False,
+                            )
+                        else:
+                            loaded_model = AutoModelForImageSegmentation.from_pretrained(
+                                repo_id,
+                                trust_remote_code=True,
+                                local_files_only=True,
+                            )
+                    logger.info("[Model] Download complete for %s.", repo_id)
+                    if owns_phase:
+                        set_job_phase("load", model_key)
+                    compact_model_cache_fp16(repo_id)
 
-            loaded_model.to(device=DEVICE, dtype=DTYPE)
-            loaded_model.eval()
+                loaded_model.to(device=DEVICE, dtype=DTYPE)
+                loaded_model.eval()
 
-            self.model = loaded_model
-            self.active_model_key = model_key
+                self.model = loaded_model
+                self.active_model_key = model_key
+            finally:
+                # This function owns the `download`/`load` phases it set;
+                # callers like the startup preload or Quick Action have no
+                # reset of their own, so clear here or /api/progress would
+                # report "loading" forever and uninstall would stay 409.
+                if owns_phase:
+                    set_job_phase("idle")
             return self.model
 
 

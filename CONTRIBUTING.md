@@ -4,7 +4,7 @@ Thanks for your interest in OpenBGR. Here's how to get a change from idea to mer
 
 ## Before you start
 
-- **Bug?** Open an issue with the bug-report template — include your OS, the model tier used, and the relevant log output.
+- **Bug?** Open an issue with the bug-report template; include your OS, the model tier used, and the relevant log output.
 - **Feature or refactor?** Open an issue first to discuss scope before writing code. It avoids wasted work on changes that don't fit the project's goals (local-only, zero telemetry, no accounts).
 
 ## Development setup
@@ -12,11 +12,11 @@ Thanks for your interest in OpenBGR. Here's how to get a change from idea to mer
 ```bash
 git clone https://github.com/markoshaq/OpenBGR.git
 cd OpenBGR
-./start.sh          # macOS / Linux — provisions .venv automatically
+./start.sh          # macOS / Linux: provisions .venv automatically
 start.bat           :: Windows
 ```
 
-The launcher creates `.venv` and installs `requirements.txt`. On first run it also downloads a BiRefNet checkpoint (~85–425 MB) from Hugging Face.
+The launcher creates `.venv` and installs `requirements.txt`. On first run it also downloads a BiRefNet checkpoint (~85-425 MB) from Hugging Face.
 
 ## Checks that must pass before a PR
 
@@ -31,7 +31,7 @@ python -m unittest discover -s tests -v # test suite
 
 ## Guidelines
 
-- Match the existing style — compact functions, type hints, docstrings on public APIs.
+- Match the existing style: compact functions, type hints, docstrings on public APIs.
 - Keep the privacy guarantee intact: no telemetry, no analytics, no network calls beyond Hugging Face model downloads.
 - Frontend code lives in `static/` (vanilla JS, no build step); backend in `openbgr/`; entrypoint is `app.py`.
 - If you add or rename files, update the **Project Layout** section in `README.md`.
