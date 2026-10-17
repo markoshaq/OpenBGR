@@ -262,6 +262,28 @@ export async function installModel(target) {
   installingModelKey = norm;
   updateCacheIndicator();
 
+  const installPoll = setInterval(() => {
+    fetch("/api/progress")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((p) => {
+        if (!p || p.phase !== "download") return;
+        const dl = Number(p.downloaded_bytes) || 0;
+        const tot = Number(p.total_bytes) || 0;
+        const btn = document.getElementById(`sysbtn-${norm}`);
+        const sizeEl = document.getElementById(`syssize-${norm}`);
+        if (btn && tot > 0) {
+          btn.textContent = `INSTALLING ${Math.round((dl / tot) * 100)}%`;
+        }
+        if (sizeEl) {
+          sizeEl.textContent =
+            tot > 0
+              ? `${(dl / 1e6).toFixed(0)} / ${(tot / 1e6).toFixed(0)} MB`
+              : `${(dl / 1e6).toFixed(0)} MB`;
+        }
+      })
+      .catch(() => {});
+  }, 400);
+
   try {
     const fd = new FormData();
     fd.append("target", norm);
@@ -284,6 +306,7 @@ export async function installModel(target) {
   } catch (err) {
     setError(err?.message || "Failed to install model weights.");
   } finally {
+    clearInterval(installPoll);
     installingModelKey = null;
     updateCacheIndicator();
   }

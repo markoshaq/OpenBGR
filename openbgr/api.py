@@ -41,11 +41,15 @@ from .config import (
     open_folder_in_file_manager,
 )
 from .models import (
+    JOB_PROGRESS,
+    JOB_PROGRESS_LOCK,
     MANAGER,
     compact_model_cache_fp16,
     get_model_cache_dir,
     get_model_disk_bytes,
     is_model_cached_locally,
+    set_job_phase,
+    track_model_download,
 )
 from .pipeline import (
     _LAST_JOB,
@@ -328,19 +332,33 @@ async def api_install_model(target: str = Form(...)) -> dict[str, Any]:
 
     def _download() -> None:
         """Blocking download + FP16 compaction, run in a worker thread."""
-        dl_fn(repo_id=repo_id)
+        with track_model_download(repo_id, norm):
+            dl_fn(repo_id=repo_id)
+        set_job_phase("load", norm)
         compact_fn(repo_id)
 
     try:
         await asyncio.to_thread(_download)
     except Exception as exc:
+        set_job_phase("idle")
         logger.error("[API] Failed to download %s: %s", repo_id, exc)
         raise HTTPException(status_code=500, detail=f"Failed to download {repo_id}: {exc}") from exc
 
+    set_job_phase("idle")
     return {
         "ok": True,
         "status": api_status(),
     }
+
+
+@app.get("/api/progress")
+def api_job_progress() -> dict[str, Any]:
+    """
+    Returns the current pipeline phase (`idle`, `download`, `load`, `inference`)
+    plus live model-download byte counts, for the frontend busy overlay.
+    """
+    with JOB_PROGRESS_LOCK:
+        return dict(JOB_PROGRESS)
 
 
 @app.post("/api/save")
@@ -425,6 +443,7 @@ async def api_remove_bg(
         logger.error("[API] Segmentation pipeline failed: %s", exc)
         raise HTTPException(status_code=500, detail=f"Segmentation pipeline failed: {exc}") from exc
     finally:
+        set_job_phase("idle")
         pil_img.close()
 
     output_buffer = io.BytesIO()

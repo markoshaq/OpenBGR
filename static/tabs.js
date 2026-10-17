@@ -13,6 +13,7 @@ import {
   createTabRecord,
   nextClipboardName,
   revokeTabUrls,
+  savePrefs,
   saveStateToActiveTab,
   setError,
   openConfirmModal,
@@ -664,6 +665,76 @@ export function cancelProcessing() {
   syncMenuBarState();
 }
 
+let jobProgressTimer = null;
+let inferPhaseStartedAt = 0;
+
+/** Sets the busy-overlay bar to a determinate percent, or back to indeterminate. */
+function setBusyProgress(pct) {
+  const fill = dom.busyProgressFill;
+  if (!fill) return;
+  const bar = fill.parentElement;
+  if (pct == null) {
+    bar?.classList.remove("determinate");
+    fill.style.width = "0";
+    return;
+  }
+  bar?.classList.add("determinate");
+  fill.style.width = `${Math.max(0, Math.min(100, pct))}%`;
+}
+
+/** Polls `/api/progress` so the busy overlay tracks download/load/inference stages. */
+async function pollJobProgress() {
+  try {
+    const res = await fetch("/api/progress");
+    if (!res.ok) return;
+    const p = await res.json();
+    if (!state.isProcessing) return;
+
+    if (p.phase === "download") {
+      inferPhaseStartedAt = 0;
+      const dl = Number(p.downloaded_bytes) || 0;
+      const tot = Number(p.total_bytes) || 0;
+      const modelName = PRESET_NAMES[state.tier] || "MODEL";
+      dom.busyTitle.textContent = "DOWNLOADING MODEL WEIGHTS";
+      dom.busySub.textContent =
+        tot > 0
+          ? `${(dl / 1e6).toFixed(0)} / ${(tot / 1e6).toFixed(0)} MB — ${modelName} (one-time fetch, fully offline after).`
+          : `${(dl / 1e6).toFixed(0)} MB downloaded — ${modelName} (one-time fetch).`;
+      setBusyProgress(tot > 0 ? (dl / tot) * 100 : null);
+    } else if (p.phase === "load") {
+      inferPhaseStartedAt = 0;
+      dom.busyTitle.textContent = "LOADING MODEL";
+      dom.busySub.textContent = "Loading checkpoint into device memory.";
+      setBusyProgress(null);
+    } else if (p.phase === "inference") {
+      if (!inferPhaseStartedAt) inferPhaseStartedAt = performance.now();
+      const est = Number(prefs.inferEstimates?.[state.tier]) || 4000;
+      const elapsed = performance.now() - inferPhaseStartedAt;
+      if (!state.batch.running) {
+        dom.busyTitle.textContent = "RUNNING INFERENCE";
+      }
+      setBusyProgress(Math.min(97, (elapsed / (elapsed + est * 0.6)) * 100));
+    }
+  } catch (_) {}
+}
+
+/** Starts polling job progress while the busy overlay is visible. */
+export function startJobProgressPolling() {
+  stopJobProgressPolling();
+  setBusyProgress(null);
+  jobProgressTimer = setInterval(pollJobProgress, 350);
+}
+
+/** Stops progress polling and resets the overlay bar to indeterminate. */
+export function stopJobProgressPolling() {
+  if (jobProgressTimer) {
+    clearInterval(jobProgressTimer);
+    jobProgressTimer = null;
+  }
+  inferPhaseStartedAt = 0;
+  setBusyProgress(null);
+}
+
 /** POSTs the active image to `/api/remove-bg` and applies the returned cutout + job id. */
 export async function runSegmentation() {
   if (!state.sourceFile) return;
@@ -687,6 +758,7 @@ export async function runSegmentation() {
   }
   setError(null);
   dom.busyOverlay.classList.add("active");
+  startJobProgressPolling();
   dom.statTime.textContent = "PROCESSING...";
   syncMenuBarState();
 
@@ -734,6 +806,11 @@ export async function runSegmentation() {
     const inferenceMs = parseFloat(
       response.headers.get("X-Inference-Time-Ms") || "0"
     );
+    if (inferenceMs > 0) {
+      prefs.inferEstimates = prefs.inferEstimates || {};
+      prefs.inferEstimates[state.tier] = inferenceMs;
+      savePrefs();
+    }
     const width = parseInt(response.headers.get("X-Image-Width") || "0", 10);
     const height = parseInt(response.headers.get("X-Image-Height") || "0", 10);
     const jobId = parseInt(
@@ -791,6 +868,7 @@ export async function runSegmentation() {
       state.isProcessing = false;
       state.abortController = null;
       dom.busyOverlay.classList.remove("active");
+      stopJobProgressPolling();
       closeConfirmModal();
       if (state.resultBlob) {
         dom.appShell?.classList.remove("no-result");

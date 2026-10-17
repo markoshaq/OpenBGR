@@ -9,11 +9,13 @@ import gc
 import os
 import sys
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 import torch
-from huggingface_hub import try_to_load_from_cache
+from huggingface_hub import HfApi, try_to_load_from_cache
 from huggingface_hub.constants import HF_HUB_CACHE
 from huggingface_hub.file_download import repo_folder_name
 from torchvision import transforms
@@ -94,6 +96,92 @@ def get_model_disk_bytes(repo_id: str) -> int:
         )
     except Exception:
         return 0
+
+
+# Shared job-progress state polled by `/api/progress`. `phase` is one of
+# `idle | download | load | inference`; byte fields are only meaningful while
+# `phase == "download"`.
+JOB_PROGRESS_LOCK = threading.Lock()
+JOB_PROGRESS: dict[str, Any] = {
+    "phase": "idle",
+    "model_key": None,
+    "downloaded_bytes": 0,
+    "total_bytes": 0,
+}
+
+_VALID_PHASES = {"idle", "download", "load", "inference"}
+
+
+def set_job_phase(phase: str, model_key: str | None = None) -> None:
+    """Publishes the current pipeline stage so the UI can render honest progress."""
+    if phase not in _VALID_PHASES:
+        return
+    with JOB_PROGRESS_LOCK:
+        if phase == "download" and JOB_PROGRESS["phase"] != "download":
+            JOB_PROGRESS["downloaded_bytes"] = 0
+            JOB_PROGRESS["total_bytes"] = 0
+        JOB_PROGRESS["phase"] = phase
+        if model_key is not None:
+            JOB_PROGRESS["model_key"] = model_key
+        if phase != "download":
+            JOB_PROGRESS["downloaded_bytes"] = 0
+            JOB_PROGRESS["total_bytes"] = 0
+
+
+def _expected_download_bytes(repo_id: str) -> int:
+    """Returns total remote bytes for `repo_id` via HF metadata (0 on failure)."""
+    try:
+        info = HfApi().model_info(repo_id, files_metadata=True)
+        return int(sum(f.size or 0 for f in (info.siblings or [])))
+    except Exception:
+        return 0
+
+
+def _download_progress_watcher(
+    repo_id: str, model_key: str | None, stop: threading.Event
+) -> None:
+    """Polls the HF `blobs/` dir (including `*.incomplete` files) for byte progress."""
+    blob_dir = get_model_cache_dir(repo_id) / "blobs"
+    total = _expected_download_bytes(repo_id)
+    while not stop.is_set():
+        try:
+            downloaded = (
+                sum(f.stat().st_size for f in blob_dir.rglob("*") if f.is_file())
+                if blob_dir.exists()
+                else 0
+            )
+        except OSError:
+            downloaded = 0
+        with JOB_PROGRESS_LOCK:
+            JOB_PROGRESS["phase"] = "download"
+            if model_key is not None:
+                JOB_PROGRESS["model_key"] = model_key
+            JOB_PROGRESS["downloaded_bytes"] = downloaded
+            if total:
+                JOB_PROGRESS["total_bytes"] = total
+        stop.wait(0.4)
+
+
+@contextmanager
+def track_model_download(repo_id: str, model_key: str | None = None) -> Iterator[None]:
+    """
+    Reports live Hugging Face download progress into `JOB_PROGRESS` while the
+    wrapped block fetches weights. Works for both `snapshot_download` and
+    `from_pretrained`, since both stream into `blobs/*.incomplete` on disk.
+    """
+    set_job_phase("download", model_key)
+    stop = threading.Event()
+    watcher = threading.Thread(
+        target=_download_progress_watcher,
+        args=(repo_id, model_key, stop),
+        daemon=True,
+    )
+    watcher.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        watcher.join(timeout=2.0)
 
 
 def _resolve_cache_lookup() -> Any:
@@ -251,6 +339,7 @@ class ModelManager:
 
             repo_id = MODELS[model_key]
             logger.info("[Model] Loading %s (%s) on %s...", repo_id, PRECISION_LABEL, DEVICE_LABEL)
+            set_job_phase("load", model_key)
 
             try:
                 loaded_model = AutoModelForImageSegmentation.from_pretrained(
@@ -265,12 +354,14 @@ class ModelManager:
                     "Downloading weights from Hugging Face Hub (one-time)...",
                     repo_id,
                 )
-                loaded_model = AutoModelForImageSegmentation.from_pretrained(
-                    repo_id,
-                    trust_remote_code=True,
-                    local_files_only=False,
-                )
+                with track_model_download(repo_id, model_key):
+                    loaded_model = AutoModelForImageSegmentation.from_pretrained(
+                        repo_id,
+                        trust_remote_code=True,
+                        local_files_only=False,
+                    )
                 logger.info("[Model] Download complete for %s.", repo_id)
+                set_job_phase("load", model_key)
                 compact_model_cache_fp16(repo_id)
 
             loaded_model.to(device=DEVICE, dtype=DTYPE)

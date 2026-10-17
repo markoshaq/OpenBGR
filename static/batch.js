@@ -33,6 +33,8 @@ import {
   ingestImageFile,
   cancelProcessing,
   syncMenuBarState,
+  startJobProgressPolling,
+  stopJobProgressPolling,
 } from "./tabs.js";
 
 /** Opens the hidden multi-file input (or native dialog) routing results to a callback. */
@@ -461,6 +463,7 @@ export async function runBatch(tab) {
   state.isProcessing = true;
   setError(null);
   dom.busyOverlay.classList.add("active");
+  startJobProgressPolling();
   const isCached = tierInfo ? tierInfo.cached !== false : true;
 
   const presetName = PRESET_NAMES[snap.tier] || snap.tier.toUpperCase();
@@ -561,6 +564,7 @@ export async function runBatch(tab) {
   state.isProcessing = false;
   state.abortController = null;
   dom.busyOverlay.classList.remove("active");
+  stopJobProgressPolling();
 
   if (!outputDir && batch.results.length > 0) {
     const entries = await Promise.all(

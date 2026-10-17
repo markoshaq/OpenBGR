@@ -468,6 +468,25 @@ class TestOpenBGR(unittest.TestCase):
             openbgr_app.api_open_logs_dir()
         self.assertEqual(ctx.exception.status_code, 500)
 
+    def test_job_progress_phase_transitions(self) -> None:
+        """`/api/progress` exposes a valid phase and resets byte counters off-download."""
+        import openbgr.models as models_mod
+
+        progress = openbgr_app.api_job_progress()
+        self.assertIn(progress["phase"], {"idle", "download", "load", "inference"})
+        self.assertIsInstance(progress["downloaded_bytes"], int)
+        self.assertIsInstance(progress["total_bytes"], int)
+
+        with models_mod.JOB_PROGRESS_LOCK:
+            models_mod.JOB_PROGRESS["phase"] = "download"
+            models_mod.JOB_PROGRESS["downloaded_bytes"] = 123
+            models_mod.JOB_PROGRESS["total_bytes"] = 999
+        models_mod.set_job_phase("inference", "general")
+        self.assertEqual(models_mod.JOB_PROGRESS["phase"], "inference")
+        self.assertEqual(models_mod.JOB_PROGRESS["downloaded_bytes"], 0)
+        self.assertEqual(models_mod.JOB_PROGRESS["model_key"], "general")
+        models_mod.set_job_phase("idle")
+
     def test_macos_notifier_strips_asset_catalog_icon(self) -> None:
         """`ensure_macos_notifier_app` removes `CFBundleIconName` and `Assets.car` so `.icns` wins."""
         import openbgr.quick_action as qa_mod

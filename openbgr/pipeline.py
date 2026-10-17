@@ -22,7 +22,12 @@ from .config import (
     TIERS,
     normalize_tier_key,
 )
-from .models import MANAGER, compute_dynamic_size, get_preprocess_transform
+from .models import (
+    MANAGER,
+    compute_dynamic_size,
+    get_preprocess_transform,
+    set_job_phase,
+)
 
 
 def decontaminate_edge_colors(rgb_np: np.ndarray, alpha_np: np.ndarray) -> np.ndarray:
@@ -202,6 +207,7 @@ def segment_foreground(
         MANAGER.check_cancelled(job_epoch)
         model = MANAGER.get_or_load(model_key)
         MANAGER.check_cancelled(job_epoch)
+        set_job_phase("inference", model_key)
 
         start_time = time.perf_counter()
 

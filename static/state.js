@@ -231,6 +231,7 @@ export const dom = {
   btnLoupe: document.getElementById("btnLoupe"),
 
   busyOverlay: document.getElementById("busyOverlay"),
+  busyProgressFill: document.getElementById("busyProgressFill"),
   busyTitle: document.getElementById("busyTitle"),
   busySub: document.getElementById("busySub"),
   btnCancel: document.getElementById("btnCancel"),

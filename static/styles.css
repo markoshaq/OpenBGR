@@ -1294,6 +1294,20 @@ body {
   animation: slide 0.9s infinite linear;
 }
 
+.progress-bar.determinate::after {
+  display: none;
+}
+
+.progress-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.35s ease;
+}
+
 @keyframes slide {
   to {
     left: 100%;
