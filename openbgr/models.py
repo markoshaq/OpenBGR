@@ -159,7 +159,7 @@ def _download_progress_watcher(
             JOB_PROGRESS["downloaded_bytes"] = downloaded
             if total:
                 JOB_PROGRESS["total_bytes"] = total
-        stop.wait(0.4)
+        stop.wait(0.25)
 
 
 @contextmanager

@@ -667,6 +667,9 @@ export function cancelProcessing() {
 
 let jobProgressTimer = null;
 let inferPhaseStartedAt = 0;
+let dlRate = 0; // bytes/sec, estimated from consecutive samples
+let dlLastBytes = 0;
+let dlLastAt = 0;
 
 /** Sets the busy-overlay bar to a determinate percent, or back to indeterminate. */
 function setBusyProgress(pct) {
@@ -689,18 +692,38 @@ async function pollJobProgress() {
     if (!res.ok) return;
     const p = await res.json();
     if (!state.isProcessing) return;
+    if (p.phase !== "download") {
+      dlRate = 0;
+      dlLastBytes = 0;
+      dlLastAt = 0;
+    }
 
     if (p.phase === "download") {
       inferPhaseStartedAt = 0;
       const dl = Number(p.downloaded_bytes) || 0;
       const tot = Number(p.total_bytes) || 0;
       const modelName = PRESET_NAMES[state.tier] || "MODEL";
+      const now = performance.now();
+      // Xet flushes land in coarse bursts — extrapolate at the observed rate
+      // between samples so the bar animates smoothly instead of stepping.
+      if (dl > dlLastBytes) {
+        if (dlLastAt) {
+          const rate = (dl - dlLastBytes) / ((now - dlLastAt) / 1000);
+          dlRate = dlRate ? dlRate * 0.5 + rate * 0.5 : rate;
+        }
+        dlLastBytes = dl;
+        dlLastAt = now;
+      }
+      const shown = Math.min(
+        tot > 0 ? tot : dlLastBytes,
+        dlLastBytes + dlRate * ((now - dlLastAt) / 1000)
+      );
       dom.busyTitle.textContent = "DOWNLOADING MODEL WEIGHTS";
       dom.busySub.textContent =
         tot > 0
-          ? `${(dl / 1e6).toFixed(0)} / ${(tot / 1e6).toFixed(0)} MB — ${modelName} (one-time fetch, fully offline after).`
-          : `${(dl / 1e6).toFixed(0)} MB downloaded — ${modelName} (one-time fetch).`;
-      setBusyProgress(tot > 0 ? (dl / tot) * 100 : null);
+          ? `${(shown / 1e6).toFixed(0)} / ${(tot / 1e6).toFixed(0)} MB — ${modelName}`
+          : `${(shown / 1e6).toFixed(0)} MB downloaded — ${modelName}`;
+      setBusyProgress(tot > 0 ? (shown / tot) * 100 : null);
     } else if (p.phase === "load") {
       inferPhaseStartedAt = 0;
       dom.busyTitle.textContent = "LOADING MODEL";
@@ -722,7 +745,7 @@ async function pollJobProgress() {
 export function startJobProgressPolling() {
   stopJobProgressPolling();
   setBusyProgress(null);
-  jobProgressTimer = setInterval(pollJobProgress, 350);
+  jobProgressTimer = setInterval(pollJobProgress, 250);
 }
 
 /** Stops progress polling and resets the overlay bar to indeterminate. */
@@ -732,6 +755,9 @@ export function stopJobProgressPolling() {
     jobProgressTimer = null;
   }
   inferPhaseStartedAt = 0;
+  dlRate = 0;
+  dlLastBytes = 0;
+  dlLastAt = 0;
   setBusyProgress(null);
 }
 
@@ -777,9 +803,7 @@ export async function runSegmentation() {
   dom.busySub.textContent =
     `Exporting to ${destDesc} using ${presetName} model ` +
     `at ${qualityDesc} quality.` +
-    (isCached
-      ? ""
-      : " One-time download from Hugging Face Hub — all future runs are fully offline.");
+    (isCached ? "" : " Downloading model weights first.");
 
   const formData = new FormData();
   formData.append("file", state.sourceFile);

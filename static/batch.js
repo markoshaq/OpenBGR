@@ -477,7 +477,7 @@ export async function runBatch(tab) {
   const batchDesc =
     `Exporting to ${destDesc} using ${presetName} model ` +
     `at ${qualityDesc} quality.` +
-    (isCached ? "" : " Fetching model weights (first run).");
+    (isCached ? "" : " Fetching model weights first.");
 
   if (tab.id === state.activeTabId) renderBatchPanel(tab);
   syncMenuBarState();
