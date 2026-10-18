@@ -413,6 +413,14 @@ body {
   line-height: 1.45;
 }
 
+#fileDestPath {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
 /* Preset Stack Cards (toggles) & Horizontal Hardware Tier Row */
 .preset-stack {
   display: flex;
@@ -955,6 +963,47 @@ body {
   padding-bottom: 8px;
 }
 
+.aspect-lock-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 32px;
+  margin-bottom: 1px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.aspect-lock-btn:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.aspect-lock-btn.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.aspect-lock-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+.aspect-lock-btn .icon-unlink {
+  display: none;
+}
+
+.aspect-lock-btn:not(.active) .icon-link {
+  display: none;
+}
+
+.aspect-lock-btn:not(.active) .icon-unlink {
+  display: block;
+}
+
 .action-btn {
   background: var(--bg);
   border: 1px solid var(--border-strong);
@@ -1217,6 +1266,16 @@ body {
   background: var(--surface-2);
   padding: 3px 7px;
   color: var(--text);
+}
+
+.spec-val .kbd {
+  font-family: var(--mono);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.spec-val .kbd + .kbd {
+  margin-left: 4px;
 }
 
 .stage {
@@ -1533,6 +1592,22 @@ body {
 
 .error-toast.visible {
   display: block;
+}
+
+.error-toast.success {
+  background: #06281b;
+  border-color: #34d399;
+  color: #a7f3d0;
+  max-width: 86vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.theme-light .error-toast.success {
+  background: #d1fae5;
+  border-color: #059669;
+  color: #065f46;
 }
 
 /* -------------------------------------------------------------------------
@@ -1955,10 +2030,6 @@ input[type="file"] {
   align-items: center;
   gap: 10px;
   padding: 9px 12px;
-}
-
-.model-row .tier-dot {
-  position: static;
 }
 
 .model-meta {

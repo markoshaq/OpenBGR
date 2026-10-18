@@ -715,6 +715,7 @@ def run_quick_action(inputs: list[str]) -> dict[str, Any]:
             failed += 1
 
     if not valid_sources:
+        logger.warning("[QuickAction] No valid input files: %s", inputs)
         return {"ok": False, "succeeded": [], "outputs": [], "failed": failed}
 
     # When multiple images are selected and save_mode is "ask", prompt once for
@@ -741,6 +742,13 @@ def run_quick_action(inputs: list[str]) -> dict[str, Any]:
     clip_fn = _resolve_app_symbol("copy_png_bytes_to_clipboard", copy_png_bytes_to_clipboard)
     notify_fn = _resolve_app_symbol("send_openbgr_notification", send_openbgr_notification)
 
+    logger.info(
+        "[QuickAction] Processing %d image%s with %s (%s).",
+        len(valid_sources),
+        "" if len(valid_sources) == 1 else "s",
+        tier_key,
+        fmt,
+    )
     for src in valid_sources:
         pil_img: Image.Image | None = None
         result_img: Image.Image | None = None
@@ -785,8 +793,8 @@ def run_quick_action(inputs: list[str]) -> dict[str, Any]:
 
             succeeded_names.append(src.name)
             outputs_written.append(str(out_path))
-        except Exception as exc:
-            logger.warning("[QuickAction] Failed %s: %s", src.name, exc)
+        except Exception:
+            logger.exception("[QuickAction] Failed %s.", src.name)
             failed += 1
         finally:
             set_job_phase("idle")
@@ -795,6 +803,11 @@ def run_quick_action(inputs: list[str]) -> dict[str, Any]:
             if pil_img is not None:
                 pil_img.close()
 
+    logger.info(
+        "[QuickAction] Run complete: %d succeeded, %d failed.",
+        len(succeeded_names),
+        failed,
+    )
     if notify:
         msg = format_quick_action_notification(succeeded_names, failed)
         if msg:
@@ -870,8 +883,8 @@ def run_cli(
         except InterruptedError:
             logger.info("[CLI] Cancelled: %s", src.name)
             rc = 1
-        except Exception as exc:
-            logger.warning("[CLI] Failed %s: %s", src.name, exc)
+        except Exception:
+            logger.exception("[CLI] Failed %s.", src.name)
             rc = 1
         finally:
             set_job_phase("idle")

@@ -607,6 +607,7 @@ def build_native_menus(window: Any) -> list[Any]:
     help_menu = Menu(
         "Help",
         [
+            MenuAction("Keyboard Shortcuts…", call("openSettings('shortcuts')")),
             MenuAction("Preferences…", call("openSettings('preferences')")),
             MenuAction("About OpenBGR…", call("openSettings('about')")),
             MenuSeparator(),

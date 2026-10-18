@@ -135,7 +135,7 @@ export function renderBatchPanel(tab) {
 
   const n = tab.batchFiles.length;
   const runningThis = state.batch.running && state.batch.tabId === tab.id;
-  dom.batchSub.textContent = `${n} IMAGE${n === 1 ? "" : "S"} · ONE SETTING FOR ALL`;
+  dom.batchSub.textContent = `${n} IMAGE${n === 1 ? "" : "S"} - ONE SETTING FOR ALL`;
 
   updateDestUI();
   dom.batchFootText.textContent = tab.outputDir
@@ -146,7 +146,7 @@ export function renderBatchPanel(tab) {
   if (n === 0) {
     const hint = document.createElement("div");
     hint.className = "batch-empty-hint";
-    hint.textContent = "EMPTY BATCH · DROP IMAGES OR USE ADD IMAGES";
+    hint.textContent = "EMPTY BATCH - DROP IMAGES OR USE ADD IMAGE";
     dom.batchList.appendChild(hint);
   }
 
@@ -191,7 +191,7 @@ export function renderBatchPanel(tab) {
     const rm = document.createElement("button");
     rm.type = "button";
     rm.className = "batch-row-remove";
-    rm.textContent = "×";
+    rm.textContent = "x";
     rm.title = "Remove from batch";
     rm.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -390,7 +390,7 @@ export function showTabContextMenu(tab, x, y, onRequestCloseTab) {
   if (tab.kind === "batch") {
     addItem("RUN BATCH", () => runBatch(tab), state.batch.running);
     addItem(
-      "ADD IMAGES…",
+      "ADD IMAGE…",
       () => {
         pickImageFiles((files) => addFilesToBatchTab(tab, files));
       },
@@ -476,7 +476,7 @@ export async function runBatch(tab) {
   const presetName = PRESET_NAMES[snap.tier] || snap.tier.toUpperCase();
   const qualityDesc =
     snap.exportWidth > 0 || snap.exportHeight > 0
-      ? `${snap.exportWidth || "AUTO"}×${snap.exportHeight || "AUTO"}`
+      ? `${snap.exportWidth || "AUTO"}x${snap.exportHeight || "AUTO"}`
       : `${Math.round((snap.scale || 1) * 100)}%`;
   const destDesc = outputDir
     ? outputDir

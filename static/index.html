@@ -35,7 +35,7 @@
           <div class="menu-root" data-menu="file">
             <button type="button" class="menu-trigger">FILE</button>
             <div class="menu-dropdown">
-              <button type="button" class="menu-item" data-cmd="newTab" data-requires="content">
+              <button type="button" class="menu-item" data-cmd="newTab" data-requires="tab">
                 <span class="menu-check"></span>
                 <span class="menu-label">New Tab</span>
                 <span class="menu-kbd" data-shortcut="Mod+T">⌘T</span>
@@ -105,17 +105,17 @@
               <button type="button" class="menu-item" data-cmd="viewSplit" data-check="view:split" data-requires="result">
                 <span class="menu-check">✓</span>
                 <span class="menu-label">Split Comparison</span>
-                <span class="menu-kbd" data-shortcut="Mod+1">⌘1</span>
+                <span class="menu-kbd" data-shortcut="1">1</span>
               </button>
               <button type="button" class="menu-item" data-cmd="viewCutout" data-check="view:cutout" data-requires="result">
                 <span class="menu-check"></span>
                 <span class="menu-label">Cutout Only</span>
-                <span class="menu-kbd" data-shortcut="Mod+2">⌘2</span>
+                <span class="menu-kbd" data-shortcut="2">2</span>
               </button>
               <button type="button" class="menu-item" data-cmd="viewOriginal" data-check="view:original" data-requires="result">
                 <span class="menu-check"></span>
                 <span class="menu-label">Original Only</span>
-                <span class="menu-kbd" data-shortcut="Mod+3">⌘3</span>
+                <span class="menu-kbd" data-shortcut="3">3</span>
               </button>
               <div class="menu-sep"></div>
               <button type="button" class="menu-item" data-cmd="zoomIn" data-requires="image">
@@ -215,6 +215,11 @@
           <div class="menu-root" data-menu="help">
             <button type="button" class="menu-trigger">HELP</button>
             <div class="menu-dropdown">
+              <button type="button" class="menu-item" data-cmd="shortcuts">
+                <span class="menu-check"></span>
+                <span class="menu-label">Keyboard Shortcuts…</span>
+                <span class="menu-kbd"></span>
+              </button>
               <button type="button" class="menu-item" data-cmd="preferences">
                 <span class="menu-check"></span>
                 <span class="menu-label">Preferences &amp; System Info…</span>
@@ -280,7 +285,7 @@
       <aside class="sidebar sidebar-left">
         <div class="sidebar-section">
           <div class="section-header">SOURCE IMAGE</div>
-          <button type="button" class="action-btn full-width" id="btnOpen">OPEN IMAGE FILE</button>
+          <button type="button" class="action-btn full-width" id="btnOpen">ADD IMAGE</button>
           <input type="file" id="fileInput" accept="image/*" multiple />
         </div>
 
@@ -309,7 +314,7 @@
                 <span class="tier-label">GENERAL</span>
                 <span class="tier-tech" id="tech-general">BiRefNet</span>
               </div>
-              <div class="tier-desc">Best all-rounder for everyday photos.</div>
+              <div class="tier-desc">All-rounder for everyday photos.</div>
               <span class="tier-dot" id="dot-general"></span>
             </button>
 
@@ -322,7 +327,7 @@
                 <span class="tier-label">ULTRA HR</span>
                 <span class="tier-tech" id="tech-hr">BiRefNet_HR</span>
               </div>
-              <div class="tier-desc">Best for 4K/8K detail &amp; fine edges.</div>
+              <div class="tier-desc">Used for 4K/8K detail &amp; fine edges.</div>
               <span class="tier-dot" id="dot-hr"></span>
             </button>
 
@@ -335,7 +340,7 @@
                 <span class="tier-label">PORTRAIT</span>
                 <span class="tier-tech" id="tech-portrait">BiRefNet-portrait</span>
               </div>
-              <div class="tier-desc">Best for portraits, hair &amp; eyelashes.</div>
+              <div class="tier-desc">Used for portraits, hair &amp; eyelashes.</div>
               <span class="tier-dot" id="dot-portrait"></span>
             </button>
 
@@ -348,7 +353,7 @@
                 <span class="tier-label">MATTING</span>
                 <span class="tier-tech" id="tech-matting">BiRefNet_HR-matting</span>
               </div>
-              <div class="tier-desc">Best for glass, smoke &amp; sheer fabric.</div>
+              <div class="tier-desc">Used for glass, smoke &amp; sheer fabric.</div>
               <span class="tier-dot" id="dot-matting"></span>
             </button>
 
@@ -361,7 +366,7 @@
                 <span class="tier-label">DYNAMIC</span>
                 <span class="tier-tech" id="tech-dynamic">BiRefNet_dynamic</span>
               </div>
-              <div class="tier-desc">Best for panoramas &amp; tall banners.</div>
+              <div class="tier-desc">Used for panoramas &amp; tall banners.</div>
               <span class="tier-dot" id="dot-dynamic"></span>
             </button>
           </div>
@@ -477,7 +482,7 @@
                 <div class="batch-panel-sub" id="batchSub">0 images</div>
               </div>
               <div class="batch-panel-actions">
-                <button type="button" class="action-btn" id="btnBatchAdd">ADD IMAGES</button>
+                <button type="button" class="action-btn" id="btnBatchAdd">ADD IMAGE</button>
               </div>
             </div>
             <div class="batch-list" id="batchList"></div>
@@ -504,27 +509,23 @@
         <div class="sidebar-section">
           <div class="section-header">FILE DESTINATION</div>
           <button type="button" class="action-btn full-width" id="btnFileDest">CHOOSE FOLDER…</button>
-          <div class="field-hint" id="fileDestPath">Exports ask where to save.</div>
+          <div class="field-hint" id="fileDestPath"></div>
         </div>
 
         <div class="sidebar-section">
           <div class="section-header">OUTPUT FORMAT</div>
           <div class="tier-row" id="formatRow">
-            <button type="button" class="tier-btn fmt-btn has-tooltip active" data-format="png" data-tooltip="Uncompressed 32-bit RGBA with full alpha transparency.">
+            <button type="button" class="tier-btn fmt-btn has-tooltip active" data-format="png" data-tooltip="Lossless 32-bit RGBA with full transparency. Largest files, best compatibility.">
               <span class="tier-label">PNG</span>
-              <span class="tier-sub">RGBA</span>
             </button>
-            <button type="button" class="tier-btn fmt-btn has-tooltip" data-format="webp" data-tooltip="High-efficiency alpha transparency, ~40% smaller files.">
+            <button type="button" class="tier-btn fmt-btn has-tooltip" data-format="webp" data-tooltip="Compressed with full transparency. ~40% smaller than PNG.">
               <span class="tier-label">WEBP</span>
-              <span class="tier-sub">SMALL</span>
             </button>
-            <button type="button" class="tier-btn fmt-btn has-tooltip" data-format="jpg" data-tooltip="Lossy, composited onto the active Matte backdrop color.">
+            <button type="button" class="tier-btn fmt-btn has-tooltip" data-format="jpg" data-tooltip="No transparency. The cutout is flattened onto the active matte backdrop color.">
               <span class="tier-label">JPG</span>
-              <span class="tier-sub">MATTE</span>
             </button>
-            <button type="button" class="tier-btn fmt-btn has-tooltip" data-format="mask" data-tooltip="8-bit grayscale alpha matte (white = foreground, black = background).">
+            <button type="button" class="tier-btn fmt-btn has-tooltip" data-format="mask" data-tooltip="8-bit grayscale matte saved as a .png file (white = foreground, black = background).">
               <span class="tier-label">MASK</span>
-              <span class="tier-sub">ALPHA</span>
             </button>
           </div>
         </div>
@@ -565,7 +566,27 @@
                 placeholder="--"
               />
             </div>
-            <span class="px-sep">×</span>
+            <button
+              type="button"
+              class="aspect-lock-btn active has-tooltip"
+              id="aspectLockBtn"
+              aria-pressed="true"
+              aria-label="Toggle aspect-ratio lock"
+              data-tooltip="Lock width-to-height ratio. Editing one field updates the other. Custom sizes render instantly without re-running inference."
+            >
+              <svg class="icon-link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+              </svg>
+              <svg class="icon-unlink" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M18.84 12.25l1.72-1.71a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                <path d="M5.17 11.75l-1.72 1.71a5 5 0 0 0 7.07 7.07l1.72-1.71" />
+                <line x1="8" y1="2" x2="8" y2="5" />
+                <line x1="2" y1="8" x2="5" y2="8" />
+                <line x1="16" y1="22" x2="16" y2="19" />
+                <line x1="19" y1="16" x2="22" y2="16" />
+              </svg>
+            </button>
             <div class="px-field">
               <label for="exportHeightInput">HEIGHT</label>
               <input
@@ -578,7 +599,6 @@
               />
             </div>
           </div>
-          <div class="field-hint">Aspect-ratio locked. Updates instantly without re-running inference.</div>
         </div>
 
         <div class="sidebar-section export-actions-section">
@@ -629,7 +649,7 @@
             <span class="modal-title" id="infoModalTitle">PREFERENCES</span>
             <span class="prefs-subtitle">OPENBGR <span id="prefsVersion">V0.10</span></span>
           </div>
-          <button type="button" class="prefs-close" id="btnPrefsCloseX" aria-label="Close preferences">×</button>
+          <button type="button" class="prefs-close" id="btnPrefsCloseX" aria-label="Close preferences">X</button>
         </div>
 
         <div class="prefs-body">
@@ -639,6 +659,7 @@
             <button type="button" class="prefs-nav-item" data-pane="settings-quick-action">QUICK ACTION</button>
             <button type="button" class="prefs-nav-item" data-pane="settings-models">MODELS</button>
             <button type="button" class="prefs-nav-item" data-pane="settings-system">SYSTEM</button>
+            <button type="button" class="prefs-nav-item" data-pane="settings-shortcuts">SHORTCUTS</button>
             <button type="button" class="prefs-nav-item" data-pane="settings-about">ABOUT</button>
           </nav>
 
@@ -706,10 +727,10 @@
                     <span class="pref-desc">File type preselected for every export.</span>
                   </div>
                   <select class="studio-select pref-select" id="prefDefaultFormat">
-                    <option value="png">.png</option>
-                    <option value="webp">.webp</option>
-                    <option value="jpg">.jpg</option>
-                    <option value="mask">.png (Alpha Mask)</option>
+                    <option value="png">PNG</option>
+                    <option value="webp">WEBP</option>
+                    <option value="jpg">JPG</option>
+                    <option value="mask">MASK</option>
                   </select>
                 </div>
                 <div class="pref-row">
@@ -762,10 +783,10 @@
                     <span class="pref-desc">File format written by the right-click Quick Action.</span>
                   </div>
                   <select class="studio-select pref-select" id="prefQaFormat">
-                    <option value="png">.png (Transparent RGBA)</option>
-                    <option value="webp">.webp (Lossless Transparent)</option>
-                    <option value="jpg">.jpg (White Matte)</option>
-                    <option value="mask">.png (Alpha Mask)</option>
+                    <option value="png">PNG</option>
+                    <option value="webp">WEBP</option>
+                    <option value="jpg">JPG</option>
+                    <option value="mask">MASK</option>
                   </select>
                 </div>
                 <button type="button" class="pref-switch-row active" id="btnToggleQaEdgeRefine">
@@ -834,7 +855,6 @@
               <div class="pane-subheading">CHECKPOINTS</div>
               <div class="pref-card model-inventory">
                 <div class="model-row" id="sysModel-lite" data-model-key="lite">
-                  <span class="tier-dot" id="sysdot-lite"></span>
                   <div class="model-meta">
                     <span class="model-name">LITE <span class="model-tech">BiRefNet_lite</span></span>
                     <span class="model-desc">Fast general cutouts for quick batches and CPUs.</span>
@@ -845,7 +865,6 @@
                   </div>
                 </div>
                 <div class="model-row" id="sysModel-general" data-model-key="general">
-                  <span class="tier-dot" id="sysdot-general"></span>
                   <div class="model-meta">
                     <span class="model-name">GENERAL <span class="model-tech">BiRefNet</span></span>
                     <span class="model-desc">All-round model for products, objects, and everyday photos.</span>
@@ -856,7 +875,6 @@
                   </div>
                 </div>
                 <div class="model-row" id="sysModel-hr" data-model-key="hr">
-                  <span class="tier-dot" id="sysdot-hr"></span>
                   <div class="model-meta">
                     <span class="model-name">ULTRA HR <span class="model-tech">BiRefNet_HR</span></span>
                     <span class="model-desc">Native 2048px model for 4K/8K photos and fine edge detail.</span>
@@ -867,7 +885,6 @@
                   </div>
                 </div>
                 <div class="model-row" id="sysModel-portrait" data-model-key="portrait">
-                  <span class="tier-dot" id="sysdot-portrait"></span>
                   <div class="model-meta">
                     <span class="model-name">PORTRAIT <span class="model-tech">BiRefNet-portrait</span></span>
                     <span class="model-desc">Tuned for people, headshots, flyaway hair, and eyelashes.</span>
@@ -878,7 +895,6 @@
                   </div>
                 </div>
                 <div class="model-row" id="sysModel-matting" data-model-key="matting">
-                  <span class="tier-dot" id="sysdot-matting"></span>
                   <div class="model-meta">
                     <span class="model-name">MATTING <span class="model-tech">BiRefNet_HR-matting</span></span>
                     <span class="model-desc">Soft alpha matting for glass, smoke, sheer fabric, and fine hair.</span>
@@ -889,7 +905,6 @@
                   </div>
                 </div>
                 <div class="model-row" id="sysModel-dynamic" data-model-key="dynamic">
-                  <span class="tier-dot" id="sysdot-dynamic"></span>
                   <div class="model-meta">
                     <span class="model-name">DYNAMIC <span class="model-tech">BiRefNet_dynamic</span></span>
                     <span class="model-desc">Preserves native aspect ratio up to 2K for panoramas and banners.</span>
@@ -932,6 +947,95 @@
                       </svg>
                     </button>
                   </span>
+                </div>
+              </div>
+            </section>
+
+            <!-- SHORTCUTS PANE -->
+            <section class="prefs-pane" id="settings-shortcuts">
+              <div class="pane-heading">KEYBOARD SHORTCUTS</div>
+              <div class="pref-card">
+                <div class="spec-row">
+                  <span class="spec-key">NEW TAB</span>
+                  <span class="spec-val"><span class="kbd" data-shortcut-chip="Mod+T">⌘T</span></span>
+                </div>
+                <div class="spec-row">
+                  <span class="spec-key">SWITCH TO TAB</span>
+                  <span class="spec-val"><span class="kbd" data-shortcut-chip="Mod+1-9">⌘1 - ⌘9</span></span>
+                </div>
+                <div class="spec-row">
+                  <span class="spec-key">NEXT / PREVIOUS TAB</span>
+                  <span class="spec-val"><span class="kbd" data-shortcut-chip="Ctrl+Tab / Ctrl+Shift+Tab">⌃Tab / ⇧⌃Tab</span></span>
+                </div>
+                <div class="spec-row">
+                  <span class="spec-key">CLOSE TAB</span>
+                  <span class="spec-val"><span class="kbd" data-shortcut-chip="Mod+W">⌘W</span></span>
+                </div>
+                <div class="spec-row">
+                  <span class="spec-key">OPEN IMAGE</span>
+                  <span class="spec-val"><span class="kbd" data-shortcut-chip="Mod+O">⌘O</span></span>
+                </div>
+                <div class="spec-row">
+                  <span class="spec-key">BATCH PROCESS</span>
+                  <span class="spec-val"><span class="kbd" data-shortcut-chip="Mod+B">⌘B</span></span>
+                </div>
+                <div class="spec-row">
+                  <span class="spec-key">PASTE IMAGE</span>
+                  <span class="spec-val"><span class="kbd" data-shortcut-chip="Mod+V">⌘V</span></span>
+                </div>
+                <div class="spec-row">
+                  <span class="spec-key">COPY CUTOUT</span>
+                  <span class="spec-val"><span class="kbd" data-shortcut-chip="Shift+Mod+C">⇧⌘C</span></span>
+                </div>
+                <div class="spec-row">
+                  <span class="spec-key">EXPORT IMAGE</span>
+                  <span class="spec-val"><span class="kbd" data-shortcut-chip="Mod+E">⌘E</span><span class="kbd" data-shortcut-chip="Mod+S">⌘S</span></span>
+                </div>
+              </div>
+              <div class="pane-subheading">CANVAS</div>
+              <div class="pref-card">
+                <div class="spec-row">
+                  <span class="spec-key">SPLIT / CUTOUT / ORIGINAL</span>
+                  <span class="spec-val"><span class="kbd">1</span><span class="kbd">2</span><span class="kbd">3</span></span>
+                </div>
+                <div class="spec-row">
+                  <span class="spec-key">ZOOM IN / OUT</span>
+                  <span class="spec-val"><span class="kbd" data-shortcut-chip="Mod++">⌘+</span><span class="kbd" data-shortcut-chip="Mod+-">⌘-</span></span>
+                </div>
+                <div class="spec-row">
+                  <span class="spec-key">ACTUAL SIZE</span>
+                  <span class="spec-val"><span class="kbd" data-shortcut-chip="Mod+0">⌘0</span></span>
+                </div>
+                <div class="spec-row">
+                  <span class="spec-key">4X LOUPE</span>
+                  <span class="spec-val"><span class="kbd">Z</span></span>
+                </div>
+                <div class="spec-row">
+                  <span class="spec-key">PAN CANVAS</span>
+                  <span class="spec-val"><span class="kbd">HOLD SPACE + DRAG</span></span>
+                </div>
+              </div>
+              <div class="pane-subheading">APPLICATION</div>
+              <div class="pref-card">
+                <div class="spec-row">
+                  <span class="spec-key">RE-RUN SEGMENTATION</span>
+                  <span class="spec-val"><span class="kbd" data-shortcut-chip="Mod+R">⌘R</span></span>
+                </div>
+                <div class="spec-row">
+                  <span class="spec-key">PREFERENCES</span>
+                  <span class="spec-val"><span class="kbd" data-shortcut-chip="Mod+,">⌘,</span></span>
+                </div>
+                <div class="spec-row">
+                  <span class="spec-key">FULL SCREEN</span>
+                  <span class="spec-val"><span class="kbd">F11</span></span>
+                </div>
+                <div class="spec-row">
+                  <span class="spec-key">CANCEL / CLOSE DIALOG</span>
+                  <span class="spec-val"><span class="kbd">ESC</span></span>
+                </div>
+                <div class="spec-row">
+                  <span class="spec-key">QUIT</span>
+                  <span class="spec-val"><span class="kbd" data-shortcut-chip="Mod+Q">⌘Q</span></span>
                 </div>
               </div>
             </section>

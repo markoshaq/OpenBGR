@@ -83,6 +83,12 @@ def _configure_logger() -> logging.Logger:
         return log
     log.setLevel(logging.INFO)
     log.propagate = False
+
+    # Warnings and errors from third-party loggers (uvicorn, torch, hf_hub)
+    # are also captured so headless failures stay diagnosable. The openbgr
+    # logger does not propagate, so its records are never written twice.
+    root = logging.getLogger()
+    root.setLevel(logging.WARNING)
     try:
         APP_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         fh = RotatingFileHandler(
@@ -92,12 +98,14 @@ def _configure_logger() -> logging.Logger:
             logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S")
         )
         log.addHandler(fh)
+        root.addHandler(fh)
     except OSError:
         pass
     if not _stderr_is_log_file():
         stream = logging.StreamHandler(sys.stderr)
         stream.setFormatter(logging.Formatter("%(message)s"))
         log.addHandler(stream)
+        root.addHandler(stream)
     return log
 
 
@@ -217,7 +225,7 @@ TIERS: dict[str, dict[str, Any]] = {
         "key": "lite",
         "label": "Lite",
         "tech_name": "BiRefNet_lite",
-        "sublabel": "1K · Fast",
+        "sublabel": "1K Fast",
         "model_key": "lite",
         "repo_id": MODELS["lite"],
         "expected_bytes": 177742341,
@@ -232,7 +240,7 @@ TIERS: dict[str, dict[str, Any]] = {
         "key": "general",
         "label": "General",
         "tech_name": "BiRefNet",
-        "sublabel": "1K · Studio",
+        "sublabel": "1K Studio",
         "model_key": "general",
         "repo_id": MODELS["general"],
         "expected_bytes": 444584498,
@@ -247,7 +255,7 @@ TIERS: dict[str, dict[str, Any]] = {
         "key": "hr",
         "label": "Ultra HR",
         "tech_name": "BiRefNet_HR",
-        "sublabel": f"2K · {HR_RESOLUTION}px",
+        "sublabel": f"2K {HR_RESOLUTION}px",
         "model_key": "hr",
         "repo_id": MODELS["hr"],
         "expected_bytes": 444583809,
@@ -262,7 +270,7 @@ TIERS: dict[str, dict[str, Any]] = {
         "key": "portrait",
         "label": "Portrait",
         "tech_name": "BiRefNet-portrait",
-        "sublabel": "1K · People",
+        "sublabel": "1K People",
         "model_key": "portrait",
         "repo_id": MODELS["portrait"],
         "expected_bytes": 884984566,
@@ -277,7 +285,7 @@ TIERS: dict[str, dict[str, Any]] = {
         "key": "matting",
         "label": "Matting",
         "tech_name": "BiRefNet_HR-matting",
-        "sublabel": "2K · Alpha",
+        "sublabel": "2K Alpha",
         "model_key": "matting",
         "repo_id": MODELS["matting"],
         "expected_bytes": 444584399,

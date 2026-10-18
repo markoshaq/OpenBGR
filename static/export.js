@@ -13,7 +13,9 @@ import {
   setError,
   blobToBase64,
   downloadBlob,
+  setSuccess,
   FORMAT_EXT,
+  FORMAT_LABELS,
 } from "./state.js";
 
 /**
@@ -258,17 +260,16 @@ export function updateDestUI() {
       : "CHOOSE FOLDER…";
   }
   if (dom.fileDestPath) {
+    let text;
     if (!hasNativePicker) {
-      dom.fileDestPath.textContent = "Exports download via the browser.";
+      text = "Exports save via a file dialog or browser download.";
     } else if (state.outputDir) {
-      dom.fileDestPath.textContent = state.outputDir;
+      text = state.outputDir;
     } else {
-      const active = getActiveTab();
-      dom.fileDestPath.textContent =
-        active?.kind === "batch"
-          ? "Picked on first run if unset."
-          : "Exports ask where to save.";
+      text = "Exports ask where to save.";
     }
+    dom.fileDestPath.textContent = text;
+    dom.fileDestPath.title = state.outputDir || "";
   }
 }
 
@@ -294,7 +295,7 @@ export async function chooseOutputFolder(onBatchUpdate) {
 /** Updates the dims/size/format readouts in the export panel. */
 export function updateExportTelemetry() {
   const activeTab = getActiveTab();
-  const fmtUpper = state.exportFormat.toUpperCase();
+  const fmtUpper = FORMAT_LABELS[state.exportFormat] || state.exportFormat.toUpperCase();
   dom.btnDownload.textContent =
     activeTab?.kind === "batch"
       ? state.batch.running && state.batch.tabId === activeTab.id
@@ -315,11 +316,13 @@ export function updateExportTelemetry() {
   });
 
   if (state.naturalWidth > 0 && state.naturalHeight > 0) {
-    if (!state.exportWidth || !state.exportHeight) {
+    if (!state.exportWidth) {
       state.exportWidth = Math.max(
         1,
         Math.round(state.naturalWidth * state.exportScale)
       );
+    }
+    if (!state.exportHeight) {
       state.exportHeight = Math.max(
         1,
         Math.round(state.naturalHeight * state.exportScale)
@@ -334,10 +337,10 @@ export function updateExportTelemetry() {
 
     dom.statDim.textContent =
       pct === 100
-        ? `${state.exportWidth}×${state.exportHeight} PX`
-        : `${state.exportWidth}×${state.exportHeight} PX (${pct}%)`;
+        ? `${state.exportWidth}x${state.exportHeight} PX`
+        : `${state.exportWidth}x${state.exportHeight} PX (${pct}%)`;
 
-    dom.lblRight.textContent = `${fmtUpper} • ${state.exportWidth}×${state.exportHeight} (${pct}%)`;
+    dom.lblRight.textContent = `${fmtUpper} • ${state.exportWidth}x${state.exportHeight} (${pct}%)`;
     updateLiveStagePreview();
   }
 }
@@ -418,12 +421,13 @@ export async function exportActiveImage() {
       fd.append("filename", fileName);
       fd.append("file", exportBlob, fileName);
       const res = await fetch("/api/save", { method: "POST", body: fd });
+      const payload = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const payload = await res.json().catch(() => ({}));
         throw new Error(
           payload?.detail || "Failed to write to the output folder."
         );
       }
+      setSuccess(`SAVED: ${payload.name || fileName} IN ${state.outputDir}`);
       return;
     }
 
@@ -431,10 +435,34 @@ export async function exportActiveImage() {
       const b64 = await blobToBase64(exportBlob);
       const res = await window.pywebview.api.save_file(b64, fileName);
       if (res?.error) throw new Error(res.error);
+      if (res?.saved && res.path) {
+        const parts = res.path.replace(/\\/g, "/").split("/");
+        const savedName = parts.pop();
+        const savedDir = parts.join("/") || ".";
+        setSuccess(`SAVED: ${savedName} IN ${savedDir}`);
+      }
       return;
     }
 
+    // In Chromium-based contexts (WebView2, Chrome) offer a real Save-As
+    // dialog instead of a silent download when no output folder is set.
+    if (window.showSaveFilePicker) {
+      try {
+        const handle = await window.showSaveFilePicker({
+          suggestedName: fileName,
+        });
+        const writable = await handle.createWritable();
+        await writable.write(exportBlob);
+        await writable.close();
+        setSuccess(`SAVED: ${handle.name}`);
+        return;
+      } catch (pickerErr) {
+        if (pickerErr?.name === "AbortError") return;
+      }
+    }
+
     downloadBlob(exportBlob, fileName);
+    setSuccess(`DOWNLOADED: ${fileName}`);
   } catch (err) {
     setError(err.message || "Failed to export image.");
   }

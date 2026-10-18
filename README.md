@@ -14,8 +14,8 @@ Background removal tool powered by [BiRefNet](https://github.com/ZhengPeng7/BiRe
 - **Multi-tab workspace.** Open several images as tabs, work on them independently, and drag one tab onto another to merge them into a batch, like folders. Zoom and pan are remembered per tab.
 - **Batch processing.** Batch tabs queue any number of images under one shared settings snapshot, with per-file status, drag-out extraction, direct folder export (or a single ZIP in browser mode), and per-file failure recovery.
 - **Six specialized models.** From a fast `Lite` build for CPUs up to 2K soft-alpha `Matting`. See the [model table](#models).
-- **Zoom, pan & 4× loupe.** Pinch-to-zoom and two-finger trackpad panning (`100%-800%`), plus a toggleable 4× circular magnifier loupe (`Z` key) for inspecting hair strands and edges, before and after processing.
-- **Live export preview.** Export as `PNG`, `WEBP`, `JPG`, or an 8-bit `Alpha Mask` at any scale (`10%-200%`) or custom pixel dimensions (`W × H`), rendered live on `<canvas>` without re-running inference.
+- **Zoom, pan & 4x loupe.** Pinch-to-zoom and two-finger trackpad panning (`100%-800%`), plus a toggleable 4x circular magnifier loupe (`Z` key) for inspecting hair strands and edges, before and after processing.
+- **Live export preview.** Export as `PNG`, `WEBP`, `JPG`, or an 8-bit `Alpha Mask` at any scale (`10%-200%`) or custom pixel dimensions (`W x H`), rendered live on `<canvas>` without re-running inference.
 - **Edge & reflection refinement.** Edge defringing removes background color bleed along hair and soft borders, color-spill suppression cleans rim reflections, and a shadow/reflection alpha cutoff floors out floor shadows at export.
 - **Native desktop window.** Opens in a standalone OS window via `pywebview`, with native menus, clipboard, save dialogs, per-monitor window-state restore, and automatic browser fallback.
 - **Model management.** Right-click any model card to install or uninstall checkpoints, open the Hugging Face cache folder, and see disk usage split between app files and model weights. `FP16` inference runs on CUDA and Apple MPS (roughly half the memory of FP32, typically with a solid speedup).
@@ -118,10 +118,10 @@ When an OpenBGR window is already running, the context-menu action reuses it ove
 
 | Model | Checkpoint | Backbone | Native Resolution | FP16 Size | Best For |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Lite** (`lite`) | `ZhengPeng7/BiRefNet_lite` | Swin-T | `1024 × 1024` | ~85 MB | Quick batches, CPUs & integrated graphics |
-| **General** (`general`, *Default*) | `ZhengPeng7/BiRefNet` | Swin-L | `1024 × 1024` | ~424 MB | Products, objects, animals & everyday photos |
+| **Lite** (`lite`) | `ZhengPeng7/BiRefNet_lite` | Swin-T | `1024 x 1024` | ~85 MB | Quick batches, CPUs & integrated graphics |
+| **General** (`general`, *Default*) | `ZhengPeng7/BiRefNet` | Swin-L | `1024 x 1024` | ~424 MB | Products, objects, animals & everyday photos |
 | **Ultra HR** (`hr`) | `ZhengPeng7/BiRefNet_HR` | Swin-L | `1536` / `2048` | ~424 MB | 4K/8K studio photos & micro-edge detail |
-| **Portrait** (`portrait`) | `ZhengPeng7/BiRefNet-portrait` | Swin-L | `1024 × 1024` | ~425 MB (845 MB download) | People, headshots, flyaway hair & eyelashes |
+| **Portrait** (`portrait`) | `ZhengPeng7/BiRefNet-portrait` | Swin-L | `1024 x 1024` | ~425 MB (845 MB download) | People, headshots, flyaway hair & eyelashes |
 | **Matting** (`matting`) | `ZhengPeng7/BiRefNet_HR-matting` | Swin-L | `1536` / `2048` | ~424 MB | Glass, smoke, veils, sheer fabric & soft alpha |
 | **Dynamic** (`dynamic`) | `ZhengPeng7/BiRefNet_dynamic` | Swin-L | Up to `2048` (native ratio) | ~424 MB | Ultrawide panoramas & tall vertical banners |
 

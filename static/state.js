@@ -31,12 +31,13 @@ export function normalizeTierKey(key) {
   return TIER_ALIASES[cleaned] || cleaned;
 }
 
+/** Display names matching the sidebar tier-labels exactly. */
 export const PRESET_NAMES = {
-  lite: "LITE 1K",
-  general: "GENERAL 1K",
-  hr: "ULTRA HR 2K",
-  portrait: "PORTRAIT 1K",
-  matting: "MATTING 2K",
+  lite: "LITE",
+  general: "GENERAL",
+  hr: "ULTRA HR",
+  portrait: "PORTRAIT",
+  matting: "MATTING",
   dynamic: "DYNAMIC",
 };
 
@@ -45,6 +46,13 @@ export const FORMAT_EXT = {
   webp: "webp",
   jpg: "jpg",
   mask: "png",
+};
+
+export const FORMAT_LABELS = {
+  png: "PNG",
+  webp: "WEBP",
+  jpg: "JPG",
+  mask: "MASK",
 };
 
 export const ACCENTS = {
@@ -285,6 +293,7 @@ export const state = {
   exportScale: 1,
   exportWidth: 0,
   exportHeight: 0,
+  aspectLocked: true,
   activeBackdrop: prefs.defaultBackdrop,
   zoom: 1,
   panX: 0,
@@ -384,11 +393,13 @@ export const dom = {
 
   formatRow: document.getElementById("formatRow"),
   btnFileDest: document.getElementById("btnFileDest"),
-  fileDestPath: document.getElementById("fileDestPath"),
+
   exportScaleSlider: document.getElementById("exportScaleSlider"),
   scalePctLabel: document.getElementById("scalePctLabel"),
   exportWidthInput: document.getElementById("exportWidthInput"),
   exportHeightInput: document.getElementById("exportHeightInput"),
+  aspectLockBtn: document.getElementById("aspectLockBtn"),
+  fileDestPath: document.getElementById("fileDestPath"),
 
   hwCompute: document.getElementById("hwCompute"),
   hwPrecision: document.getElementById("hwPrecision"),
@@ -499,18 +510,36 @@ export function saveStateToActiveTab() {
 }
 
 let errorCopyResetTimer = null;
+let successHideTimer = null;
 
 /** Shows (or clears, with empty message) the transient error toast. */
 export function setError(message) {
   if (!message) {
-    dom.errorToast.classList.remove("visible");
+    dom.errorToast.classList.remove("visible", "success");
     dom.errorToast.textContent = "";
     delete dom.errorToast.dataset.raw;
+    delete dom.errorToast.dataset.kind;
     return;
   }
+  clearTimeout(successHideTimer);
+  dom.errorToast.classList.remove("success");
   dom.errorToast.dataset.raw = message;
+  dom.errorToast.dataset.kind = "error";
   dom.errorToast.textContent = `ERROR: ${message}`;
   dom.errorToast.classList.add("visible");
+}
+
+/** Shows a transient green success toast that auto-hides after `ms`. */
+export function setSuccess(message, ms = 5000) {
+  dom.errorToast.dataset.raw = message;
+  dom.errorToast.dataset.kind = "success";
+  dom.errorToast.classList.add("success");
+  dom.errorToast.textContent = message;
+  dom.errorToast.classList.add("visible");
+  clearTimeout(successHideTimer);
+  successHideTimer = setTimeout(() => {
+    if (dom.errorToast.dataset.kind === "success") setError(null);
+  }, ms);
 }
 
 /** Copies `text` to the clipboard; resolves false if every method failed. */
@@ -547,7 +576,10 @@ function handleErrorToastCopy() {
     clearTimeout(errorCopyResetTimer);
     errorCopyResetTimer = setTimeout(() => {
       if (dom.errorToast.dataset.raw) {
-        dom.errorToast.textContent = `ERROR: ${dom.errorToast.dataset.raw}`;
+        dom.errorToast.textContent =
+          dom.errorToast.dataset.kind === "success"
+            ? dom.errorToast.dataset.raw
+            : `ERROR: ${dom.errorToast.dataset.raw}`;
       }
     }, 1200);
   });

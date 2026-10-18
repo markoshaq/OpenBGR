@@ -68,6 +68,7 @@ import {
   hideTabGhost,
   createBlankTab,
   requestCloseTab,
+  switchToTab,
   ingestImageFile,
   setViewMode,
   selectTier,
@@ -358,17 +359,27 @@ document.querySelectorAll(".quick-scale-btn").forEach((btn) => {
   });
 });
 
+dom.aspectLockBtn?.addEventListener("click", () => {
+  state.aspectLocked = !state.aspectLocked;
+  dom.aspectLockBtn.classList.toggle("active", state.aspectLocked);
+  dom.aspectLockBtn.setAttribute("aria-pressed", String(state.aspectLocked));
+});
+
 dom.exportWidthInput.addEventListener("input", (e) => {
   const val = parseInt(e.target.value, 10);
   if (!val || val < 1) {
     // Cleared input = "auto"; fall back to the scale-derived size.
     state.exportWidth = 0;
-    state.exportHeight = 0;
+    if (state.aspectLocked) state.exportHeight = 0;
     updateExportTelemetry();
     return;
   }
   state.exportWidth = Math.min(16384, val);
-  if (state.naturalWidth > 0 && state.naturalHeight > 0) {
+  if (
+    state.aspectLocked &&
+    state.naturalWidth > 0 &&
+    state.naturalHeight > 0
+  ) {
     state.exportScale = state.exportWidth / state.naturalWidth;
     state.exportHeight = Math.max(
       1,
@@ -382,13 +393,17 @@ dom.exportWidthInput.addEventListener("input", (e) => {
 dom.exportHeightInput.addEventListener("input", (e) => {
   const val = parseInt(e.target.value, 10);
   if (!val || val < 1) {
-    state.exportWidth = 0;
     state.exportHeight = 0;
+    if (state.aspectLocked) state.exportWidth = 0;
     updateExportTelemetry();
     return;
   }
   state.exportHeight = Math.min(16384, val);
-  if (state.naturalWidth > 0 && state.naturalHeight > 0) {
+  if (
+    state.aspectLocked &&
+    state.naturalWidth > 0 &&
+    state.naturalHeight > 0
+  ) {
     state.exportScale = state.exportHeight / state.naturalHeight;
     state.exportWidth = Math.max(
       1,
@@ -769,10 +784,7 @@ async function pullPendingFiles() {
 window.openBGR = {
   pullPendingFiles: () => pullPendingFiles(),
   newTab: () => {
-    const activeTab = getActiveTab();
-    if (!activeTab || (!activeTab.sourceFile && activeTab.kind !== "batch")) {
-      return;
-    }
+    if (!getActiveTab()) return;
     if (state.isProcessing) {
       openConfirmModal(
         {
@@ -800,6 +812,18 @@ window.openBGR = {
   },
   closeActiveTab: () => {
     if (state.activeTabId) requestCloseTab(state.activeTabId);
+  },
+  switchToTabAt: (n) => {
+    const tabs = state.tabs;
+    const target = n === 9 ? tabs[tabs.length - 1] : tabs[n - 1];
+    if (target && target.id !== state.activeTabId) switchToTab(target.id);
+  },
+  switchTabOffset: (delta) => {
+    const tabs = state.tabs;
+    const idx = tabs.findIndex((t) => t.id === state.activeTabId);
+    if (idx < 0 || tabs.length < 2) return;
+    const next = tabs[(idx + delta + tabs.length) % tabs.length];
+    switchToTab(next.id);
   },
   pasteImage: () => pasteImageFromClipboard(),
   setView: (mode) => {
@@ -881,11 +905,11 @@ window.addEventListener("keydown", (e) => {
     return;
   }
 
-  const isCloseTabKey =
-    e.key.toLowerCase() === "w" && (e.metaKey || e.ctrlKey);
+  // Plain keys are ignored inside form fields; modifier combos always work.
   if (
     e.target &&
-    !isCloseTabKey &&
+    !e.metaKey &&
+    !e.ctrlKey &&
     (e.target.tagName === "INPUT" ||
       e.target.tagName === "SELECT" ||
       e.target.tagName === "TEXTAREA" ||
@@ -917,15 +941,12 @@ window.addEventListener("keydown", (e) => {
     } else if (key === "r") {
       e.preventDefault();
       window.openBGR.rerunSegmentation();
-    } else if (key === "1") {
+    } else if (key === "tab") {
       e.preventDefault();
-      window.openBGR.setView("split");
-    } else if (key === "2") {
+      window.openBGR.switchTabOffset(e.shiftKey ? -1 : 1);
+    } else if (/^[1-9]$/.test(key)) {
       e.preventDefault();
-      window.openBGR.setView("cutout");
-    } else if (key === "3") {
-      e.preventDefault();
-      window.openBGR.setView("original");
+      window.openBGR.switchToTabAt(Number(key));
     } else if (key === "0") {
       e.preventDefault();
       window.openBGR.zoomReset();
@@ -954,6 +975,14 @@ window.addEventListener("keydown", (e) => {
     state.sourceFile
   ) {
     toggleLoupe();
+  } else if (
+    !e.metaKey &&
+    !e.ctrlKey &&
+    !e.altKey &&
+    ["1", "2", "3"].includes(e.key) &&
+    state.resultBlob
+  ) {
+    window.openBGR.setView({ "1": "split", "2": "cutout", "3": "original" }[e.key]);
   }
 });
 
@@ -1039,6 +1068,7 @@ window.addEventListener("keyup", (e) => {
     toggleDespill: () => window.openBGR.toggleDespill(),
     rerun: () => window.openBGR.rerunSegmentation(),
     manageModels: () => window.openBGR.openSettings("models"),
+    shortcuts: () => window.openBGR.openSettings("shortcuts"),
     openGithub: () => window.openBGR.openGithub(),
   };
 

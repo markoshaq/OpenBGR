@@ -101,7 +101,7 @@ export function renderTabBar() {
     closeBtn.className = "tab-close";
     closeBtn.title = "Close image tab";
     closeBtn.setAttribute("aria-label", `Close ${tab.name}`);
-    closeBtn.textContent = "×";
+    closeBtn.textContent = "x";
     closeBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       requestCloseTab(tab.id);
@@ -421,7 +421,7 @@ export async function switchToTab(tabId) {
     dom.appShell?.classList.add("no-result");
     dom.appShell?.classList.add("batch-active");
     dom.btnCopy.classList.add("disabled");
-    dom.statFile.textContent = `BATCH · ${tab.batchFiles.length} FILE${tab.batchFiles.length === 1 ? "" : "S"}`;
+    dom.statFile.textContent = `BATCH - ${tab.batchFiles.length} FILE${tab.batchFiles.length === 1 ? "" : "S"}`;
     dom.statDim.textContent = "--";
     dom.statTime.textContent = tab.elapsedText || "--";
     syncMenuBarState();
@@ -448,7 +448,7 @@ export async function switchToTab(tabId) {
         tab.naturalWidth = state.naturalWidth;
         tab.naturalHeight = state.naturalHeight;
       }
-      dom.statDim.textContent = `${state.naturalWidth}×${state.naturalHeight} PX`;
+      dom.statDim.textContent = `${state.naturalWidth}x${state.naturalHeight} PX`;
     }
   };
   dom.stageSizerImg.src = state.originalObjectUrl;
@@ -456,7 +456,7 @@ export async function switchToTab(tabId) {
   dom.statFile.textContent = tab.name.toUpperCase();
   dom.statDim.textContent =
     state.naturalWidth > 0 && state.naturalHeight > 0
-      ? `${state.naturalWidth}×${state.naturalHeight} PX`
+      ? `${state.naturalWidth}x${state.naturalHeight} PX`
       : "--";
   dom.statTime.textContent = tab.elapsedText || "--";
 
@@ -548,7 +548,7 @@ export function ingestImageFile(file) {
     if (dom.beforeImg.naturalWidth > 0 && dom.beforeImg.naturalHeight > 0) {
       state.naturalWidth = dom.beforeImg.naturalWidth;
       state.naturalHeight = dom.beforeImg.naturalHeight;
-      dom.statDim.textContent = `${state.naturalWidth}×${state.naturalHeight} PX`;
+      dom.statDim.textContent = `${state.naturalWidth}x${state.naturalHeight} PX`;
       ingestedTab.naturalWidth = state.naturalWidth;
       ingestedTab.naturalHeight = state.naturalHeight;
     }
@@ -611,7 +611,6 @@ export function syncMenuBarState() {
   const hasImage = Boolean(state.sourceFile);
   const hasResult = Boolean(state.resultBlob);
   const isBusy = Boolean(state.isProcessing);
-  const hasContent = hasImage || activeTabNow?.kind === "batch";
 
   dom.menuBar.querySelectorAll(".menu-item").forEach((item) => {
     const req = item.getAttribute("data-requires");
@@ -620,7 +619,6 @@ export function syncMenuBarState() {
     else if (req === "image") enabled = hasImage;
     else if (req === "result") enabled = hasResult && !isBusy;
     else if (req === "processing") enabled = isBusy;
-    else if (req === "content") enabled = hasContent;
     else if (req === "image-idle") enabled = hasImage && !isBusy;
     item.classList.toggle("disabled", !enabled);
 
@@ -728,8 +726,8 @@ async function pollJobProgress() {
       dom.busyTitle.textContent = "DOWNLOADING MODEL WEIGHTS";
       dom.busySub.textContent =
         tot > 0
-          ? `${formatDiskBytes(shown, true)} / ${formatDiskBytes(tot, true)} · ${modelName}`
-          : `${formatDiskBytes(shown, true)} downloaded · ${modelName}`;
+          ? `${formatDiskBytes(shown, true)} / ${formatDiskBytes(tot, true)} - ${modelName}`
+          : `${formatDiskBytes(shown, true)} downloaded - ${modelName}`;
       setBusyProgress(tot > 0 ? (shown / tot) * 100 : null);
       updateTierDownloadUI(modelKey, shown, tot, expectedBytes);
     } else if (p.phase === "load") {
@@ -813,14 +811,14 @@ export async function runSegmentation() {
   const presetName = PRESET_NAMES[state.tier] || state.tier.toUpperCase();
   const qualityDesc =
     state.exportWidth > 0 || state.exportHeight > 0
-      ? `${state.exportWidth || "AUTO"}×${state.exportHeight || "AUTO"}`
+      ? `${state.exportWidth || "AUTO"}x${state.exportHeight || "AUTO"}`
       : `${Math.round((state.exportScale || 1) * 100)}%`;
   const destDesc =
     state.outputDir || (window.pywebview ? "save dialog" : "browser downloads");
 
   dom.busyTitle.textContent = isCached
     ? "PROCESSING IMAGE"
-    : "PROCESSING IMAGE · FETCHING MODEL WEIGHTS";
+    : "PROCESSING IMAGE - FETCHING MODEL WEIGHTS";
   busyBaseSub =
     `Processing using ${presetName}...` +
     (isCached ? "" : " Downloading model weights...");

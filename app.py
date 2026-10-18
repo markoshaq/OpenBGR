@@ -83,6 +83,7 @@ from openbgr.config import (
     IMAGENET_MEAN,
     IMAGENET_STD,
     LEGACY_MATTING_REPO,
+    LOG_FILE_PATH,
     MODELS,
     NOTIFIER_APP_PATH,
     NOTIFIER_ICNS_PATH,
@@ -451,18 +452,21 @@ def main(argv: list[str] | None = None) -> None:
         TIERS[RECOMMENDED_TIER]["sublabel"],
     )
     logger.info("  Interface : %s", url)
+    logger.info("  Logs      : %s", LOG_FILE_PATH)
     logger.info("-" * 68)
 
     # Headless / server-only mode when NO_BROWSER=1 or OPENBGR_BROWSER=1 is set
     if os.environ.get("NO_BROWSER") == "1":
-        uvicorn.run(app, host=host, port=port, log_level="warning")
+        uvicorn.run(app, host=host, port=port, log_level="warning", log_config=None)
     elif os.environ.get("OPENBGR_BROWSER") == "1":
         threading.Timer(1.0, lambda: open_fallback_app_window(url)).start()
-        uvicorn.run(app, host=host, port=port, log_level="warning")
+        uvicorn.run(app, host=host, port=port, log_level="warning", log_config=None)
     else:
         # Start FastAPI server in a background daemon thread and open native desktop window
         server_thread = threading.Thread(
-            target=lambda: uvicorn.run(app, host=host, port=port, log_level="warning"),
+            target=lambda: uvicorn.run(
+                app, host=host, port=port, log_level="warning", log_config=None
+            ),
             daemon=True,
         )
         server_thread.start()
@@ -533,6 +537,7 @@ def main(argv: list[str] | None = None) -> None:
             # When the native desktop window is closed by the user, release
             # device memory and terminate the process tree immediately so no
             # background server or worker threads remain running.
+            logger.info("[Desktop] Window closed; shutting down.")
             MANAGER.request_cancel()
             MANAGER.unload()
             os._exit(0)

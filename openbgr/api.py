@@ -107,6 +107,7 @@ app = FastAPI(
 def api_cancel() -> dict[str, Any]:
     """Signals any queued or active segmentation job to abort at its next checkpoint."""
     epoch = MANAGER.request_cancel()
+    logger.info("[API] Cancellation requested (epoch %d).", epoch)
     return {"cancelled": True, "epoch": epoch}
 
 
@@ -347,6 +348,11 @@ def api_uninstall_model(target: str = Form(...)) -> dict[str, Any]:
     finally:
         MANAGER.inference_lock.release()
 
+    logger.info(
+        "[API] Uninstalled %s (freed %.1f MB).",
+        ", ".join(model_keys),
+        freed_bytes / 1024**2,
+    )
     return {
         "ok": True,
         "freed_bytes": freed_bytes,
@@ -385,9 +391,10 @@ async def api_install_model(target: str = Form(...)) -> dict[str, Any]:
         await asyncio.to_thread(_download)
     except Exception as exc:
         set_job_phase("idle")
-        logger.error("[API] Failed to download %s: %s", repo_id, exc)
+        logger.exception("[API] Failed to download %s.", repo_id)
         raise HTTPException(status_code=500, detail=f"Failed to download {repo_id}: {exc}") from exc
 
+    logger.info("[API] Model installed: %s.", repo_id)
     set_job_phase("idle")
     return {
         "ok": True,
@@ -493,7 +500,7 @@ async def api_remove_bg(
     except InterruptedError as exc:
         raise HTTPException(status_code=499, detail=str(exc)) from exc
     except Exception as exc:
-        logger.error("[API] Segmentation pipeline failed: %s", exc)
+        logger.exception("[API] Segmentation pipeline failed.")
         raise HTTPException(status_code=500, detail=f"Segmentation pipeline failed: {exc}") from exc
     finally:
         set_job_phase("idle")
@@ -525,6 +532,14 @@ async def api_remove_bg(
         k: v.encode("latin-1", errors="ignore").decode("latin-1")
         for k, v in telemetry_headers.items()
     }
+    logger.info(
+        "[API] Processed %s (%dx%d) in %.0f ms via %s.",
+        file.filename or "image",
+        img_w,
+        img_h,
+        elapsed_ms,
+        tier_cfg["sublabel"],
+    )
     return Response(
         content=png_bytes,
         media_type="image/png",

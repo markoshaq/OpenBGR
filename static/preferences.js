@@ -32,6 +32,9 @@ const PREFS_SECTION_MAP = {
   models: "settings-models",
   storage: "settings-models",
   system: "settings-system",
+  shortcuts: "settings-shortcuts",
+  hotkeys: "settings-shortcuts",
+  keyboard: "settings-shortcuts",
   about: "settings-about",
 };
 
@@ -101,8 +104,7 @@ export function updateCacheIndicator() {
     const sizeLabel = isInstalled ? formatDiskBytes(sizeBytes) : "0 MB";
     const techName = tierInfo?.tech_name || MODEL_TECH_NAMES[key] || key;
 
-    applyDotState(document.getElementById(`dot-${key}`), status, false);
-    applyDotState(document.getElementById(`sysdot-${key}`), status, true);
+    applyDotState(document.getElementById(`dot-${key}`), status, true);
 
     const tierBtn = document.querySelector(
       `#tierSelector .tier-btn[data-tier="${key}"]`
