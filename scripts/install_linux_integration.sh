@@ -20,19 +20,38 @@ CTX="$ROOT/scripts/context_process.sh"
 APPS_DIR="$HOME/.local/share/applications"
 KDE_DIR="$HOME/.local/share/kio/servicemenus"
 NAUTILUS_DIR="$HOME/.local/share/nautilus/scripts"
+ICON_DIR="$HOME/.local/share/icons/hicolor/512x512/apps"
 
 DESKTOP_FILE="$APPS_DIR/openbgr.desktop"
 KDE_FILE="$KDE_DIR/openbgr-removebg.desktop"
 NAUTILUS_FILE="$NAUTILUS_DIR/Remove Background with OpenBGR"
+HICOLOR_ICON="$ICON_DIR/openbgr.png"
+USER_ICON="$HOME/.openbgr/icon.png"
 
 if [ "${1:-}" = "--remove" ] || [ "${1:-}" = "--uninstall" ]; then
-  rm -f "$DESKTOP_FILE" "$KDE_FILE" "$NAUTILUS_FILE"
+  rm -f "$DESKTOP_FILE" "$KDE_FILE" "$NAUTILUS_FILE" "$HICOLOR_ICON"
   update-desktop-database "$APPS_DIR" >/dev/null 2>&1 || true
   echo "[Done] OpenBGR desktop integration removed."
   exit 0
 fi
 
-mkdir -p "$APPS_DIR" "$KDE_DIR" "$NAUTILUS_DIR"
+mkdir -p "$APPS_DIR" "$KDE_DIR" "$NAUTILUS_DIR" "$ICON_DIR" "$HOME/.openbgr"
+
+if [ -f "$ROOT/icon.png" ] && [ ! -f "$USER_ICON" ]; then
+  cp "$ROOT/icon.png" "$USER_ICON" 2>/dev/null || true
+fi
+if [ ! -f "$USER_ICON" ]; then
+  for PY in "$ROOT/.venv/bin/python" "$HOME/.openbgr/venv/bin/python" python3; do
+    if command -v "$PY" >/dev/null 2>&1; then
+      "$PY" -c "import sys; sys.path.insert(0, '$ROOT'); import icon_render; icon_render.render_icon(512).save('$USER_ICON', 'PNG')" 2>/dev/null && break
+    fi
+  done
+fi
+if [ -f "$USER_ICON" ]; then
+  cp "$USER_ICON" "$HICOLOR_ICON" 2>/dev/null || true
+fi
+ICON_VALUE="openbgr"
+[ -f "$USER_ICON" ] && ICON_VALUE="$USER_ICON"
 
 cat > "$DESKTOP_FILE" <<EOF
 [Desktop Entry]
@@ -40,6 +59,7 @@ Type=Application
 Name=OpenBGR
 Comment=Local AI Background Removal Studio
 Exec="$ROOT/start.sh" %F
+Icon=$ICON_VALUE
 MimeType=image/png;image/jpeg;image/webp;image/bmp;image/tiff;image/gif;
 Terminal=false
 Categories=Graphics;Photography;
@@ -49,12 +69,14 @@ cat > "$KDE_FILE" <<EOF
 [Desktop Entry]
 Type=Service
 Actions=openbgrRemoveBG;
+Icon=$ICON_VALUE
 MimeType=image/png;image/jpeg;image/webp;image/bmp;image/tiff;image/gif;
 X-KDE-ServiceTypes=KonqPopupMenu/Plugin
 X-KDE-Priority=TopLevel
 
 [Desktop Action openbgrRemoveBG]
-Name=Remove background with OpenBGR
+Name=Remove Background with OpenBGR
+Icon=$ICON_VALUE
 Exec="$CTX" %F
 EOF
 
@@ -74,6 +96,6 @@ update-desktop-database "$APPS_DIR" >/dev/null 2>&1 || true
 kbuildsycoca6 >/dev/null 2>&1 || kbuildsycoca5 >/dev/null 2>&1 || true
 
 echo "[Done] Installed:"
-echo "       - 'Open With → OpenBGR' for image files (all desktops)"
-echo "       - KDE Dolphin: right-click → 'Remove background with OpenBGR'"
-echo "       - GNOME Files: right-click → Scripts → 'Remove Background with OpenBGR'"
+echo "       - 'Open With -> OpenBGR' for image files (all desktops)"
+echo "       - KDE Dolphin: right-click -> 'Remove Background with OpenBGR'"
+echo "       - GNOME Files: right-click -> Scripts -> 'Remove Background with OpenBGR'"

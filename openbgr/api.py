@@ -84,6 +84,7 @@ async def lifespan(_app: FastAPI):
     Application lifespan hook. Preloads the recommended default model if cached
     on disk, and ensures all device memory is flushed on server shutdown.
     """
+    timer: threading.Timer | None = None
     default_model_key = TIERS[RECOMMENDED_TIER]["model_key"]
     if is_model_cached_locally(MODELS[default_model_key]):
         timer = threading.Timer(0.5, lambda: MANAGER.get_or_load(default_model_key))
@@ -93,6 +94,8 @@ async def lifespan(_app: FastAPI):
     try:
         yield
     finally:
+        if timer is not None:
+            timer.cancel()
         MANAGER.unload()
 
 
@@ -140,7 +143,7 @@ def api_status() -> dict[str, Any]:
 
     cache_path = Path(HF_HUB_CACHE)
     try:
-        cache_display = f"~/{cache_path.relative_to(Path.home())}"
+        cache_display = f"~/{cache_path.relative_to(Path.home()).as_posix()}"
     except ValueError:
         cache_display = str(cache_path)
 
@@ -247,6 +250,26 @@ async def api_run_quick_action(files: list[str] = Form(...)) -> dict[str, Any]:
     qa_fn = _resolve_app_symbol("run_quick_action", run_quick_action)
     result = await asyncio.to_thread(qa_fn, list(files))
     return result
+
+
+@app.post("/api/open-files")
+def api_open_files(files: list[str] = Form(...)) -> dict[str, Any]:
+    """
+    Queues one or more local image paths into the running workspace so 'Open With'
+    on Windows/Linux/CLI opens tabs in the active window.
+    """
+    desktop.queue_open_files(list(files))
+    return {
+        "ok": True,
+        "pending": len(desktop._PENDING_OPEN_FILES),
+        "received": desktop.get_open_files_received(),
+    }
+
+
+@app.post("/api/pending-files")
+def api_take_pending_files() -> dict[str, Any]:
+    """Drains OS-delivered open-file requests over HTTP (for browser/reused-server mode)."""
+    return desktop.DesktopApi().take_pending_files()
 
 
 @app.post("/api/open-cache-dir")

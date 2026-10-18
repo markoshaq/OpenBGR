@@ -68,7 +68,7 @@ import {
   hideTabGhost,
   createBlankTab,
   requestCloseTab,
-  switchToTab,
+  requestSwitchToTab,
   ingestImageFile,
   setViewMode,
   selectTier,
@@ -761,9 +761,15 @@ function closeAllMenus() {
  * and pushed by the backend whenever a new open-request arrives while running.
  */
 async function pullPendingFiles() {
-  if (!window.pywebview?.api?.take_pending_files) return;
   try {
-    const res = await window.pywebview.api.take_pending_files();
+    let res = null;
+    if (window.pywebview?.api?.take_pending_files) {
+      res = await window.pywebview.api.take_pending_files();
+    }
+    if (!res?.files?.length && !res?.error) {
+      const httpRes = await fetch("/api/pending-files", { method: "POST" });
+      if (httpRes.ok) res = await httpRes.json();
+    }
     if (res?.error) {
       setError(res.error);
       return;
@@ -816,16 +822,19 @@ window.openBGR = {
   switchToTabAt: (n) => {
     const tabs = state.tabs;
     const target = n === 9 ? tabs[tabs.length - 1] : tabs[n - 1];
-    if (target && target.id !== state.activeTabId) switchToTab(target.id);
+    if (target && target.id !== state.activeTabId) requestSwitchToTab(target.id);
   },
   switchTabOffset: (delta) => {
     const tabs = state.tabs;
     const idx = tabs.findIndex((t) => t.id === state.activeTabId);
     if (idx < 0 || tabs.length < 2) return;
     const next = tabs[(idx + delta + tabs.length) % tabs.length];
-    switchToTab(next.id);
+    requestSwitchToTab(next.id);
   },
   pasteImage: () => pasteImageFromClipboard(),
+  restartApp: () => {
+    window.pywebview?.api?.restart_app?.();
+  },
   setView: (mode) => {
     if (state.resultBlob && ["split", "cutout", "original"].includes(mode)) {
       setViewMode(mode);
@@ -959,6 +968,9 @@ window.addEventListener("keydown", (e) => {
     } else if (key === "c" && e.shiftKey) {
       e.preventDefault();
       window.openBGR.copyImage();
+    } else if (key === "f" && e.metaKey && e.ctrlKey) {
+      e.preventDefault();
+      window.openBGR.toggleFullscreen();
     } else if (key === "q") {
       e.preventDefault();
       window.openBGR.quitApp();
@@ -992,6 +1004,36 @@ window.addEventListener("keyup", (e) => {
   }
 });
 
+/** Probes the OS clipboard for image content to gate Edit > Paste Image. */
+async function refreshClipboardState() {
+  if (window.pywebview?.api?.has_clipboard_image) {
+    try {
+      const res = await window.pywebview.api.has_clipboard_image();
+      state.clipboardHasImage =
+        typeof res?.has_image === "boolean" ? res.has_image : null;
+    } catch (_) {
+      state.clipboardHasImage = null;
+    }
+    syncMenuBarState();
+    return;
+  }
+  if (!navigator.clipboard?.read) {
+    state.clipboardHasImage = null;
+    return;
+  }
+  try {
+    const items = await navigator.clipboard.read();
+    state.clipboardHasImage = items.some((item) =>
+      (item.types || []).some((t) => t.startsWith("image/"))
+    );
+  } catch (_) {
+    // Unknown (permission denied / unsupported): keep the item enabled.
+    state.clipboardHasImage = null;
+  }
+  syncMenuBarState();
+}
+window.addEventListener("focus", refreshClipboardState);
+
 // In-app menu bar initialization
 (function initStudioMenuBar() {
   if (!dom.menuBar) return;
@@ -1011,7 +1053,10 @@ window.addEventListener("keyup", (e) => {
     });
     document.querySelectorAll("[data-shortcut-chip]").forEach((el) => {
       const spec = el.getAttribute("data-shortcut-chip") || "";
-      el.textContent = spec.replace("Mod+", "CTRL+");
+      el.textContent = spec
+        .replace("Shift+Mod+", "CTRL+SHIFT+")
+        .replace("Mod+", "CTRL+")
+        .toUpperCase();
     });
   }
 
@@ -1024,6 +1069,7 @@ window.addEventListener("keyup", (e) => {
       closeAllMenus();
       if (!wasOpen) {
         syncMenuBarState();
+        refreshClipboardState();
         root.classList.add("open");
       }
     });
@@ -1049,6 +1095,7 @@ window.addEventListener("keyup", (e) => {
     copyImage: () => window.openBGR.copyImage(),
     pasteImage: () => window.openBGR.pasteImage(),
     cancelProcessing: () => window.openBGR.cancelProcessing(),
+    restartApp: () => window.openBGR.restartApp(),
     viewSplit: () => window.openBGR.setView("split"),
     viewCutout: () => window.openBGR.setView("cutout"),
     viewOriginal: () => window.openBGR.setView("original"),

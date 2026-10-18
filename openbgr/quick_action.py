@@ -48,12 +48,9 @@ def _resolve_app_symbol(name: str, fallback: Any) -> Any:
 def sanitize_quick_action_config(raw: Any) -> dict[str, Any]:
     """Validates a Quick Action config dict against allowed values and falls back to defaults."""
     src = raw if isinstance(raw, dict) else {}
-    raw_tier = str(src.get("tier", "auto") or "auto").strip().lower()
-    if raw_tier != "auto":
-        norm_t = normalize_tier_key(raw_tier)
-        tier_val = norm_t if norm_t in TIERS else "auto"
-    else:
-        tier_val = "auto"
+    raw_tier = str(src.get("tier", "general") or "general").strip().lower()
+    norm_t = normalize_tier_key(raw_tier)
+    tier_val = norm_t if norm_t in TIERS else "general"
 
     save_mode = str(src.get("save_mode", "same_folder") or "same_folder").strip().lower()
     if save_mode not in ("same_folder", "ask"):
@@ -160,11 +157,17 @@ def set_quick_action_installed(install: bool = True) -> tuple[bool, str]:
                 else "uninstall_windows_context_menu.bat"
             )
             script = BASE_DIR / "scripts" / bat_name
+            env = {
+                **os.environ,
+                "OPENBGR_PY": sys.executable,
+                "OPENBGR_NO_PAUSE": "1",
+            }
             res = subprocess.run(
                 ["cmd.exe", "/c", str(script)],
                 capture_output=True,
                 text=True,
                 timeout=20,
+                env=env,
             )
             if res.returncode == 0:
                 return True, (
@@ -206,43 +209,77 @@ def copy_png_bytes_to_clipboard(raw_bytes: bytes) -> dict[str, Any]:
             return {"copied": bool(ok)}
 
         if sys_name == "Windows":
-            import clr  # type: ignore
+            try:
+                import clr  # type: ignore
 
-            clr.AddReference("System.Windows.Forms")
-            clr.AddReference("System.Drawing")
-            import System.Drawing as Drawing  # type: ignore
-            import System.IO as SysIO  # type: ignore
-            import System.Threading as SysThreading  # type: ignore
-            import System.Windows.Forms as WinForms  # type: ignore
+                clr.AddReference("System.Windows.Forms")
+                clr.AddReference("System.Drawing")
+                import System.Drawing as Drawing  # type: ignore
+                import System.IO as SysIO  # type: ignore
+                import System.Threading as SysThreading  # type: ignore
+                import System.Windows.Forms as WinForms  # type: ignore
 
-            err_holder: list[str] = []
+                err_holder: list[str] = []
 
-            def _set_win_clip() -> None:
-                """Sets both PNG stream and bitmap clipboard formats (must run on an STA thread)."""
+                def _set_win_clip() -> None:
+                    """Sets both PNG stream and bitmap clipboard formats (must run on an STA thread)."""
+                    try:
+                        ms = SysIO.MemoryStream(raw_bytes)
+                        bmp = Drawing.Bitmap(ms)
+                        data_obj = WinForms.DataObject()
+                        data_obj.SetData("PNG", False, ms)
+                        data_obj.SetImage(bmp)
+                        WinForms.Clipboard.SetDataObject(data_obj, True)
+                    except Exception as e:
+                        err_holder.append(str(e))
+
+                t = SysThreading.Thread(SysThreading.ThreadStart(_set_win_clip))
+                t.SetApartmentState(SysThreading.ApartmentState.STA)
+                t.Start()
+                t.Join(3000)
+                if err_holder:
+                    return {"copied": False, "error": err_holder[0]}
+                return {"copied": True}
+            except ImportError:
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
+                    tf.write(raw_bytes)
+                    tmp_png = tf.name
                 try:
-                    ms = SysIO.MemoryStream(raw_bytes)
-                    bmp = Drawing.Bitmap(ms)
-                    data_obj = WinForms.DataObject()
-                    data_obj.SetData("PNG", False, ms)
-                    data_obj.SetImage(bmp)
-                    WinForms.Clipboard.SetDataObject(data_obj, True)
-                except Exception as e:
-                    err_holder.append(str(e))
-
-            t = SysThreading.Thread(SysThreading.ThreadStart(_set_win_clip))
-            t.SetApartmentState(SysThreading.ApartmentState.STA)
-            t.Start()
-            t.Join(3000)
-            if err_holder:
-                return {"copied": False, "error": err_holder[0]}
-            return {"copied": True}
+                    ps = (
+                        "Add-Type -AssemblyName System.Windows.Forms,System.Drawing; "
+                        f"$p = '{_powershell_quote(tmp_png)}'; "
+                        "$bytes = [System.IO.File]::ReadAllBytes($p); "
+                        "$ms = New-Object System.IO.MemoryStream(,$bytes); "
+                        "$bmp = New-Object System.Drawing.Bitmap($ms); "
+                        "$do = New-Object System.Windows.Forms.DataObject; "
+                        "$do.SetData('PNG', $false, $ms); "
+                        "$do.SetImage($bmp); "
+                        "[System.Windows.Forms.Clipboard]::SetDataObject($do, $true)"
+                    )
+                    proc = subprocess.run(
+                        ["powershell", "-NoProfile", "-Sta", "-Command", ps],
+                        capture_output=True,
+                        timeout=6,
+                    )
+                    if proc.returncode == 0:
+                        return {"copied": True}
+                finally:
+                    Path(tmp_png).unlink(missing_ok=True)
+                return {"copied": False, "error": "Windows clipboard write failed."}
 
         for cmd in (
             ["wl-copy", "--type", "image/png"],
             ["xclip", "-selection", "clipboard", "-t", "image/png", "-i"],
         ):
             if shutil.which(cmd[0]):
-                proc = subprocess.run(cmd, input=raw_bytes, check=False, timeout=4)
+                proc = subprocess.run(
+                    cmd,
+                    input=raw_bytes,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                    timeout=4,
+                )
                 if proc.returncode == 0:
                     return {"copied": True}
 
@@ -343,14 +380,16 @@ def _choose_save_path_native(default_name: str, start_dir: Path) -> Path | None:
         if sys_name == "Windows":
             ps = (
                 "Add-Type -AssemblyName System.Windows.Forms; "
+                "$f = New-Object System.Windows.Forms.Form -Property @{TopMost=$true}; "
                 "$d = New-Object System.Windows.Forms.SaveFileDialog; "
                 f"$d.FileName = '{_powershell_quote(default_name)}'; "
                 f"$d.InitialDirectory = '{_powershell_quote(start_dir)}'; "
                 "$d.Filter = 'Image Files (*.png;*.webp;*.jpg)|*.png;*.webp;*.jpg|All files (*.*)|*.*'; "
-                "if ($d.ShowDialog() -eq 'OK') { $d.FileName }"
+                "if ($d.ShowDialog($f) -eq 'OK') { $d.FileName }; "
+                "$f.Dispose()"
             )
             res = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", ps],
+                ["powershell", "-NoProfile", "-Sta", "-Command", ps],
                 capture_output=True,
                 text=True,
                 timeout=180,
@@ -366,6 +405,22 @@ def _choose_save_path_native(default_name: str, start_dir: Path) -> Path | None:
                     "--save",
                     "--confirm-overwrite",
                     f"--filename={start_dir / default_name}",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            chosen = res.stdout.strip()
+            return Path(chosen) if res.returncode == 0 and chosen else None
+        kdialog = shutil.which("kdialog")
+        if kdialog:
+            res = subprocess.run(
+                [
+                    kdialog,
+                    "--title",
+                    "Save cutout as:",
+                    "--getsavefilename",
+                    str(start_dir / default_name),
                 ],
                 capture_output=True,
                 text=True,
@@ -402,13 +457,15 @@ def _choose_output_folder_native(start_dir: Path, count: int) -> Path | None:
         if sys_name == "Windows":
             ps = (
                 "Add-Type -AssemblyName System.Windows.Forms; "
+                "$f = New-Object System.Windows.Forms.Form -Property @{TopMost=$true}; "
                 "$d = New-Object System.Windows.Forms.FolderBrowserDialog; "
                 f"$d.Description = '{_powershell_quote(prompt)}'; "
                 f"$d.SelectedPath = '{_powershell_quote(start_dir)}'; "
-                "if ($d.ShowDialog() -eq 'OK') { $d.SelectedPath }"
+                "if ($d.ShowDialog($f) -eq 'OK') { $d.SelectedPath }; "
+                "$f.Dispose()"
             )
             res = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", ps],
+                ["powershell", "-NoProfile", "-Sta", "-Command", ps],
                 capture_output=True,
                 text=True,
                 timeout=180,
@@ -424,6 +481,22 @@ def _choose_output_folder_native(start_dir: Path, count: int) -> Path | None:
                     "--directory",
                     f"--title={prompt}",
                     f"--filename={start_dir}/",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            chosen = res.stdout.strip()
+            return Path(chosen) if res.returncode == 0 and chosen else None
+        kdialog = shutil.which("kdialog")
+        if kdialog:
+            res = subprocess.run(
+                [
+                    kdialog,
+                    "--title",
+                    prompt,
+                    "--getexistingdirectory",
+                    str(start_dir),
                 ],
                 capture_output=True,
                 text=True,
@@ -688,6 +761,38 @@ def _resolve_cli_output(
     return _with_output_suffix(dest, ext)
 
 
+def delegate_quick_action_to_server(inputs: list[str]) -> dict[str, Any] | None:
+    """
+    If an OpenBGR server is already listening on localhost, delegates the Quick
+    Action batch over HTTP so Windows context-menu invocations and CLI calls
+    reuse the warm GPU/MPS model with zero cold-start overhead.
+    """
+    import urllib.parse
+    import urllib.request
+
+    resolved = [
+        str(Path(p).expanduser().resolve()) for p in inputs if Path(p).expanduser().is_file()
+    ]
+    if not resolved:
+        return None
+    port = os.environ.get("OPENBGR_PORT") or os.environ.get("PORT") or "7860"
+    api = f"http://127.0.0.1:{port}"
+    try:
+        with urllib.request.urlopen(f"{api}/api/status", timeout=1.5) as status_res:
+            status_payload = json.loads(status_res.read().decode("utf-8"))
+            if not (isinstance(status_payload, dict) and "tiers" in status_payload):
+                return None
+        data = urllib.parse.urlencode([("files", p) for p in resolved]).encode("utf-8")
+        req = urllib.request.Request(f"{api}/api/quick-action", data=data, method="POST")
+        with urllib.request.urlopen(req, timeout=300) as res:
+            payload = json.loads(res.read().decode("utf-8"))
+            if isinstance(payload, dict) and ("ok" in payload or "cancelled" in payload):
+                return payload
+    except Exception:
+        return None
+    return None
+
+
 def run_quick_action(inputs: list[str]) -> dict[str, Any]:
     """
     Processes 1 or more images selected via the OS Quick Action / context menu
@@ -697,7 +802,9 @@ def run_quick_action(inputs: list[str]) -> dict[str, Any]:
     """
     load_cfg_fn = _resolve_app_symbol("load_quick_action_config", load_quick_action_config)
     cfg = load_cfg_fn()
-    tier_key = RECOMMENDED_TIER if cfg["tier"] == "auto" else normalize_tier_key(cfg["tier"])
+    tier_key = normalize_tier_key(cfg["tier"])
+    if tier_key not in TIERS:
+        tier_key = RECOMMENDED_TIER
     use_matting = tier_key == "matting"
     edge_refine = bool(cfg.get("edge_refine", True))
     fmt = str(cfg.get("format", "png") or "png")

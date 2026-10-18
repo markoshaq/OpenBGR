@@ -177,23 +177,7 @@ export function renderTabBar() {
     });
 
     tabEl.addEventListener("click", () => {
-      if (tab.id === state.activeTabId) return;
-      if (state.isProcessing) {
-        openConfirmModal(
-          {
-            title: "STOP CURRENT IMAGE?",
-            message: `Switching to "${tab.name}" will stop the current image processing.`,
-            confirmText: "STOP & SWITCH",
-            cancelText: "KEEP PROCESSING",
-          },
-          () => {
-            cancelProcessing();
-            switchToTab(tab.id);
-          }
-        );
-        return;
-      }
-      switchToTab(tab.id);
+      requestSwitchToTab(tab.id);
     });
 
     tabEl.appendChild(titleSpan);
@@ -225,6 +209,29 @@ export function renderTabBar() {
     createBlankTab();
   });
   dom.tabBar.appendChild(addBtn);
+}
+
+/** Switches to `tabId`, prompting first if an image is currently processing. */
+export function requestSwitchToTab(tabId) {
+  if (!tabId || tabId === state.activeTabId) return;
+  const tab = state.tabs.find((t) => t.id === tabId);
+  if (!tab) return;
+  if (state.isProcessing) {
+    openConfirmModal(
+      {
+        title: "STOP CURRENT IMAGE?",
+        message: `Switching to "${tab.name}" will stop the current image processing.`,
+        confirmText: "STOP & SWITCH",
+        cancelText: "KEEP PROCESSING",
+      },
+      () => {
+        cancelProcessing();
+        switchToTab(tab.id);
+      }
+    );
+    return;
+  }
+  switchToTab(tab.id);
 }
 
 /** Creates and switches to an empty tab. */
@@ -349,6 +356,7 @@ export function resetToEmptyWorkspace() {
 
   dom.exportWidthInput.value = "";
   dom.exportHeightInput.value = "";
+  if (dom.exportSizeLabel) dom.exportSizeLabel.textContent = "--";
   dom.statFile.textContent = "NONE";
   dom.statDim.textContent = "--";
   dom.statTime.textContent = "--";
@@ -416,6 +424,7 @@ export async function switchToTab(tabId) {
   applyBackdrop(state.activeBackdrop);
 
   if (tab.kind === "batch") {
+    updateExportTelemetry();
     renderBatchPanel(tab);
     dom.appShell?.classList.add("no-image");
     dom.appShell?.classList.add("no-result");
@@ -538,6 +547,7 @@ export function ingestImageFile(file) {
   dom.btnCopy.classList.add("disabled");
   dom.exportWidthInput.value = "";
   dom.exportHeightInput.value = "";
+  if (dom.exportSizeLabel) dom.exportSizeLabel.textContent = "--";
 
   dom.stageSizerImg.src = state.originalObjectUrl;
   const ingestedTab = getActiveTab();
@@ -611,6 +621,7 @@ export function syncMenuBarState() {
   const hasImage = Boolean(state.sourceFile);
   const hasResult = Boolean(state.resultBlob);
   const isBusy = Boolean(state.isProcessing);
+  const isBatch = activeTabNow?.kind === "batch";
 
   dom.menuBar.querySelectorAll(".menu-item").forEach((item) => {
     const req = item.getAttribute("data-requires");
@@ -620,6 +631,12 @@ export function syncMenuBarState() {
     else if (req === "result") enabled = hasResult && !isBusy;
     else if (req === "processing") enabled = isBusy;
     else if (req === "image-idle") enabled = hasImage && !isBusy;
+    else if (req === "native") enabled = Boolean(window.pywebview?.api);
+    else if (req === "paste-image") {
+      enabled = state.clipboardHasImage !== false;
+    } else if (req === "model-controls") {
+      enabled = (hasImage || isBatch) && !isBusy;
+    }
     item.classList.toggle("disabled", !enabled);
 
     const checkKey = item.getAttribute("data-check");
@@ -809,12 +826,6 @@ export async function runSegmentation() {
 
   const isCached = tierInfo ? tierInfo.cached : true;
   const presetName = PRESET_NAMES[state.tier] || state.tier.toUpperCase();
-  const qualityDesc =
-    state.exportWidth > 0 || state.exportHeight > 0
-      ? `${state.exportWidth || "AUTO"}x${state.exportHeight || "AUTO"}`
-      : `${Math.round((state.exportScale || 1) * 100)}%`;
-  const destDesc =
-    state.outputDir || (window.pywebview ? "save dialog" : "browser downloads");
 
   dom.busyTitle.textContent = isCached
     ? "PROCESSING IMAGE"

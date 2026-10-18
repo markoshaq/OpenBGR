@@ -16,6 +16,7 @@ import {
   setSuccess,
   FORMAT_EXT,
   FORMAT_LABELS,
+  formatDiskBytes,
 } from "./state.js";
 
 /**
@@ -236,6 +237,11 @@ export async function updateLiveStagePreview() {
         ? state.resultObjectUrl
         : URL.createObjectURL(blob);
     dom.afterImg.src = state.previewObjectUrl;
+    // previewBlob is encoded through the exact export path, so its byte size
+    // is the real output file size, not an estimate.
+    if (dom.exportSizeLabel) {
+      dom.exportSizeLabel.textContent = formatDiskBytes(blob.size);
+    }
     saveStateToActiveTab();
   } catch (_) {}
 }
@@ -270,6 +276,9 @@ export function updateDestUI() {
     }
     dom.fileDestPath.textContent = text;
     dom.fileDestPath.title = state.outputDir || "";
+    // RTL gives start-ellipsis for long paths but misplaces punctuation on
+    // plain LTR sentences, so it is only applied to real paths.
+    dom.fileDestPath.classList.toggle("rtl", Boolean(state.outputDir));
   }
 }
 
@@ -307,6 +316,20 @@ export function updateExportTelemetry() {
   const pct = Math.round(state.exportScale * 100);
   dom.scalePctLabel.textContent = `${pct}%`;
 
+  if (dom.exportSizeLabel) {
+    if (!state.resultBlob) {
+      dom.exportSizeLabel.textContent = "--";
+    } else if (
+      state.previewBlob &&
+      state.previewSignature === exportSignature() &&
+      state.previewSource === state.resultBlob
+    ) {
+      dom.exportSizeLabel.textContent = formatDiskBytes(state.previewBlob.size);
+    } else {
+      dom.exportSizeLabel.textContent = "...";
+    }
+  }
+
   const clampedSlider = Math.max(10, Math.min(200, pct));
   dom.exportScaleSlider.value = String(clampedSlider);
 
@@ -340,8 +363,17 @@ export function updateExportTelemetry() {
         ? `${state.exportWidth}x${state.exportHeight} PX`
         : `${state.exportWidth}x${state.exportHeight} PX (${pct}%)`;
 
-    dom.lblRight.textContent = `${fmtUpper} • ${state.exportWidth}x${state.exportHeight} (${pct}%)`;
+    dom.lblRight.textContent = `${fmtUpper} - ${state.exportWidth}x${state.exportHeight} (${pct}%)`;
     updateLiveStagePreview();
+  } else {
+    if (document.activeElement !== dom.exportWidthInput) {
+      dom.exportWidthInput.value =
+        state.exportWidth > 0 ? String(state.exportWidth) : "";
+    }
+    if (document.activeElement !== dom.exportHeightInput) {
+      dom.exportHeightInput.value =
+        state.exportHeight > 0 ? String(state.exportHeight) : "";
+    }
   }
 }
 

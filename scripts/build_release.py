@@ -39,7 +39,7 @@ def _read_version() -> str:
             return m.group(1)
     except OSError:
         pass
-    return "0.10.1"
+    return "0.11.0"
 
 
 APP_VERSION = _read_version()
@@ -136,6 +136,48 @@ def generate_macos_icns(icns_path: Path) -> None:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+
+
+def generate_windows_ico(ico_path: Path) -> bool:
+    """Generates a multi-size Windows `OpenBGR.ico` via Pillow and `icon_render`."""
+    try:
+        import sys
+
+        sys.path.insert(0, str(ROOT_DIR))
+        import icon_render
+    except ImportError:
+        return False
+
+    try:
+        base_img = icon_render.render_icon(256)
+        base_img.save(
+            ico_path,
+            format="ICO",
+            sizes=[(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)],
+        )
+        base_img.close()
+        return ico_path.is_file()
+    except Exception:
+        return False
+
+
+def generate_linux_png(png_path: Path) -> bool:
+    """Generates a 512x512 `icon.png` for the Linux bundle via Pillow and `icon_render`."""
+    try:
+        import sys
+
+        sys.path.insert(0, str(ROOT_DIR))
+        import icon_render
+    except ImportError:
+        return False
+
+    try:
+        base_img = icon_render.render_icon(512)
+        base_img.save(png_path, format="PNG")
+        base_img.close()
+        return png_path.is_file()
+    except Exception:
+        return False
 
 
 def build_macos_dmg() -> Path:
@@ -310,6 +352,8 @@ def build_windows_release() -> Path:
         shutil.rmtree(win_stage)
 
     copy_project_payload(win_stage)
+    ico_file = win_stage / "OpenBGR.ico"
+    has_ico = generate_windows_ico(ico_file)
 
     # On Windows hosts, compile a zero-dependency C# GUI launcher `OpenBGR.exe`
     csc_candidates = [
@@ -334,10 +378,11 @@ class OpenBGRLauncher {
         psi.Arguments = "/c \"\"" + Path.Combine(dir, "start.bat") + "\"" + argLine + "\"";
         psi.WorkingDirectory = dir;
         psi.UseShellExecute = false;
-        // Headless invocations (right-click "Remove background") must not flash
-        // a console window; GUI launches keep it so setup progress is visible.
+        // Hide the console window on headless calls and once the venv has been
+        // provisioned; keep it visible on first-run setup so progress is shown.
         bool headless = Array.Exists(args, a => a == "--quick-action" || a == "--cli");
-        if (headless) {
+        bool installed = File.Exists(Path.Combine(dir, ".venv", ".installed"));
+        if (headless || installed) {
             psi.CreateNoWindow = true;
             psi.WindowStyle = ProcessWindowStyle.Hidden;
         }
@@ -348,10 +393,11 @@ class OpenBGRLauncher {
         cs_file = win_stage / "Launcher.cs"
         exe_file = win_stage / "OpenBGR.exe"
         cs_file.write_text(cs_source, encoding="utf-8")
-        subprocess.run(
-            [csc_exe, "/target:winexe", f"/out:{exe_file}", str(cs_file)],
-            check=False,
-        )
+        csc_cmd = [csc_exe, "/target:winexe", f"/out:{exe_file}"]
+        if has_ico:
+            csc_cmd.append(f"/win32icon:{ico_file}")
+        csc_cmd.append(str(cs_file))
+        subprocess.run(csc_cmd, check=False)
         cs_file.unlink(missing_ok=True)
 
     zip_path = DIST_DIR / "OpenBGR-Windows.zip"
@@ -376,6 +422,7 @@ def build_linux_release() -> Path:
         shutil.rmtree(linux_stage)
 
     copy_project_payload(linux_stage)
+    generate_linux_png(linux_stage / "icon.png")
     make_executable(linux_stage / "start.sh")
 
     desktop_entry = """[Desktop Entry]
@@ -383,6 +430,7 @@ Type=Application
 Name=OpenBGR
 Comment=Local AI Background Removal Studio
 Exec=sh -c 'cd "$(dirname "$1")" && shift && exec ./start.sh "$@"' _ %k %F
+Icon=openbgr
 MimeType=image/png;image/jpeg;image/webp;image/bmp;image/tiff;image/gif;
 Terminal=false
 Categories=Graphics;Photography;

@@ -69,6 +69,12 @@
                 <span class="menu-kbd" data-shortcut="Mod+,">⌘,</span>
               </button>
               <div class="menu-sep"></div>
+              <button type="button" class="menu-item" data-cmd="restartApp" data-requires="native">
+                <span class="menu-check"></span>
+                <span class="menu-label">Restart OpenBGR</span>
+                <span class="menu-kbd"></span>
+              </button>
+              <div class="menu-sep"></div>
               <button type="button" class="menu-item" data-cmd="quitApp">
                 <span class="menu-check"></span>
                 <span class="menu-label">Quit OpenBGR</span>
@@ -85,7 +91,7 @@
                 <span class="menu-label">Copy Cutout to Clipboard</span>
                 <span class="menu-kbd" data-shortcut="Shift+Mod+C">⇧⌘C</span>
               </button>
-              <button type="button" class="menu-item" data-cmd="pasteImage">
+              <button type="button" class="menu-item" data-cmd="pasteImage" data-requires="paste-image">
                 <span class="menu-check"></span>
                 <span class="menu-label">Paste Image from Clipboard</span>
                 <span class="menu-kbd" data-shortcut="Mod+V">⌘V</span>
@@ -156,43 +162,43 @@
           <div class="menu-root" data-menu="model">
             <button type="button" class="menu-trigger">MODEL</button>
             <div class="menu-dropdown">
-              <button type="button" class="menu-item" data-cmd="presetLite" data-check="tier:lite">
+              <button type="button" class="menu-item" data-cmd="presetLite" data-requires="model-controls" data-check="tier:lite">
                 <span class="menu-check"></span>
                 <span class="menu-label">Lite - 1K Fast (BiRefNet_lite)</span>
                 <span class="menu-kbd"></span>
               </button>
-              <button type="button" class="menu-item" data-cmd="presetGeneral" data-check="tier:general">
+              <button type="button" class="menu-item" data-cmd="presetGeneral" data-requires="model-controls" data-check="tier:general">
                 <span class="menu-check">✓</span>
                 <span class="menu-label">General - 1K Studio (BiRefNet)</span>
                 <span class="menu-kbd"></span>
               </button>
-              <button type="button" class="menu-item" data-cmd="presetHr" data-check="tier:hr">
+              <button type="button" class="menu-item" data-cmd="presetHr" data-requires="model-controls" data-check="tier:hr">
                 <span class="menu-check"></span>
                 <span class="menu-label">Ultra HR - 2K Detail (BiRefNet_HR)</span>
                 <span class="menu-kbd"></span>
               </button>
-              <button type="button" class="menu-item" data-cmd="presetPortrait" data-check="tier:portrait">
+              <button type="button" class="menu-item" data-cmd="presetPortrait" data-requires="model-controls" data-check="tier:portrait">
                 <span class="menu-check"></span>
                 <span class="menu-label">Portrait - 1K People (BiRefNet-portrait)</span>
                 <span class="menu-kbd"></span>
               </button>
-              <button type="button" class="menu-item" data-cmd="presetMatting" data-check="tier:matting">
+              <button type="button" class="menu-item" data-cmd="presetMatting" data-requires="model-controls" data-check="tier:matting">
                 <span class="menu-check"></span>
                 <span class="menu-label">Matting - 2K Soft Alpha (BiRefNet_HR-matting)</span>
                 <span class="menu-kbd"></span>
               </button>
-              <button type="button" class="menu-item" data-cmd="presetDynamic" data-check="tier:dynamic">
+              <button type="button" class="menu-item" data-cmd="presetDynamic" data-requires="model-controls" data-check="tier:dynamic">
                 <span class="menu-check"></span>
                 <span class="menu-label">Dynamic - Native Ratio (BiRefNet_dynamic)</span>
                 <span class="menu-kbd"></span>
               </button>
               <div class="menu-sep"></div>
-              <button type="button" class="menu-item" data-cmd="toggleDefringe" data-check="defringe">
+              <button type="button" class="menu-item" data-cmd="toggleDefringe" data-requires="model-controls" data-check="defringe">
                 <span class="menu-check">✓</span>
                 <span class="menu-label">Defringe Edges</span>
                 <span class="menu-kbd"></span>
               </button>
-              <button type="button" class="menu-item" data-cmd="toggleDespill" data-check="despill">
+              <button type="button" class="menu-item" data-cmd="toggleDespill" data-requires="model-controls" data-check="despill">
                 <span class="menu-check">✓</span>
                 <span class="menu-label">Suppress Color Spill</span>
                 <span class="menu-kbd"></span>
@@ -602,6 +608,10 @@
         </div>
 
         <div class="sidebar-section export-actions-section">
+          <div class="section-header-row batch-hide">
+            <span class="section-header">FILE SIZE</span>
+            <span class="scale-pct" id="exportSizeLabel">--</span>
+          </div>
           <button type="button" class="action-btn primary full-width disabled" id="btnDownload">EXPORT PNG</button>
           <button type="button" class="action-btn full-width disabled batch-hide" id="btnCopy">COPY TO CLIPBOARD</button>
         </div>
@@ -647,7 +657,7 @@
         <div class="prefs-header">
           <div class="prefs-title-group">
             <span class="modal-title" id="infoModalTitle">PREFERENCES</span>
-            <span class="prefs-subtitle">OPENBGR <span id="prefsVersion">V0.10</span></span>
+            <span class="prefs-subtitle">OPENBGR <span id="prefsVersion">V0.11.0</span></span>
           </div>
           <button type="button" class="prefs-close" id="btnPrefsCloseX" aria-label="Close preferences">X</button>
         </div>
@@ -758,7 +768,6 @@
                     <span class="pref-desc">Model used when removing backgrounds from the right-click menu.</span>
                   </div>
                   <select class="studio-select pref-select" id="prefQaTier">
-                    <option value="auto">Auto (Recommended)</option>
                     <option value="lite">Lite (BiRefNet_lite)</option>
                     <option value="general">General (BiRefNet)</option>
                     <option value="hr">Ultra HR (BiRefNet_HR)</option>
@@ -1027,7 +1036,7 @@
                 </div>
                 <div class="spec-row">
                   <span class="spec-key">FULL SCREEN</span>
-                  <span class="spec-val"><span class="kbd">F11</span></span>
+                  <span class="spec-val"><span class="kbd" data-shortcut-chip="F11">⌃⌘F</span></span>
                 </div>
                 <div class="spec-row">
                   <span class="spec-key">CANCEL / CLOSE DIALOG</span>
@@ -1045,7 +1054,7 @@
               <div class="pane-heading">ABOUT</div>
               <div class="about-mark">
                 <span class="about-word">OPENBGR</span>
-                <span class="about-ver" id="aboutVersion">V0.10</span>
+                <span class="about-ver" id="aboutVersion">V0.11.0</span>
               </div>
               <p class="about-blurb">
                 A free, open-source utility powered by BiRefNet models. After a

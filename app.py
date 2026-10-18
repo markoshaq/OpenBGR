@@ -54,6 +54,7 @@ from openbgr.api import (
     api_install_model,
     api_job_progress,
     api_open_cache_dir,
+    api_open_files,
     api_open_logs_dir,
     api_quick_action_install,
     api_refine,
@@ -62,6 +63,7 @@ from openbgr.api import (
     api_save,
     api_save_quick_action_config,
     api_status,
+    api_take_pending_files,
     api_uninstall_model,
     app,
     lifespan,
@@ -115,6 +117,7 @@ from openbgr.desktop import (
     build_native_menus,
     configure_macos_native_window_and_menus,
     ensure_window_on_screen,
+    forward_open_files_to_server,
     install_macos_open_documents_handler,
     install_macos_open_files_delegate,
     is_openbgr_server,
@@ -123,6 +126,7 @@ from openbgr.desktop import (
     queue_open_files,
     set_desktop_api,
     set_macos_app_name,
+    wait_for_port_free,
     wait_for_server,
 )
 from openbgr.models import (
@@ -154,6 +158,7 @@ from openbgr.quick_action import (
     _with_output_suffix,
     copy_png_bytes_to_clipboard,
     cutout_filename_for,
+    delegate_quick_action_to_server,
     encode_cutout_image,
     ensure_macos_notifier_app,
     format_quick_action_notification,
@@ -213,6 +218,7 @@ __all__ = [
     "api_install_model",
     "api_job_progress",
     "api_open_cache_dir",
+    "api_open_files",
     "api_open_logs_dir",
     "api_quick_action_install",
     "api_refine",
@@ -221,6 +227,7 @@ __all__ = [
     "api_save",
     "api_save_quick_action_config",
     "api_status",
+    "api_take_pending_files",
     "api_uninstall_model",
     "app",
     "attach_window_state_persistence",
@@ -232,6 +239,7 @@ __all__ = [
     "copy_png_bytes_to_clipboard",
     "cutout_filename_for",
     "decontaminate_edge_colors",
+    "delegate_quick_action_to_server",
     "detect_compute_device",
     "encode_cutout_image",
     "ensure_app_icon",
@@ -239,6 +247,7 @@ __all__ = [
     "ensure_window_on_screen",
     "format_device_label",
     "format_quick_action_notification",
+    "forward_open_files_to_server",
     "get_app_disk_bytes",
     "get_host_ram_gb",
     "get_model_cache_dir",
@@ -274,6 +283,7 @@ __all__ = [
     "snapshot_download",
     "suppress_color_spill",
     "try_to_load_from_cache",
+    "wait_for_port_free",
     "wait_for_server",
 ]
 
@@ -414,7 +424,8 @@ def main(argv: list[str] | None = None) -> None:
         args.tier = norm_tier
 
     if args.quick_action:
-        res = run_quick_action(args.files)
+        delegated = delegate_quick_action_to_server(args.files)
+        res = delegated if delegated is not None else run_quick_action(args.files)
         raise SystemExit(0 if res.get("ok") or res.get("cancelled") else 1)
 
     if args.cli:
@@ -430,7 +441,20 @@ def main(argv: list[str] | None = None) -> None:
             )
         )
 
+    port = int(os.environ.get("PORT", "7860"))
+    host = "127.0.0.1"
+    url = f"http://{host}:{port}"
+
+    if os.environ.pop("OPENBGR_RESTARTING", None) == "1":
+        wait_for_port_free(host, port, timeout_s=5.0)
+
     if args.files:
+        # If an OpenBGR instance is already running, forward 'Open With' files
+        # to it over localhost and exit cleanly instead of colliding on the port.
+        if wait_for_server(host, port, timeout_s=0.15) and is_openbgr_server(url, timeout_s=2.0):
+            if forward_open_files_to_server(url, args.files):
+                logger.info("[Desktop] Forwarded %d file(s) to running instance.", len(args.files))
+                raise SystemExit(0)
         queue_open_files(args.files)
 
     signal.signal(signal.SIGINT, _graceful_exit)
@@ -438,10 +462,6 @@ def main(argv: list[str] | None = None) -> None:
     if hasattr(signal, "SIGHUP"):
         signal.signal(signal.SIGHUP, _graceful_exit)
     _start_signal_watchdog()
-
-    port = int(os.environ.get("PORT", "7860"))
-    host = "127.0.0.1"
-    url = f"http://{host}:{port}"
 
     logger.info("-" * 68)
     logger.info("  OpenBGR - LOCAL AI SEGMENTATION STUDIO")
@@ -462,22 +482,30 @@ def main(argv: list[str] | None = None) -> None:
         threading.Timer(1.0, lambda: open_fallback_app_window(url)).start()
         uvicorn.run(app, host=host, port=port, log_level="warning", log_config=None)
     else:
-        # Start FastAPI server in a background daemon thread and open native desktop window
-        server_thread = threading.Thread(
-            target=lambda: uvicorn.run(
-                app, host=host, port=port, log_level="warning", log_config=None
-            ),
-            daemon=True,
-        )
-        server_thread.start()
-        if wait_for_server(host, port):
-            if not is_openbgr_server(url):
+        server_thread: threading.Thread | None = None
+        if wait_for_server(host, port, timeout_s=0.15):
+            if not is_openbgr_server(url, timeout_s=3.0):
                 logger.error("[Server] Port %s is already in use by another application.", port)
                 logger.error("[Server] Close it or set PORT=<free port> and try again.")
                 raise SystemExit(1)
-        elif not server_thread.is_alive():
-            logger.error("[Server] Uvicorn failed to start; see errors above.")
-            raise SystemExit(1)
+            logger.info("[Server] Reusing existing OpenBGR server at %s.", url)
+        else:
+            # Start FastAPI server in a background daemon thread and open native desktop window
+            server_thread = threading.Thread(
+                target=lambda: uvicorn.run(
+                    app, host=host, port=port, log_level="warning", log_config=None
+                ),
+                daemon=True,
+            )
+            server_thread.start()
+            if wait_for_server(host, port):
+                if not is_openbgr_server(url):
+                    logger.error("[Server] Port %s is already in use by another application.", port)
+                    logger.error("[Server] Close it or set PORT=<free port> and try again.")
+                    raise SystemExit(1)
+            elif not server_thread.is_alive():
+                logger.error("[Server] Uvicorn failed to start; see errors above.")
+                raise SystemExit(1)
 
         try:
             set_macos_app_name("OpenBGR")
@@ -546,7 +574,8 @@ def main(argv: list[str] | None = None) -> None:
             open_fallback_app_window(url)
             # Keep the daemon server thread alive; without this, main() returns
             # and the browser window opens a dead URL (Ctrl+C exits the join).
-            server_thread.join()
+            if server_thread is not None:
+                server_thread.join()
 
 
 if __name__ == "__main__":

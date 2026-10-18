@@ -69,5 +69,5 @@ if not exist ".venv\.installed" (
 
 call ".venv\Scripts\python.exe" app.py %*
 set "RC=%ERRORLEVEL%"
-if "%~1"=="" pause
+if !RC! neq 0 if "%~1"=="" pause
 exit /b %RC%

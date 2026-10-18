@@ -50,8 +50,8 @@ jobs:
         run: pip install pillow
       - name: Build OpenBGR-macOS.dmg
         run: |
-          python -m py_compile app.py icon_render.py openbgr/__init__.py openbgr/config.py openbgr/models.py openbgr/pipeline.py openbgr/quick_action.py openbgr/desktop.py openbgr/api.py scripts/build_release.py scripts/make_dev_bundle.py
-          bash -n start.sh "Start Mac.command"
+          python -m py_compile app.py icon_render.py openbgr/__init__.py openbgr/config.py openbgr/models.py openbgr/pipeline.py openbgr/quick_action.py openbgr/desktop.py openbgr/api.py scripts/build_release.py scripts/make_dev_bundle.py scripts/install_macos_quick_action.py
+          bash -n start.sh "Start Mac.command" scripts/context_process.sh scripts/install_linux_integration.sh
           python scripts/build_release.py
       - uses: actions/upload-artifact@v4
         with:
@@ -67,6 +67,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install Pillow for icon generation
+        run: pip install pillow
       - name: Build OpenBGR-Windows.zip (with OpenBGR.exe)
         run: |
           python -m py_compile app.py icon_render.py openbgr/__init__.py openbgr/config.py openbgr/models.py openbgr/pipeline.py openbgr/quick_action.py openbgr/desktop.py openbgr/api.py scripts/build_release.py
@@ -85,10 +87,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install Pillow for icon generation
+        run: pip install pillow
       - name: Build OpenBGR-Linux.tar.gz
         run: |
           python -m py_compile app.py icon_render.py openbgr/__init__.py openbgr/config.py openbgr/models.py openbgr/pipeline.py openbgr/quick_action.py openbgr/desktop.py openbgr/api.py scripts/build_release.py
-          bash -n start.sh
+          bash -n start.sh scripts/context_process.sh scripts/install_linux_integration.sh
           python scripts/build_release.py
       - uses: actions/upload-artifact@v4
         with:

@@ -203,41 +203,48 @@ class TestOpenBGR(unittest.TestCase):
                 )
 
     def test_release_archives_contain_all_modules(self) -> None:
-        """Windows/Linux release archives ship every frontend module and launcher."""
-        win_zip = build_release.build_windows_release()
-        linux_tar = build_release.build_linux_release()
+        """Windows/Linux release archives ship every frontend module, icon, and launcher."""
+        with (
+            tempfile.TemporaryDirectory() as tmp_dist,
+            patch.object(build_release, "DIST_DIR", Path(tmp_dist)),
+        ):
+            win_zip = build_release.build_windows_release()
+            linux_tar = build_release.build_linux_release()
 
-        required_entries = {
-            "OpenBGR/app.py",
-            "OpenBGR/icon_render.py",
-            "OpenBGR/openbgr/__init__.py",
-            "OpenBGR/openbgr/config.py",
-            "OpenBGR/openbgr/models.py",
-            "OpenBGR/openbgr/pipeline.py",
-            "OpenBGR/openbgr/quick_action.py",
-            "OpenBGR/openbgr/desktop.py",
-            "OpenBGR/openbgr/api.py",
-            "OpenBGR/start.sh",
-            "OpenBGR/start.bat",
-            "OpenBGR/scripts/make_dev_bundle.py",
-            "OpenBGR/static/index.html",
-            "OpenBGR/static/styles.css",
-            "OpenBGR/static/app.js",
-            "OpenBGR/static/state.js",
-            "OpenBGR/static/stage.js",
-            "OpenBGR/static/export.js",
-            "OpenBGR/static/preferences.js",
-            "OpenBGR/static/batch.js",
-            "OpenBGR/static/tabs.js",
-        }
+            required_entries = {
+                "OpenBGR/app.py",
+                "OpenBGR/icon_render.py",
+                "OpenBGR/openbgr/__init__.py",
+                "OpenBGR/openbgr/config.py",
+                "OpenBGR/openbgr/models.py",
+                "OpenBGR/openbgr/pipeline.py",
+                "OpenBGR/openbgr/quick_action.py",
+                "OpenBGR/openbgr/desktop.py",
+                "OpenBGR/openbgr/api.py",
+                "OpenBGR/start.sh",
+                "OpenBGR/start.bat",
+                "OpenBGR/scripts/make_dev_bundle.py",
+                "OpenBGR/static/index.html",
+                "OpenBGR/static/styles.css",
+                "OpenBGR/static/app.js",
+                "OpenBGR/static/state.js",
+                "OpenBGR/static/stage.js",
+                "OpenBGR/static/export.js",
+                "OpenBGR/static/preferences.js",
+                "OpenBGR/static/batch.js",
+                "OpenBGR/static/tabs.js",
+            }
 
-        with zipfile.ZipFile(win_zip, "r") as zf:
-            zip_names = {n.replace("\\", "/") for n in zf.namelist()}
-            self.assertTrue(required_entries.issubset(zip_names))
+            with zipfile.ZipFile(win_zip, "r") as zf:
+                zip_names = {n.replace("\\", "/") for n in zf.namelist()}
+                self.assertTrue(required_entries.issubset(zip_names))
+                self.assertIn("OpenBGR/OpenBGR.ico", zip_names)
 
-        with tarfile.open(linux_tar, "r:gz") as tf:
-            tar_names = set(tf.getnames())
-            self.assertTrue(required_entries.issubset(tar_names))
+            with tarfile.open(linux_tar, "r:gz") as tf:
+                tar_names = set(tf.getnames())
+                self.assertTrue(required_entries.issubset(tar_names))
+                self.assertIn("OpenBGR/icon.png", tar_names)
+                self.assertIn("OpenBGR/OpenBGR.desktop", tar_names)
 
     def test_quick_action_notification_and_config(self) -> None:
         """Quick Action notifications, config sanitization, and multi-format encoding behave as specified."""
@@ -275,7 +282,7 @@ class TestOpenBGR(unittest.TestCase):
         fallback = openbgr_app.sanitize_quick_action_config(
             {"tier": "bogus", "save_mode": "somewhere", "format": "gif"}
         )
-        self.assertEqual(fallback["tier"], "auto")
+        self.assertEqual(fallback["tier"], "general")
         self.assertEqual(fallback["save_mode"], "same_folder")
         self.assertEqual(fallback["format"], "png")
 
@@ -434,6 +441,26 @@ class TestOpenBGR(unittest.TestCase):
             # Subsequent drain is empty
             self.assertEqual(bridge.take_pending_files(), {"files": []})
 
+            # HTTP open-files / pending-files endpoints mirror the native bridge
+            queued = openbgr_app.api_open_files(files=[str(img_path)])
+            self.assertTrue(queued["ok"])
+            self.assertEqual(queued["pending"], 1)
+            http_drained = openbgr_app.api_take_pending_files()
+            self.assertEqual(len(http_drained["files"]), 1)
+            self.assertEqual(http_drained["files"][0]["name"], "test.png")
+            self.assertEqual(openbgr_app.api_take_pending_files(), {"files": []})
+
+            # Clipboard probe handles PIL Image, file list, and empty clipboard
+            from PIL import ImageGrab
+
+            fake_clip = Image.new("RGBA", (8, 8), (255, 0, 0, 255))
+            with patch.object(ImageGrab, "grabclipboard", return_value=fake_clip):
+                self.assertEqual(bridge.has_clipboard_image(), {"has_image": True})
+            with patch.object(ImageGrab, "grabclipboard", return_value=[str(img_path)]):
+                self.assertEqual(bridge.has_clipboard_image(), {"has_image": True})
+            with patch.object(ImageGrab, "grabclipboard", return_value=[str(Path(tmp) / "a.txt")]):
+                self.assertEqual(bridge.has_clipboard_image(), {"has_image": False})
+
     def test_queue_open_files_rejects_non_images(self) -> None:
         """Launch-time 'odoc' events for the script itself (app.py) are filtered out."""
         bridge = openbgr_app.DesktopApi()
@@ -451,6 +478,7 @@ class TestOpenBGR(unittest.TestCase):
         m = re.search(r'^version\s*=\s*"([^"]+)"', pyproject_text, re.MULTILINE)
         self.assertIsNotNone(m)
         expected = m.group(1) if m else ""
+        self.assertEqual(expected, "0.11.0")
         self.assertEqual(openbgr_app.APP_VERSION, expected)
         self.assertEqual(build_release.APP_VERSION, expected)
 

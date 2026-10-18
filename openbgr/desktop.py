@@ -13,6 +13,7 @@ import platform
 import shutil
 import socket
 import subprocess
+import sys
 import threading
 import time
 import webbrowser
@@ -200,6 +201,28 @@ class DesktopApi:
         except Exception as exc:
             return {"saved": False, "error": str(exc)}
 
+    def restart_app(self) -> dict[str, Any]:
+        """Restarts the app by replacing or re-spawning this process with the same argv."""
+
+        def _do() -> None:
+            MANAGER.request_cancel()
+            MANAGER.unload()
+            os.environ["OPENBGR_RESTARTING"] = "1"
+            try:
+                if self.window is not None:
+                    self.window.destroy()
+            except Exception:
+                pass
+            time.sleep(0.4)
+            if platform.system() == "Windows":
+                subprocess.Popen([sys.executable, *sys.argv], close_fds=True)
+                os._exit(0)
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+
+        logger.info("[Desktop] Restart requested.")
+        threading.Thread(target=_do, daemon=True).start()
+        return {"restarting": True}
+
     def choose_output_dir(self) -> dict[str, Any]:
         """Opens a native OS folder picker for direct-to-folder exports."""
         if self.window is None:
@@ -225,6 +248,51 @@ class DesktopApi:
             return copy_png_bytes_to_clipboard(raw_bytes)
         except Exception as exc:
             return {"copied": False, "error": str(exc)}
+
+    def has_clipboard_image(self) -> dict[str, Any]:
+        """
+        Probes whether the native OS clipboard currently holds an image or an
+        image file path, without triggering browser clipboard permission prompts.
+        """
+        try:
+            from PIL import ImageGrab
+
+            grabbed = ImageGrab.grabclipboard()
+            if isinstance(grabbed, Image.Image):
+                grabbed.close()
+                return {"has_image": True}
+            if isinstance(grabbed, (list, tuple)):
+                has_file = any(
+                    Path(str(item)).is_file()
+                    and Path(str(item)).suffix.lower() in _IMAGE_EXTENSIONS
+                    for item in grabbed
+                )
+                return {"has_image": has_file}
+            if platform.system() in ("Darwin", "Windows"):
+                return {"has_image": False}
+        except Exception:
+            pass
+
+        if platform.system() == "Linux":
+            for cmd in (
+                ["wl-paste", "--list-types"],
+                ["xclip", "-selection", "clipboard", "-t", "TARGETS", "-o"],
+            ):
+                if shutil.which(cmd[0]):
+                    try:
+                        proc = subprocess.run(
+                            cmd,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL,
+                            text=True,
+                            timeout=2,
+                        )
+                        if proc.returncode == 0 and proc.stdout:
+                            return {"has_image": "image/png" in proc.stdout.lower()}
+                    except Exception:
+                        pass
+
+        return {"has_image": None}
 
     def read_clipboard_image(self) -> dict[str, Any]:
         """
@@ -321,7 +389,8 @@ class DesktopApi:
 
     def set_window_theme(self, theme: str) -> dict[str, Any]:
         """Synchronizes the native OS window frame appearance with Dark or Light mode."""
-        if platform.system() == "Darwin" and self.window is not None:
+        sys_name = platform.system()
+        if sys_name == "Darwin" and self.window is not None:
             try:
                 import AppKit  # type: ignore
                 from PyObjCTools import AppHelper  # type: ignore
@@ -345,6 +414,25 @@ class DesktopApi:
 
                 AppHelper.callAfter(_apply)
                 return {"updated": True}
+            except Exception:
+                pass
+        elif sys_name == "Windows" and self.window is not None:
+            try:
+                import ctypes
+
+                native = getattr(self.window, "native", None)
+                handle_obj: Any = getattr(native, "Handle", None)
+                to_int64 = getattr(handle_obj, "ToInt64", None)
+                hwnd = int(to_int64()) if callable(to_int64) else int(handle_obj or 0)
+                if hwnd:
+                    dark_flag = ctypes.c_int(0 if theme == "light" else 1)
+                    ctypes.windll.dwmapi.DwmSetWindowAttribute(  # type: ignore[attr-defined]
+                        ctypes.c_void_p(hwnd),
+                        ctypes.c_uint(20),  # DWMWA_USE_IMMERSIVE_DARK_MODE
+                        ctypes.byref(dark_flag),
+                        ctypes.sizeof(dark_flag),
+                    )
+                    return {"updated": True}
             except Exception:
                 pass
         return {"updated": False}
@@ -545,6 +633,8 @@ def build_native_menus(window: Any) -> list[Any]:
         MenuAction("Export Image…", call("exportImage()")),
         MenuSeparator(),
         MenuAction("Close Tab", call("closeActiveTab()")),
+        MenuSeparator(),
+        MenuAction("Restart OpenBGR", call("restartApp()")),
     ]
     if platform.system() != "Darwin":
         file_items.extend(
@@ -625,9 +715,9 @@ def configure_macos_native_window_and_menus(window: Any) -> None:
     """
     Enhances the macOS Cocoa NSMenu and NSWindow once the window is shown:
     1. Attaches native Cocoa keyboard shortcuts (`keyEquivalent`) to menu items
-      so macOS displays `⌘O`, `⌘E`, `⌘W`, `⌘,`, `⌘1`/`⌘2`/`⌘3`, `⌘+`/`⌘-`/`⌘0`,
-       and `⌃⌘F` in the menu bar, and intercepts `⌘W` to close the active tab
-       instead of closing the entire window.
+       so macOS displays `⌘T`, `⌘O`, `⌘B`, `⌘E`, `⌘W`, `⌘,`, `⌘+`/`⌘-`/`⌘0`,
+       `⌘R`, and `⌃⌘F` in the menu bar, and intercepts `⌘W` to close the active
+       tab instead of closing the entire window.
     2. Wires the top "About OpenBGR" item in the macOS application menu to open
        the in-app About / System Info dialog.
     3. Sets the NSWindow appearance to DarkAqua by default.
@@ -693,9 +783,6 @@ def configure_macos_native_window_and_menus(window: Any) -> None:
                         "Close Tab": ("w", cmd_mask),
                         "Copy Cutout": ("c", shift_cmd),
                         "Paste Image": ("v", cmd_mask),
-                        "Split Comparison": ("1", cmd_mask),
-                        "Cutout Only": ("2", cmd_mask),
-                        "Original Only": ("3", cmd_mask),
                         "Zoom In": ("+", cmd_mask),
                         "Zoom Out": ("-", cmd_mask),
                         "Actual Size": ("0", cmd_mask),
@@ -889,6 +976,40 @@ def wait_for_server(host: str, port: int, timeout_s: float = 15.0) -> bool:
         except OSError:
             time.sleep(0.1)
     return False
+
+
+def wait_for_port_free(host: str, port: int, timeout_s: float = 5.0) -> bool:
+    """Polls until `(host, port)` stops accepting TCP connections (e.g. during app restart)."""
+    deadline = time.perf_counter() + timeout_s
+    while time.perf_counter() < deadline:
+        try:
+            with socket.create_connection((host, port), timeout=0.2):
+                time.sleep(0.1)
+        except OSError:
+            return True
+    return False
+
+
+def forward_open_files_to_server(url: str, paths: list[str]) -> bool:
+    """
+    Forwards image paths to an already-running local OpenBGR server via
+    `POST /api/open-files` so 'Open With' on Windows/Linux/CLI opens tabs in
+    the existing window instead of colliding on the server port.
+    """
+    import urllib.parse
+    import urllib.request
+
+    resolved = [str(Path(p).expanduser().resolve()) for p in paths if p]
+    if not resolved:
+        return False
+    try:
+        data = urllib.parse.urlencode([("files", p) for p in resolved]).encode("utf-8")
+        req = urllib.request.Request(f"{url}/api/open-files", data=data, method="POST")
+        with urllib.request.urlopen(req, timeout=5) as res:
+            payload = json.loads(res.read().decode("utf-8"))
+            return bool(isinstance(payload, dict) and payload.get("ok"))
+    except Exception:
+        return False
 
 
 def is_openbgr_server(url: str, timeout_s: float = 10.0) -> bool:

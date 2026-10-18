@@ -44,7 +44,7 @@ def _read_project_version() -> str:
             return m.group(1)
     except OSError:
         pass
-    return "0.10.1"
+    return "0.11.0"
 
 
 APP_VERSION = _read_project_version()
@@ -112,7 +112,7 @@ def _configure_logger() -> logging.Logger:
 logger = _configure_logger()
 
 DEFAULT_QUICK_ACTION_CONFIG: dict[str, Any] = {
-    "tier": "auto",
+    "tier": "general",
     "save_mode": "same_folder",
     "format": "png",
     "edge_refine": True,

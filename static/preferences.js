@@ -409,7 +409,10 @@ export function showModelContextMenu(key, x, y) {
 export async function syncQuickActionConfigToServer() {
   try {
     const fd = new FormData();
-    fd.append("tier", prefs.qaTier || "auto");
+    fd.append(
+      "tier",
+      prefs.qaTier && prefs.qaTier !== "auto" ? prefs.qaTier : "general"
+    );
     fd.append("save_mode", prefs.qaSaveMode || "same_folder");
     fd.append("format", prefs.qaFormat || "png");
     fd.append("edge_refine", String(Boolean(prefs.qaEdgeRefine)));
@@ -571,7 +574,10 @@ export function applyPreferences(onSyncMenu) {
   if (dom.prefDefaultBackdrop) dom.prefDefaultBackdrop.value = prefs.defaultBackdrop;
   dom.btnToggleConfirmClose?.classList.toggle("active", prefs.confirmClose);
 
-  if (dom.prefQaTier) dom.prefQaTier.value = prefs.qaTier || "auto";
+  if (dom.prefQaTier) {
+    dom.prefQaTier.value =
+      prefs.qaTier && prefs.qaTier !== "auto" ? prefs.qaTier : "general";
+  }
   if (dom.prefQaSaveMode) dom.prefQaSaveMode.value = prefs.qaSaveMode || "same_folder";
   if (dom.prefQaFormat) dom.prefQaFormat.value = prefs.qaFormat || "png";
   dom.btnToggleQaEdgeRefine?.classList.toggle("active", Boolean(prefs.qaEdgeRefine));

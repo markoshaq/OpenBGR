@@ -6,6 +6,8 @@
 import {
   state,
   dom,
+  prefs,
+  savePrefs,
   getActiveTab,
   defaultTierForNewTab,
   createTabRecord,
@@ -474,13 +476,6 @@ export async function runBatch(tab) {
   const isCached = tierInfo ? tierInfo.cached !== false : true;
 
   const presetName = PRESET_NAMES[snap.tier] || snap.tier.toUpperCase();
-  const qualityDesc =
-    snap.exportWidth > 0 || snap.exportHeight > 0
-      ? `${snap.exportWidth || "AUTO"}x${snap.exportHeight || "AUTO"}`
-      : `${Math.round((snap.scale || 1) * 100)}%`;
-  const destDesc = outputDir
-    ? outputDir
-    : "browser downloads (openbgr-cutouts.zip)";
   const batchDesc =
     `Processing using ${presetName}...` +
     (isCached ? "" : " Fetching model weights...");
@@ -524,6 +519,15 @@ export async function runBatch(tab) {
         throw new Error(detail);
       }
 
+      const inferenceMs = parseFloat(
+        response.headers.get("X-Inference-Time-Ms") || "0"
+      );
+      if (inferenceMs > 0) {
+        prefs.inferEstimates = prefs.inferEstimates || {};
+        prefs.inferEstimates[snap.tier] = inferenceMs;
+        savePrefs();
+      }
+
       const blob = await response.blob();
       if (batch.cancelled || controller.signal.aborted) {
         entry.status = "queued";
@@ -535,7 +539,7 @@ export async function runBatch(tab) {
       const ext = FORMAT_EXT[snap.format] || "png";
       const stem = (entry.name || "image").replace(/\.[^.]+$/, "") || "image";
       const suffix = snap.format === "mask" ? "mask" : "cutout";
-      const outName = `${stem}-${suffix}.${ext}`;
+      let outName = `${stem}-${suffix}.${ext}`;
 
       if (outputDir) {
         const ok = await saveBatchFile(outputDir, outName, outBlob);
@@ -546,6 +550,11 @@ export async function runBatch(tab) {
           continue;
         }
       } else {
+        const taken = new Set(batch.results.map((r) => r.name));
+        let n = 1;
+        while (taken.has(outName)) {
+          outName = `${stem}-${suffix}-${n++}.${ext}`;
+        }
         batch.results.push({ name: outName, blob: outBlob });
       }
       entry.status = "done";

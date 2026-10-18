@@ -76,12 +76,13 @@ export function getDefaultPrefs() {
     defaultFormat: "png",
     defaultBackdrop: "checker",
     confirmClose: true,
-    qaTier: "auto",
+    qaTier: "general",
     qaSaveMode: "same_folder",
     qaFormat: "png",
     qaEdgeRefine: true,
     qaCopyClipboard: false,
     qaNotify: true,
+    inferEstimates: {},
   };
 }
 
@@ -99,8 +100,8 @@ const PREF_SCHEMA = {
   },
   confirmClose: { type: "boolean", fallback: true },
   qaTier: {
-    values: ["auto", ...TIER_KEYS],
-    fallback: "auto",
+    values: [...TIER_KEYS],
+    fallback: "general",
   },
   qaSaveMode: {
     values: ["same_folder", "ask"],
@@ -130,6 +131,14 @@ function sanitizePrefs(stored) {
       clean[key] = rule.values.includes(v) ? v : rule.fallback;
     }
   }
+  const est = {};
+  if (stored.inferEstimates && typeof stored.inferEstimates === "object") {
+    for (const k of TIER_KEYS) {
+      const ms = Number(stored.inferEstimates[k]);
+      if (Number.isFinite(ms) && ms > 0) est[k] = ms;
+    }
+  }
+  clean.inferEstimates = est;
   return clean;
 }
 
@@ -302,6 +311,7 @@ export const state = {
   panStartX: 0,
   panStartY: 0,
   spacePressed: false,
+  clipboardHasImage: null,
   loupeEnabled: false,
   serverStatus: null,
   expectingBatch: false,
@@ -400,6 +410,7 @@ export const dom = {
   exportHeightInput: document.getElementById("exportHeightInput"),
   aspectLockBtn: document.getElementById("aspectLockBtn"),
   fileDestPath: document.getElementById("fileDestPath"),
+  exportSizeLabel: document.getElementById("exportSizeLabel"),
 
   hwCompute: document.getElementById("hwCompute"),
   hwPrecision: document.getElementById("hwPrecision"),
@@ -510,10 +521,11 @@ export function saveStateToActiveTab() {
 }
 
 let errorCopyResetTimer = null;
-let successHideTimer = null;
+let toastHideTimer = null;
 
 /** Shows (or clears, with empty message) the transient error toast. */
-export function setError(message) {
+export function setError(message, ms = 10000) {
+  clearTimeout(toastHideTimer);
   if (!message) {
     dom.errorToast.classList.remove("visible", "success");
     dom.errorToast.textContent = "";
@@ -521,12 +533,12 @@ export function setError(message) {
     delete dom.errorToast.dataset.kind;
     return;
   }
-  clearTimeout(successHideTimer);
   dom.errorToast.classList.remove("success");
   dom.errorToast.dataset.raw = message;
   dom.errorToast.dataset.kind = "error";
   dom.errorToast.textContent = `ERROR: ${message}`;
   dom.errorToast.classList.add("visible");
+  toastHideTimer = setTimeout(() => setError(null), ms);
 }
 
 /** Shows a transient green success toast that auto-hides after `ms`. */
@@ -536,8 +548,8 @@ export function setSuccess(message, ms = 5000) {
   dom.errorToast.classList.add("success");
   dom.errorToast.textContent = message;
   dom.errorToast.classList.add("visible");
-  clearTimeout(successHideTimer);
-  successHideTimer = setTimeout(() => {
+  clearTimeout(toastHideTimer);
+  toastHideTimer = setTimeout(() => {
     if (dom.errorToast.dataset.kind === "success") setError(null);
   }, ms);
 }
@@ -566,22 +578,19 @@ async function copyTextToClipboard(text) {
   }
 }
 
-/** Clicking (or Enter/Space on) the error toast copies its message to the clipboard. */
+/** Clicking (or Enter/Space on) the toast copies its message and flashes a sweep. */
 function handleErrorToastCopy() {
   const raw = dom.errorToast.dataset.raw;
   if (!raw) return;
   copyTextToClipboard(raw).then((ok) => {
     if (!ok) return;
-    dom.errorToast.textContent = "COPIED TO CLIPBOARD";
+    dom.errorToast.classList.remove("copied");
+    void dom.errorToast.offsetWidth; // restart the sweep animation
+    dom.errorToast.classList.add("copied");
     clearTimeout(errorCopyResetTimer);
     errorCopyResetTimer = setTimeout(() => {
-      if (dom.errorToast.dataset.raw) {
-        dom.errorToast.textContent =
-          dom.errorToast.dataset.kind === "success"
-            ? dom.errorToast.dataset.raw
-            : `ERROR: ${dom.errorToast.dataset.raw}`;
-      }
-    }, 1200);
+      dom.errorToast.classList.remove("copied");
+    }, 900);
   });
 }
 
