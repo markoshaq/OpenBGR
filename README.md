@@ -4,21 +4,21 @@
 [![Release](https://img.shields.io/github/v/release/markoshaq/OpenBGR)](https://github.com/markoshaq/OpenBGR/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 
-Background removal tool powered by [BiRefNet](https://github.com/ZhengPeng7/BiRefNet). Runs locally and exports full-resolution images in multiple formats without any telemetry, watermarks or compression.
+Multi-tab background removal studio powered by [BiRefNet](https://github.com/ZhengPeng7/BiRefNet), running entirely on your machine. FastAPI backend, pywebview desktop shell, vanilla ES-module frontend with no build step. Exports full-resolution images in multiple formats with no telemetry, watermarks, or compression.
 
 ![OpenBGR workspace](docs/screenshot.png)
 
 ## Features
 
-- **100% offline after setup.** Model weights are downloaded once from Hugging Face and loaded strictly from local cache on future runs. No uploads, no telemetry, no accounts, no subscriptions.
-- **Multi-tab workspace.** Open several images as tabs, switch between them with `⌘1`-`⌘9` / `Ctrl+1`-`Ctrl+9` or `⌃Tab` / `Ctrl+Tab`, and drag one tab onto another to merge them into a batch, like folders. Zoom, pan, and export settings are remembered per tab.
-- **Batch processing.** Batch tabs queue any number of images under one shared settings snapshot, with per-file status, drag-out extraction, direct folder export (or a single UTF-8 ZIP in browser mode), and per-file failure recovery.
-- **Six specialized models.** From a fast `Lite` build for CPUs up to 2K soft-alpha `Matting`. See the [model table](#models).
-- **Zoom, pan & 4x loupe.** Pinch-to-zoom, two-finger trackpad panning, and `Space + Drag` canvas panning (`100%-800%`), view-mode hotkeys (`1` Split, `2` Cutout, `3` Original), plus a toggleable 4x circular magnifier loupe (`Z` key) for inspecting hair strands and edges.
-- **Live export preview & exact file size.** Export as `PNG`, `WEBP`, `JPG`, or an 8-bit `MASK` (`Alpha Mask`) at any scale (`10%-200%`) or custom pixel dimensions (`W x H`) with a toggleable aspect-ratio lock, custom matte backdrop compositing, and live output file-size readout rendered on `<canvas>` without re-running inference.
-- **Instant edge & reflection refinement.** Edge defringing removes background color bleed along hair and soft borders, color-spill suppression cleans rim reflections (both re-applied in ~20 ms without re-running the neural network), and a shadow/reflection alpha cutoff floors out floor shadows at export.
-- **Native desktop window.** Opens in a standalone OS window via `pywebview`, with native menus, Dark/Light themes and 6 accent colors, OS clipboard image/file paste, native Save-As and folder dialogs, a built-in keyboard shortcuts reference pane, per-monitor window-state restore, and automatic browser fallback.
-- **Model management & live download telemetry.** Right-click any model card to install or uninstall checkpoints with live byte-level download progress on the card and busy overlay, open the Hugging Face cache or diagnostic logs folder, and see disk usage split between app files and model weights. `FP16` inference runs on CUDA and Apple MPS (roughly half the memory of FP32, typically with a solid speedup).
+- **100% offline after setup.** Weights download once from Hugging Face, then run strictly from local cache. No uploads, telemetry, accounts, or subscriptions.
+- **Multi-tab workspace.** `⌘1`-`⌘9` / `Ctrl+1`-`Ctrl+9` or `⌃Tab` / `Ctrl+Tab` to switch, drag tabs together to merge them into a batch, per-tab zoom/pan/export settings.
+- **Batch processing.** Queue any number of images under one settings snapshot, with per-file status and recovery, drag-out extraction, and folder or single-ZIP export.
+- **Six specialized models.** From a fast `Lite` build for CPUs to 2K soft-alpha `Matting`. See the [model table](#models).
+- **Zoom, pan & 4x loupe.** Pinch, two-finger, and `Space + Drag` navigation (`100%-800%`), view hotkeys (`1`/`2`/`3`), and a `Z`-key magnifier for hair and edges.
+- **Live export preview.** `PNG`, `WEBP`, `JPG`, or alpha `MASK` at any scale or exact pixel size, with aspect lock, matte backdrop compositing, and a real-time file-size readout, all without re-running inference.
+- **Instant edge refinement.** Defringe, color-spill suppression, and a shadow/reflection alpha cutoff, re-applied in ~20 ms without re-running the model.
+- **Native desktop window.** `pywebview` app window with native menus, themes, clipboard paste, Save-As/folder dialogs, shortcuts pane, window-state restore, and browser fallback.
+- **Model management.** Right-click a model card to install/uninstall with live download progress, open the HF cache or logs folder, and see disk usage per model. `FP16` inference on CUDA and Apple MPS.
 
 ## Installation
 
@@ -156,7 +156,7 @@ Backend tests are split by concern across `tests/test_*.py`; frontend helpers ar
 
 ## Development
 
-The project ships a `pyproject.toml` configured for [Ruff](https://docs.astral.sh/ruff/) and [mypy](https://mypy.readthedocs.io/), plus a dev-only `package.json` with [ESLint](https://eslint.org/) for the `static/` ES modules:
+The project ships a `pyproject.toml` configured for [Ruff](https://docs.astral.sh/ruff/) and [mypy](https://mypy.readthedocs.io/), plus a dev-only `package.json` with [ESLint](https://eslint.org/) for the `static/` ES modules. See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full setup:
 
 ```bash
 pip install -e ".[dev]"
