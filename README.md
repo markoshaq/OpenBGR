@@ -27,10 +27,10 @@ Background removal tool powered by [BiRefNet](https://github.com/ZhengPeng7/BiRe
 Download the latest build for your OS from [Releases](https://github.com/markoshaq/OpenBGR/releases):
 
 - **macOS.** Open `OpenBGR-macOS.dmg` and drag `OpenBGR.app` into Applications. The build is ad-hoc signed rather than Apple-notarized, so Gatekeeper may prompt on first launch; right-click `OpenBGR.app` > **Open** once, or run `xattr -cr /Applications/OpenBGR.app`.
-- **Windows.** Extract `OpenBGR-Windows.zip` and run `start.bat` (CI builds also include an `OpenBGR.exe` shortcut).
+- **Windows.** Run `OpenBGR-Setup.exe` (installs per-user under `%LOCALAPPDATA%\OpenBGR` with Start Menu, uninstaller, and optional Explorer context-menu shortcuts), or extract `OpenBGR-Windows.zip` and run `OpenBGR.exe` / `start.bat` for a portable folder.
 - **Linux.** Extract `OpenBGR-Linux.tar.gz` and run `./start.sh` inside the extracted folder.
 
-On first run the launcher sets up a standalone Python runtime and downloads the model you pick, so an internet connection is needed once.
+On first run the launcher sets up a standalone Python runtime (auto-selecting CUDA PyTorch on NVIDIA GPUs) and downloads the model you pick, so an internet connection is needed once.
 
 ### Requirements
 
@@ -148,33 +148,41 @@ Other endpoints: `GET /api/status` (version, device, RAM, per-model cache state)
 ## Tests
 
 ```bash
-python -m unittest discover -s tests -v
+python -m unittest discover -s tests -v   # backend suite
+node --test "tests/*.test.mjs"            # frontend unit tests (needs Node 18+)
 ```
 
-The suite covers the status contract, refine endpoint, save sanitization, FP16 compaction, the edge-refinement pipeline, end-to-end segmentation with a mocked model, CLI & Quick Action runners, the desktop bridge, frontend DOM/module integrity, icon geometry, and release-archive contents. CI runs the same suite on CPU-only PyTorch for every push and pull request (`.github/workflows/release.yml`).
+Backend tests are split by concern across `tests/test_*.py`; frontend helpers are covered by `tests/*.test.mjs`. The suite exercises the status contract, refine endpoint, save sanitization, FP16 compaction, the edge-refinement pipeline, end-to-end segmentation with a mocked model, CLI & Quick Action runners, the desktop bridge, frontend DOM/module integrity and state helpers, icon geometry, and release-archive contents. CI runs the same suite on CPU-only PyTorch for every push and pull request (`.github/workflows/release.yml`).
 
 ## Development
 
-The project ships a `pyproject.toml` configured for [Ruff](https://docs.astral.sh/ruff/) and [mypy](https://mypy.readthedocs.io/):
+The project ships a `pyproject.toml` configured for [Ruff](https://docs.astral.sh/ruff/) and [mypy](https://mypy.readthedocs.io/), plus a dev-only `package.json` with [ESLint](https://eslint.org/) for the `static/` ES modules:
 
 ```bash
 pip install -e ".[dev]"
 ruff check . && ruff format --check .   # lint
-mypy app.py openbgr                     # type-check
+mypy app.py openbgr scripts             # type-check
+npm ci && npx eslint static             # frontend lint (Node 18+)
 ```
 
 ## Project Layout
 
 ```text
-├── app.py                  # Entrypoint (CLI / Quick Action / desktop launcher & re-exports)
+├── app.py                  # Entrypoint (CLI / Quick Action / desktop launcher)
 ├── openbgr/
 │   ├── config.py           # Runtime paths, hardware auto-detection & model tier registry
 │   ├── models.py           # Thread-safe ModelManager, HF cache inspection & FP16 compaction
 │   ├── pipeline.py         # Defringe, color-spill suppression, RGBA composition & segmentation
-│   ├── quick_action.py     # OS Quick Action config, native dialogs, notifications & CLI runner
-│   ├── desktop.py          # Native pywebview bridge (DesktopApi), window state & Cocoa menus
+│   ├── icon_render.py      # Shared macOS squircle icon renderer (Pillow-only)
+│   ├── quick_action.py     # Quick Action / headless CLI runner & cutout encoding
+│   ├── quick_action_config.py # Persisted Quick Action settings & OS integration install
+│   ├── quick_action_native.py # Native clipboard, dialogs & notification dispatch
+│   ├── desktop_bridge.py   # JS↔Python bridge (DesktopApi) & pending open-files queue
+│   ├── desktop_window.py   # Window geometry persistence & chromeless browser fallback
+│   ├── desktop_menus.py    # Native menu bar (macOS / Linux GTK)
+│   ├── desktop_cocoa.py    # macOS-only: app name, NSMenu/appearance & 'odoc' handlers
+│   ├── server_probe.py     # Local-server probes & single-instance file forwarding
 │   └── api.py              # FastAPI application and HTTP endpoints
-├── icon_render.py          # Shared macOS squircle icon renderer
 ├── pyproject.toml          # Project metadata, ruff & mypy configuration
 ├── docs/
 │   └── screenshot.png      # README hero image
@@ -189,13 +197,21 @@ mypy app.py openbgr                     # type-check
 │   ├── tabs.js             # Tab bar, ingestion & segmentation lifecycle
 │   └── app.js              # Event wiring, menus & native bridge
 ├── scripts/
-│   ├── build_release.py    # Builds .dmg / .zip / .tar.gz into dist/
+│   ├── build_release.py    # Builds .dmg / OpenBGR-Setup.exe / .zip / .tar.gz into dist/
+│   ├── OpenBGR.iss         # Thin Inno Setup 6 definition for OpenBGR-Setup.exe
+│   ├── OpenBGR.cs          # C# first-run bootstrapper compiled into OpenBGR.exe
 │   ├── make_dev_bundle.py  # Generates the venv-local OpenBGR.app for dev runs
 │   ├── context_process.sh  # Headless cutout helper (server fast-path > --cli fallback)
 │   ├── install_macos_quick_action.py      # Finder "Remove Background" Quick Action
 │   ├── install_windows_context_menu.bat   # Explorer right-click entries (HKCU)
 │   ├── uninstall_windows_context_menu.bat
 │   └── install_linux_integration.sh       # .desktop / KDE / Nautilus entries
+├── tests/
+│   ├── test_api.py             # HTTP endpoint contracts & pending-file queueing
+│   ├── test_pipeline.py        # Icon render, edge refinement, FP16 compaction, segmentation
+│   ├── test_quick_action.py    # Quick Action config, dialogs, runner & notifier bundle
+│   ├── test_repo_integrity.py  # Version/dependency sync, release payloads & DOM integrity
+│   └── state.test.mjs          # Frontend state helpers (node:test)
 ├── Start Mac.command       # macOS Finder launcher
 ├── start.sh                # macOS / Linux bootstrapper
 ├── start.bat               # Windows bootstrapper
@@ -210,7 +226,7 @@ To build desktop release bundles locally into `dist/`:
 python3 scripts/build_release.py
 ```
 
-Pushing a version tag (e.g. `git tag v0.11.0 && git push origin v0.11.0`) triggers `.github/workflows/release.yml` to build and attach `OpenBGR-macOS.dmg`, `OpenBGR-Windows.zip`, and `OpenBGR-Linux.tar.gz` to a GitHub Release automatically.
+Pushing a version tag (e.g. `git tag v0.11.1 && git push origin v0.11.1`) triggers `.github/workflows/release.yml` to build and attach `OpenBGR-macOS.dmg`, `OpenBGR-Setup.exe`, `OpenBGR-Windows.zip`, `OpenBGR-Linux.tar.gz`, and `SHA256SUMS.txt` to a GitHub Release automatically.
 
 ## Troubleshooting
 

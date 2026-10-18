@@ -8,7 +8,6 @@ from __future__ import annotations
 import gc
 import importlib
 import os
-import sys
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -109,9 +108,10 @@ JOB_PROGRESS: dict[str, Any] = {
     "model_key": None,
     "downloaded_bytes": 0,
     "total_bytes": 0,
-    # Private: model key of the download currently holding
+    # Private: model key and cancel epoch of the download currently holding
     # `_MODEL_DOWNLOAD_LOCK`, consumed by /api/progress (popped before return).
     "_dl_key": None,
+    "_dl_epoch": None,
 }
 
 _VALID_PHASES = {"idle", "download", "load", "inference"}
@@ -182,6 +182,7 @@ class _JobDownloadTqdm(_TqdmAuto):
     _track_bytes = True
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
+        """Seeds `JOB_PROGRESS` byte counters from the bar's declared totals."""
         # Capture before super(): tqdm short-circuits `__init__` when
         # `disable=True` and never sets `self.total`/`self.initial`.
         initial = kwargs.get("initial", 0) or 0
@@ -197,6 +198,13 @@ class _JobDownloadTqdm(_TqdmAuto):
                 JOB_PROGRESS["downloaded_bytes"] += int(initial)
 
     def update(self, n: Any = 1) -> Any:
+        """Mirrors each byte increment into `JOB_PROGRESS["downloaded_bytes"]`."""
+        # Cooperative cancel: hf_hub's download loop calls update() per chunk,
+        # which is the only place an in-flight download can be aborted.
+        with JOB_PROGRESS_LOCK:
+            dl_epoch = JOB_PROGRESS["_dl_epoch"]
+        if dl_epoch is not None and dl_epoch < MANAGER.cancel_epoch:
+            raise InterruptedError("Model download was cancelled by the user.")
         if not self._track_bytes:
             return super().update(n)
         try:
@@ -218,30 +226,26 @@ class _JobOuterBarTqdm(_JobDownloadTqdm):
     _track_bytes = False
 
 
-def _resolve_snapshot_download() -> Any:
-    """Returns `snapshot_download`, honoring any test patch on `app`."""
-    app_mod = sys.modules.get("app")
-    if app_mod is not None and hasattr(app_mod, "snapshot_download"):
-        return app_mod.snapshot_download
-    return snapshot_download
-
-
 @contextmanager
-def track_model_download(repo_id: str, model_key: str | None = None) -> Iterator[type]:
+def track_model_download(model_key: str | None = None) -> Iterator[type]:
     """
     Sets the `download` job phase and yields a tqdm class (for callers that
     pass `tqdm_class`, e.g. `snapshot_download`'s outer bar). Per-file
     progress is captured by temporarily swapping the class inside
     `huggingface_hub.utils.tqdm`, since `tqdm_class` alone only reaches the outer
     "Fetching N files" bar, not individual downloads.
+
+    The cancel epoch is snapshotted on entry; if `request_cancel()` fires
+    while the download is active, the patched tqdm bars raise
+    `InterruptedError` mid-transfer.
     """
-    del repo_id  # kept in the signature for call-site clarity
     # Serialize: a second tracked download waits for the current one so the
     # shared tqdm patch and JOB_PROGRESS bytes never interleave.
     _MODEL_DOWNLOAD_LOCK.acquire()
     try:
         with JOB_PROGRESS_LOCK:
             JOB_PROGRESS["_dl_key"] = model_key
+            JOB_PROGRESS["_dl_epoch"] = MANAGER.cancel_epoch
         set_job_phase("download", model_key)
         with JOB_PROGRESS_LOCK:
             JOB_PROGRESS["downloaded_bytes"] = 0
@@ -257,6 +261,7 @@ def track_model_download(repo_id: str, model_key: str | None = None) -> Iterator
             _HF_TQDM_MODULE.tqdm = original_tqdm  # type: ignore[attr-defined]
             with JOB_PROGRESS_LOCK:
                 JOB_PROGRESS["_dl_key"] = None
+                JOB_PROGRESS["_dl_epoch"] = None
     finally:
         _MODEL_DOWNLOAD_LOCK.release()
 
@@ -289,14 +294,6 @@ def refresh_expected_sizes() -> None:
                 _EXPECTED_BYTES_LIVE[repo_id] = total
 
 
-def _resolve_cache_lookup() -> Any:
-    """Returns `try_to_load_from_cache`, honoring any test patch on `app`."""
-    app_mod = sys.modules.get("app")
-    if app_mod is not None and hasattr(app_mod, "try_to_load_from_cache"):
-        return app_mod.try_to_load_from_cache
-    return try_to_load_from_cache
-
-
 def compact_model_cache_fp16(repo_id: str) -> int:
     """
     Compacts any FP32 `model.safetensors` checkpoint in the local HF cache (such as
@@ -307,8 +304,7 @@ def compact_model_cache_fp16(repo_id: str) -> int:
         from safetensors import safe_open
         from safetensors.torch import load_file, save_file
 
-        lookup = _resolve_cache_lookup()
-        cached_path = lookup(repo_id, "model.safetensors")
+        cached_path = try_to_load_from_cache(repo_id, "model.safetensors")
         if not isinstance(cached_path, str) or not os.path.exists(cached_path):
             return 0
         blob_path = Path(os.path.realpath(cached_path))
@@ -316,7 +312,6 @@ def compact_model_cache_fp16(repo_id: str) -> int:
             return 0
 
         needs_fp16 = False
-        metadata: dict[str, str] = {}
         with safe_open(str(blob_path), framework="pt", device="cpu") as f:
             metadata = f.metadata() or {}
             for k in list(f.keys())[:8]:
@@ -358,8 +353,7 @@ def is_model_cached_locally(repo_id: str) -> bool:
     already present in the local disk cache without making any network requests.
     """
     try:
-        lookup = _resolve_cache_lookup()
-        cached_path = lookup(repo_id, "model.safetensors")
+        cached_path = try_to_load_from_cache(repo_id, "model.safetensors")
         return isinstance(cached_path, str) and os.path.exists(cached_path)
     except Exception:
         return False
@@ -409,14 +403,24 @@ class ModelManager:
         elif DEVICE.type == "cuda":
             torch.cuda.empty_cache()
 
-    def unload(self) -> None:
-        """Explicitly unloads the active model and flushes device memory."""
-        with self._lock:
+    def unload(self, *, wait: bool = True) -> bool:
+        """
+        Explicitly unloads the active model and flushes device memory.
+        With `wait=False`, returns False immediately when a load (which holds
+        the model lock for the whole download) or another unload is in
+        progress, instead of blocking behind it.
+        """
+        if not self._lock.acquire(blocking=wait):
+            return False
+        try:
             if self.model is not None:
                 del self.model
                 self.model = None
                 self.active_model_key = None
             self.flush_device_memory()
+        finally:
+            self._lock.release()
+        return True
 
     def get_or_load(self, model_key: str) -> torch.nn.Module:
         """
@@ -465,9 +469,13 @@ class ModelManager:
                         "Downloading weights from Hugging Face Hub (one-time)...",
                         repo_id,
                     )
-                    with track_model_download(repo_id, model_key) as dl_tqdm:
+                    with track_model_download(model_key) as dl_tqdm:
                         try:
-                            _resolve_snapshot_download()(repo_id=repo_id, tqdm_class=dl_tqdm)
+                            snapshot_download(repo_id=repo_id, tqdm_class=dl_tqdm)
+                        except InterruptedError:
+                            # User cancellation must not silently retry via the
+                            # transformers downloader.
+                            raise
                         except Exception:
                             # Fall back to transformers' own downloader (no byte
                             # progress) so unusual repo layouts still work.

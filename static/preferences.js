@@ -20,8 +20,6 @@ import {
   formatDiskBytes,
 } from "./state.js";
 
-export { formatDiskBytes };
-
 const PREFS_SECTION_MAP = {
   preferences: "settings-preferences",
   appearance: "settings-preferences",
@@ -266,7 +264,7 @@ export async function uninstallModel(target) {
 }
 
 /** Downloads + compacts a checkpoint via `/api/models/install` and refreshes indicators/status. */
-export async function installModel(target) {
+async function installModel(target) {
   if (state.isProcessing || installingModelKey) {
     setError("Another model operation is already in progress.");
     return;
@@ -435,7 +433,7 @@ export async function syncQuickActionConfigToServer() {
 }
 
 /** Updates the Quick Action system-integration status text and install/uninstall button. */
-export function updateQuickActionInstallStatus() {
+function updateQuickActionInstallStatus() {
   const qa = state.serverStatus?.quick_action;
   const installed = Boolean(qa?.installed);
   if (dom.btnQaInstallToggle) {

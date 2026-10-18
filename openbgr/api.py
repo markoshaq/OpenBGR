@@ -8,7 +8,6 @@ import asyncio
 import io
 import platform
 import shutil
-import sys
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -21,7 +20,7 @@ from huggingface_hub import snapshot_download
 from huggingface_hub.constants import HF_HUB_CACHE
 from PIL import Image
 
-from . import desktop
+from . import desktop_bridge as desktop
 from .config import (
     APP_CONFIG_DIR,
     APP_VERSION,
@@ -56,26 +55,17 @@ from .models import (
     track_model_download,
 )
 from .pipeline import (
-    _LAST_JOB,
-    _LAST_JOB_LOCK,
     compose_rgba,
+    get_last_job,
     segment_foreground,
 )
-from .quick_action import (
+from .quick_action import run_quick_action
+from .quick_action_config import (
     is_quick_action_installed,
     load_quick_action_config,
-    run_quick_action,
     save_quick_action_config,
     set_quick_action_installed,
 )
-
-
-def _resolve_app_symbol(name: str, fallback: Any) -> Any:
-    """Honors `unittest.mock.patch.object(app, name, ...)` when called via `app`."""
-    app_mod = sys.modules.get("app")
-    if app_mod is not None and hasattr(app_mod, name):
-        return getattr(app_mod, name)
-    return fallback
 
 
 @asynccontextmanager
@@ -104,6 +94,15 @@ app = FastAPI(
     description="Self-hosted, zero-telemetry dichotomous image segmentation powered by BiRefNet",
     lifespan=lifespan,
 )
+
+
+def _quick_action_status(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Builds the Quick Action status payload: persisted config + install/platform state."""
+    return {
+        **(load_quick_action_config() if config is None else config),
+        "installed": is_quick_action_installed(),
+        "platform": platform.system(),
+    }
 
 
 @app.post("/api/cancel")
@@ -162,25 +161,14 @@ def api_status() -> dict[str, Any]:
         "total_disk_bytes": total_disk_bytes,
         "cache_dir": cache_display,
         "tiers": tiers_status,
-        "matting": tiers_status["matting"],
-        "open_files_received": desktop.get_open_files_received(),
-        "open_files_pending": len(desktop._PENDING_OPEN_FILES),
-        "quick_action": {
-            **load_quick_action_config(),
-            "installed": is_quick_action_installed(),
-            "platform": platform.system(),
-        },
+        "quick_action": _quick_action_status(),
     }
 
 
 @app.get("/api/quick-action-config")
 def api_get_quick_action_config() -> dict[str, Any]:
     """Returns the persisted Quick Action / context-menu configuration and install status."""
-    return {
-        **load_quick_action_config(),
-        "installed": is_quick_action_installed(),
-        "platform": platform.system(),
-    }
+    return _quick_action_status()
 
 
 @app.post("/api/quick-action-config")
@@ -208,11 +196,7 @@ async def api_save_quick_action_config(
     if notify is not None:
         updates["notify"] = notify
     saved = save_quick_action_config({**current, **updates})
-    return {
-        **saved,
-        "installed": is_quick_action_installed(),
-        "platform": platform.system(),
-    }
+    return _quick_action_status(saved)
 
 
 @app.post("/api/quick-action-install")
@@ -224,19 +208,14 @@ def api_quick_action_install(action: str = Form("install")) -> dict[str, Any]:
         "false",
         "0",
     )
-    install_fn = _resolve_app_symbol("set_quick_action_installed", set_quick_action_installed)
-    ok, detail = install_fn(do_install)
+    ok, detail = set_quick_action_installed(do_install)
     if not ok:
         raise HTTPException(status_code=500, detail=detail)
     return {
         "ok": True,
         "installed": is_quick_action_installed(),
         "detail": detail,
-        "quick_action": {
-            **load_quick_action_config(),
-            "installed": is_quick_action_installed(),
-            "platform": platform.system(),
-        },
+        "quick_action": _quick_action_status(),
     }
 
 
@@ -247,9 +226,7 @@ async def api_run_quick_action(files: list[str] = Form(...)) -> dict[str, Any]:
     already-running server process so the warm GPU/MPS model is reused with
     zero cold-start overhead.
     """
-    qa_fn = _resolve_app_symbol("run_quick_action", run_quick_action)
-    result = await asyncio.to_thread(qa_fn, list(files))
-    return result
+    return await asyncio.to_thread(run_quick_action, list(files))
 
 
 @app.post("/api/open-files")
@@ -261,7 +238,7 @@ def api_open_files(files: list[str] = Form(...)) -> dict[str, Any]:
     desktop.queue_open_files(list(files))
     return {
         "ok": True,
-        "pending": len(desktop._PENDING_OPEN_FILES),
+        "pending": desktop.get_pending_open_files_count(),
         "received": desktop.get_open_files_received(),
     }
 
@@ -269,15 +246,14 @@ def api_open_files(files: list[str] = Form(...)) -> dict[str, Any]:
 @app.post("/api/pending-files")
 def api_take_pending_files() -> dict[str, Any]:
     """Drains OS-delivered open-file requests over HTTP (for browser/reused-server mode)."""
-    return desktop.DesktopApi().take_pending_files()
+    return desktop.take_pending_files()
 
 
 @app.post("/api/open-cache-dir")
 def api_open_cache_dir() -> dict[str, Any]:
     """Opens the Hugging Face Hub model cache directory in the system file manager."""
     cache_path = Path(HF_HUB_CACHE)
-    open_fn = _resolve_app_symbol("open_folder_in_file_manager", open_folder_in_file_manager)
-    opened = open_fn(cache_path)
+    opened = open_folder_in_file_manager(cache_path)
     if not opened:
         raise HTTPException(
             status_code=500,
@@ -289,15 +265,13 @@ def api_open_cache_dir() -> dict[str, Any]:
 @app.post("/api/open-logs-dir")
 def api_open_logs_dir() -> dict[str, Any]:
     """Opens `~/.openbgr/` (containing `openbgr.log`) in the system file manager."""
-    logs_dir: Path = _resolve_app_symbol("APP_CONFIG_DIR", APP_CONFIG_DIR)
-    open_fn = _resolve_app_symbol("open_folder_in_file_manager", open_folder_in_file_manager)
-    opened = open_fn(logs_dir)
+    opened = open_folder_in_file_manager(APP_CONFIG_DIR)
     if not opened:
         raise HTTPException(
             status_code=500,
             detail="Could not open the logs folder in file manager.",
         )
-    return {"ok": True, "path": str(logs_dir)}
+    return {"ok": True, "path": str(APP_CONFIG_DIR)}
 
 
 @app.post("/api/models/uninstall")
@@ -332,10 +306,15 @@ def api_uninstall_model(target: str = Form(...)) -> dict[str, Any]:
     # Unload BEFORE taking the download lock: unload() acquires the manager's
     # model lock internally, and a load in progress holds that lock while it
     # acquires the download lock, so nesting the load lock inside the download
-    # lock here would deadlock.
+    # lock here would deadlock. wait=False converts the check→unload race (a
+    # job starting in the gap) into a prompt 409 instead of blocking the
+    # request for a whole first-run download.
     for m_key in model_keys:
-        if MANAGER.active_model_key == m_key:
-            MANAGER.unload()
+        if MANAGER.active_model_key == m_key and not MANAGER.unload(wait=False):
+            raise HTTPException(
+                status_code=409,
+                detail="A model is still downloading or loading. Wait for it to finish before uninstalling.",
+            )
 
     # Hold both locks for the whole deletion so a download or job cannot
     # start between the fast-fail checks above and the rmtree calls below.
@@ -400,18 +379,19 @@ async def api_install_model(target: str = Form(...)) -> dict[str, Any]:
         )
 
     repo_id = MODELS[norm]
-    dl_fn = _resolve_app_symbol("snapshot_download", snapshot_download)
-    compact_fn = _resolve_app_symbol("compact_model_cache_fp16", compact_model_cache_fp16)
 
     def _download() -> None:
         """Blocking download + FP16 compaction, run in a worker thread."""
-        with track_model_download(repo_id, norm) as dl_tqdm:
-            dl_fn(repo_id=repo_id, tqdm_class=dl_tqdm)
+        with track_model_download(norm) as dl_tqdm:
+            snapshot_download(repo_id=repo_id, tqdm_class=dl_tqdm)
         set_job_phase("load", norm)
-        compact_fn(repo_id)
+        compact_model_cache_fp16(repo_id)
 
     try:
         await asyncio.to_thread(_download)
+    except InterruptedError as exc:
+        set_job_phase("idle")
+        raise HTTPException(status_code=499, detail=str(exc)) from exc
     except Exception as exc:
         set_job_phase("idle")
         logger.exception("[API] Failed to download %s.", repo_id)
@@ -434,6 +414,7 @@ def api_job_progress() -> dict[str, Any]:
     with JOB_PROGRESS_LOCK:
         snap = dict(JOB_PROGRESS)
         dl_key = snap.pop("_dl_key", None)
+        snap.pop("_dl_epoch", None)
     # The download phase is a fact (the serialization lock is held), not a
     # label: a concurrent load/idle/inference phase write from another
     # operation must not hide an active download's progress.
@@ -508,11 +489,10 @@ async def api_remove_bg(
     finally:
         del raw_bytes
 
-    seg_fn = _resolve_app_symbol("segment_foreground", segment_foreground)
     result_img: Image.Image | None = None
     try:
         result_img, elapsed_ms, tier_cfg, job_id = await asyncio.to_thread(
-            seg_fn,
+            segment_foreground,
             pil_img,
             tier,
             defringe,
@@ -529,6 +509,8 @@ async def api_remove_bg(
         set_job_phase("idle")
         pil_img.close()
 
+    # All except paths above raise, so reaching here means the job succeeded.
+    assert result_img is not None
     output_buffer = io.BytesIO()
     try:
         result_img.save(output_buffer, format="PNG", compress_level=1)
@@ -584,10 +566,9 @@ async def api_refine(
     """
 
     def _render() -> tuple[bytes, int, int]:
-        """Re-composes the cached job's RGBA under a lock; raises LookupError if stale."""
-        with _LAST_JOB_LOCK:
-            job = dict(_LAST_JOB)
-        if job.get("id") != job_id:
+        """Re-composes the cached job's RGBA; raises LookupError if stale."""
+        job = get_last_job(job_id)
+        if job is None:
             raise LookupError
         result_img = compose_rgba(job["rgb"], job["alpha"], defringe, despill)
         buf = io.BytesIO()

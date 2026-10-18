@@ -43,7 +43,7 @@ fi
 if [ ! -f "$USER_ICON" ]; then
   for PY in "$ROOT/.venv/bin/python" "$HOME/.openbgr/venv/bin/python" python3; do
     if command -v "$PY" >/dev/null 2>&1; then
-      "$PY" -c "import sys; sys.path.insert(0, '$ROOT'); import icon_render; icon_render.render_icon(512).save('$USER_ICON', 'PNG')" 2>/dev/null && break
+      "$PY" -c "import sys; sys.path.insert(0, '$ROOT'); from openbgr import icon_render; icon_render.render_icon(512).save('$USER_ICON', 'PNG')" 2>/dev/null && break
     fi
   done
 fi

@@ -24,7 +24,7 @@ import {
  * threshold, composites onto `backdrop` when opaque output is needed, and
  * encodes to `format` ("png" | "webp" | "jpg" | "mask").
  */
-export async function renderExportBlob(source, srcW, srcH, opts) {
+async function renderExportBlob(source, srcW, srcH, opts) {
   const { format, targetW, targetH, shadowCutoff, backdrop } = opts;
 
   const canvas = document.createElement("canvas");
@@ -124,7 +124,7 @@ function canvasToBlob(canvas, mimeType, quality) {
 }
 
 /** Builds the final export blob for the active image using live export settings. */
-export async function buildExportBlob(format) {
+async function buildExportBlob(format) {
   const srcW = state.naturalWidth || masterCutoutImg.naturalWidth;
   const srcH = state.naturalHeight || masterCutoutImg.naturalHeight;
   const targetW = Math.max(1, state.exportWidth || srcW);
@@ -409,14 +409,19 @@ export function applyScaleValue(newScale) {
   updateExportTelemetry();
 }
 
+/** POSTs one exported blob to `/api/save` inside `dir`; returns the raw Response. */
+async function postSaveFile(dir, filename, blob) {
+  const fd = new FormData();
+  fd.append("directory", dir);
+  fd.append("filename", filename);
+  fd.append("file", blob, filename);
+  return fetch("/api/save", { method: "POST", body: fd });
+}
+
 /** Writes one exported batch file to the batch's output directory (or downloads it). */
 export async function saveBatchFile(dir, filename, blob) {
   try {
-    const fd = new FormData();
-    fd.append("directory", dir);
-    fd.append("filename", filename);
-    fd.append("file", blob, filename);
-    const res = await fetch("/api/save", { method: "POST", body: fd });
+    const res = await postSaveFile(dir, filename, blob);
     return res.ok;
   } catch (_) {
     return false;
@@ -448,11 +453,7 @@ export async function exportActiveImage() {
     const fileName = `${baseName}-${suffix}${sizeTag}.${ext}`;
 
     if (state.outputDir && window.pywebview?.api?.choose_output_dir) {
-      const fd = new FormData();
-      fd.append("directory", state.outputDir);
-      fd.append("filename", fileName);
-      fd.append("file", exportBlob, fileName);
-      const res = await fetch("/api/save", { method: "POST", body: fd });
+      const res = await postSaveFile(state.outputDir, fileName, exportBlob);
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(

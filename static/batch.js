@@ -83,7 +83,7 @@ export async function pickImageFiles(cb) {
 }
 
 /** Creates a batch tab from a file list and switches to it. */
-export function createBatchTab(files) {
+function createBatchTab(files) {
   const list = Array.from(files || []).filter(Boolean);
   if (!list.length) return;
   saveStateToActiveTab();
@@ -120,8 +120,12 @@ export function addFilesToBatchTab(tab, files) {
   renderTabBar();
 }
 
-/** Formats a byte count for batch row file-size labels. */
-function formatBytes(n) {
+/**
+ * Formats a byte count for batch row file-size labels. Unlike the shared
+ * `formatDiskBytes` (disk/model sizes, MB-floored), this keeps B/KB units for
+ * small uploads and renders an empty size as "--".
+ */
+function formatFileSize(n) {
   if (!n) return "--";
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
@@ -186,7 +190,7 @@ export function renderBatchPanel(tab) {
     name.title = entry.name;
     const size = document.createElement("span");
     size.className = "batch-row-size";
-    size.textContent = formatBytes(entry.size);
+    size.textContent = formatFileSize(entry.size);
     const st = document.createElement("span");
     st.className = `batch-row-status st-${entry.status}`;
     st.textContent = entry.status.toUpperCase();
@@ -235,7 +239,7 @@ function updateBatchRowStatus(tab, i) {
 }
 
 /** Converts a single-image tab into a batch tab seeded with its image. */
-export function convertTabToBatch(tab) {
+function convertTabToBatch(tab) {
   const entries = [];
   if (tab.kind === "batch") {
     entries.push(...tab.batchFiles);
@@ -413,6 +417,64 @@ export function hideTabContextMenu() {
   if (dom.tabContextMenu) dom.tabContextMenu.style.display = "none";
 }
 
+/**
+ * Runs inference + export for one batch entry: POSTs the image, exports the
+ * cutout in the snapshotted settings, then either saves it to `outputDir` or
+ * buffers it for the final ZIP download. Returns "done", "failed", or
+ * "cancelled"; throws AbortError/network errors to the caller's catch.
+ */
+async function processBatchEntry(batch, entry, snap, outputDir, controller) {
+  const fd = new FormData();
+  fd.append("file", entry.file);
+  fd.append("tier", snap.tier);
+  fd.append("defringe", snap.defringe ? "true" : "false");
+  fd.append("despill", snap.despill ? "true" : "false");
+
+  const response = await fetch("/api/remove-bg", {
+    method: "POST",
+    body: fd,
+    signal: controller.signal,
+  });
+  if (!response.ok) {
+    let detail = `HTTP ${response.status}`;
+    try {
+      const payload = await response.json();
+      if (payload?.detail) detail = payload.detail;
+    } catch (_) {}
+    throw new Error(detail);
+  }
+
+  const inferenceMs = parseFloat(
+    response.headers.get("X-Inference-Time-Ms") || "0"
+  );
+  if (inferenceMs > 0) {
+    prefs.inferEstimates = prefs.inferEstimates || {};
+    prefs.inferEstimates[snap.tier] = inferenceMs;
+    savePrefs();
+  }
+
+  const blob = await response.blob();
+  if (batch.cancelled || controller.signal.aborted) return "cancelled";
+
+  const outBlob = await buildBatchExportBlob(blob, snap);
+  const ext = FORMAT_EXT[snap.format] || "png";
+  const stem = (entry.name || "image").replace(/\.[^.]+$/, "") || "image";
+  const suffix = snap.format === "mask" ? "mask" : "cutout";
+  let outName = `${stem}-${suffix}.${ext}`;
+
+  if (outputDir) {
+    const ok = await saveBatchFile(outputDir, outName, outBlob);
+    return ok ? "done" : "failed";
+  }
+  const taken = new Set(batch.results.map((r) => r.name));
+  let n = 1;
+  while (taken.has(outName)) {
+    outName = `${stem}-${suffix}-${n++}.${ext}`;
+  }
+  batch.results.push({ name: outName, blob: outBlob });
+  return "done";
+}
+
 /** Runs the segmentation pipeline sequentially over a batch tab's queue. */
 export async function runBatch(tab) {
   const batch = state.batch;
@@ -499,66 +561,21 @@ export async function runBatch(tab) {
     if (tab.id === state.activeTabId) dom.statTime.textContent = label;
 
     try {
-      const fd = new FormData();
-      fd.append("file", entry.file);
-      fd.append("tier", snap.tier);
-      fd.append("defringe", snap.defringe ? "true" : "false");
-      fd.append("despill", snap.despill ? "true" : "false");
-
-      const response = await fetch("/api/remove-bg", {
-        method: "POST",
-        body: fd,
-        signal: controller.signal,
-      });
-      if (!response.ok) {
-        let detail = `HTTP ${response.status}`;
-        try {
-          const payload = await response.json();
-          if (payload?.detail) detail = payload.detail;
-        } catch (_) {}
-        throw new Error(detail);
-      }
-
-      const inferenceMs = parseFloat(
-        response.headers.get("X-Inference-Time-Ms") || "0"
+      const outcome = await processBatchEntry(
+        batch,
+        entry,
+        snap,
+        outputDir,
+        controller
       );
-      if (inferenceMs > 0) {
-        prefs.inferEstimates = prefs.inferEstimates || {};
-        prefs.inferEstimates[snap.tier] = inferenceMs;
-        savePrefs();
-      }
-
-      const blob = await response.blob();
-      if (batch.cancelled || controller.signal.aborted) {
+      if (outcome === "cancelled") {
         entry.status = "queued";
         updateBatchRowStatus(tab, i);
         break;
       }
-
-      const outBlob = await buildBatchExportBlob(blob, snap);
-      const ext = FORMAT_EXT[snap.format] || "png";
-      const stem = (entry.name || "image").replace(/\.[^.]+$/, "") || "image";
-      const suffix = snap.format === "mask" ? "mask" : "cutout";
-      let outName = `${stem}-${suffix}.${ext}`;
-
-      if (outputDir) {
-        const ok = await saveBatchFile(outputDir, outName, outBlob);
-        if (!ok) {
-          entry.status = "failed";
-          batch.failed++;
-          updateBatchRowStatus(tab, i);
-          continue;
-        }
-      } else {
-        const taken = new Set(batch.results.map((r) => r.name));
-        let n = 1;
-        while (taken.has(outName)) {
-          outName = `${stem}-${suffix}-${n++}.${ext}`;
-        }
-        batch.results.push({ name: outName, blob: outBlob });
-      }
-      entry.status = "done";
-      completed++;
+      entry.status = outcome;
+      if (outcome === "done") completed++;
+      else batch.failed++;
       updateBatchRowStatus(tab, i);
     } catch (err) {
       if (err?.name === "AbortError" || batch.cancelled) {

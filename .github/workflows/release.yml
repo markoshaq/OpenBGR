@@ -3,10 +3,6 @@ name: Build & Publish Desktop Releases
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-    tags:
-      - "v*"
   pull_request:
 
 permissions:
@@ -26,16 +22,27 @@ jobs:
           python-version: "3.12"
       - name: Install dependencies (CPU-only PyTorch keeps CI fast)
         run: |
+          grep -Ev '^[[:space:]]*torch' requirements.txt > "$RUNNER_TEMP/requirements-runtime.txt"
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip install -r requirements.txt
-          pip install "ruff>=0.8.0,<1.0.0" "mypy>=1.13.0,<2.0.0"
+          pip install -r "$RUNNER_TEMP/requirements-runtime.txt"
+          pip install "ruff>=0.8.0,<1.0.0" "mypy>=1.13.0,<2.0.0" "httpx>=0.27.0,<1.0.0"
       - name: Lint & type-check
         run: |
           ruff check .
           ruff format --check .
-          mypy app.py openbgr
+          mypy app.py openbgr scripts
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Lint frontend modules
+        run: |
+          npm ci
+          npx eslint static
       - name: Run test suite
-        run: python -m unittest discover -s tests -v
+        run: |
+          python -m unittest discover -s tests -v
+          node --test "tests/*.test.mjs"
 
   build-macos:
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
@@ -50,7 +57,7 @@ jobs:
         run: pip install pillow
       - name: Build OpenBGR-macOS.dmg
         run: |
-          python -m py_compile app.py icon_render.py openbgr/__init__.py openbgr/config.py openbgr/models.py openbgr/pipeline.py openbgr/quick_action.py openbgr/desktop.py openbgr/api.py scripts/build_release.py scripts/make_dev_bundle.py scripts/install_macos_quick_action.py
+          python -m compileall -q app.py openbgr scripts
           bash -n start.sh "Start Mac.command" scripts/context_process.sh scripts/install_linux_integration.sh
           python scripts/build_release.py
       - uses: actions/upload-artifact@v4
@@ -69,14 +76,38 @@ jobs:
           python-version: "3.12"
       - name: Install Pillow for icon generation
         run: pip install pillow
-      - name: Build OpenBGR-Windows.zip (with OpenBGR.exe)
+      - name: Install Inno Setup 6 (usually preinstalled on windows-latest)
+        shell: pwsh
+        run: choco install innosetup --version=6.7.1 --no-progress -y
+      - name: Build OpenBGR-Setup.exe + OpenBGR-Windows.zip
         run: |
-          python -m py_compile app.py icon_render.py openbgr/__init__.py openbgr/config.py openbgr/models.py openbgr/pipeline.py openbgr/quick_action.py openbgr/desktop.py openbgr/api.py scripts/build_release.py
+          python -m compileall -q app.py openbgr scripts
           python scripts/build_release.py
+      - name: Smoke-test Windows installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $appDir = Join-Path $env:LOCALAPPDATA "OpenBGR"
+          $installer = "dist\OpenBGR-Setup.exe"
+          if (!(Test-Path $installer)) { throw "Installer was not produced: $installer" }
+          if (Test-Path $appDir) { Remove-Item $appDir -Recurse -Force }
+
+          $setup = Start-Process -FilePath (Resolve-Path $installer).Path -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -Wait -PassThru
+          if ($setup.ExitCode -ne 0) { throw "Installer failed with exit code $($setup.ExitCode)" }
+          foreach ($f in @("OpenBGR.exe", "app.py", "OpenBGR.ico", "start.bat")) {
+            if (!(Test-Path (Join-Path $appDir $f))) { throw "Installer did not deploy $f" }
+          }
+
+          $uninstaller = Get-ChildItem $appDir -Filter "unins*.exe" | Select-Object -First 1
+          if (!$uninstaller) { throw "Uninstaller missing in $appDir" }
+          $un = Start-Process -FilePath $uninstaller.FullName -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -Wait -PassThru
+          if ($un.ExitCode -ne 0) { throw "Uninstaller failed with exit code $($un.ExitCode)" }
       - uses: actions/upload-artifact@v4
         with:
-          name: OpenBGR-Windows-zip
-          path: dist/OpenBGR-Windows.zip
+          name: OpenBGR-Windows
+          path: |
+            dist/OpenBGR-Setup.exe
+            dist/OpenBGR-Windows.zip
 
   build-linux:
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
@@ -91,7 +122,7 @@ jobs:
         run: pip install pillow
       - name: Build OpenBGR-Linux.tar.gz
         run: |
-          python -m py_compile app.py icon_render.py openbgr/__init__.py openbgr/config.py openbgr/models.py openbgr/pipeline.py openbgr/quick_action.py openbgr/desktop.py openbgr/api.py scripts/build_release.py
+          python -m compileall -q app.py openbgr scripts
           bash -n start.sh scripts/context_process.sh scripts/install_linux_integration.sh
           python scripts/build_release.py
       - uses: actions/upload-artifact@v4
@@ -108,11 +139,16 @@ jobs:
         with:
           path: release-assets
           merge-multiple: true
+      - name: Generate SHA256 checksums
+        working-directory: release-assets
+        run: sha256sum OpenBGR-* > SHA256SUMS.txt
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             release-assets/OpenBGR-macOS.dmg
+            release-assets/OpenBGR-Setup.exe
             release-assets/OpenBGR-Windows.zip
             release-assets/OpenBGR-Linux.tar.gz
+            release-assets/SHA256SUMS.txt
           generate_release_notes: true

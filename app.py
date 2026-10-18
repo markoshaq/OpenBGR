@@ -1,21 +1,3 @@
-# /// script
-# requires-python = ">=3.10"
-# dependencies = [
-#   "torch>=2.5.0",
-#   "torchvision>=0.20.0",
-#   "transformers>=4.45.0,<5.0.0",
-#   "huggingface-hub>=0.25.0",
-#   "timm>=1.0.0",
-#   "kornia>=0.7.0",
-#   "einops>=0.8.0",
-#   "scipy>=1.14.0",
-#   "pillow>=10.4.0",
-#   "fastapi>=0.115.0",
-#   "uvicorn>=0.30.0",
-#   "python-multipart>=0.0.9",
-#   "pywebview>=5.0",
-# ]
-# ///
 """
 OpenBGR - Local Background Removal Studio
 =========================================
@@ -23,16 +5,9 @@ OpenBGR - Local Background Removal Studio
 A self-hosted FastAPI inference engine for background removal powered by BiRefNet
 (Bilateral Reference Network for High-Resolution Dichotomous Image Segmentation).
 
-The core implementation lives in the `openbgr` package:
-- `openbgr.config`       : Runtime paths, hardware auto-detection, model tier registry.
-- `openbgr.models`       : Thread-safe `ModelManager`, HF cache inspection, FP16 compaction.
-- `openbgr.pipeline`     : Defringe, color-spill suppression, RGBA composition, neural segmentation.
-- `openbgr.quick_action` : OS Quick Action config, native dialogs, notifications, CLI runner.
-- `openbgr.desktop`      : Native `pywebview` bridge (`DesktopApi`), window state, Cocoa menus.
-- `openbgr.api`          : FastAPI application and HTTP endpoints.
-
-This module serves as the CLI / desktop / Uvicorn entrypoint (`python app.py`,
-`uvicorn app:app`) and re-exports the public API for backward compatibility.
+The core implementation lives in the `openbgr` package (see `openbgr/__init__.py`
+for the module map). This file serves as the CLI / desktop / Uvicorn entrypoint
+(`python app.py`, `uvicorn app:app`).
 """
 
 from __future__ import annotations
@@ -45,253 +20,54 @@ import threading
 from typing import Any
 
 import uvicorn
-from huggingface_hub import snapshot_download, try_to_load_from_cache
 
-from openbgr import desktop as _desktop_mod
-from openbgr.api import (
-    api_cancel,
-    api_get_quick_action_config,
-    api_install_model,
-    api_job_progress,
-    api_open_cache_dir,
-    api_open_files,
-    api_open_logs_dir,
-    api_quick_action_install,
-    api_refine,
-    api_remove_bg,
-    api_run_quick_action,
-    api_save,
-    api_save_quick_action_config,
-    api_status,
-    api_take_pending_files,
-    api_uninstall_model,
-    app,
-    lifespan,
-    no_cache_static,
-    serve_favicon,
-    serve_index,
-)
+from openbgr.api import app
 from openbgr.config import (
-    APP_CONFIG_DIR,
-    APP_ICON_PATH,
-    APP_VERSION,
-    BASE_DIR,
-    DEFAULT_QUICK_ACTION_CONFIG,
-    DEVICE,
     DEVICE_LABEL,
-    DTYPE,
-    HOST_RAM_GB,
-    HR_RESOLUTION,
-    IMAGENET_MEAN,
-    IMAGENET_STD,
-    LEGACY_MATTING_REPO,
     LOG_FILE_PATH,
-    MODELS,
-    NOTIFIER_APP_PATH,
-    NOTIFIER_ICNS_PATH,
     PRECISION_LABEL,
-    QUICK_ACTION_CONFIG_PATH,
     RECOMMENDED_TIER,
-    STATIC_DIR,
-    SYSTEM_MEMORY_GB,
-    TIER_ALIASES,
     TIERS,
-    WINDOW_STATE_PATH,
-    _dir_tree_bytes,
-    detect_compute_device,
     ensure_app_icon,
-    format_device_label,
-    get_app_disk_bytes,
-    get_host_ram_gb,
-    get_system_memory_gb,
     logger,
     normalize_tier_key,
-    open_folder_in_file_manager,
-    select_recommended_tier,
 )
-from openbgr.desktop import (
-    _PENDING_OPEN_FILES,
-    _PENDING_OPEN_LOCK,
-    DesktopApi,
-    attach_window_state_persistence,
-    build_native_menus,
+from openbgr.desktop_bridge import DesktopApi, queue_open_files, set_desktop_api
+from openbgr.desktop_cocoa import (
     configure_macos_native_window_and_menus,
-    ensure_window_on_screen,
-    forward_open_files_to_server,
     install_macos_open_documents_handler,
     install_macos_open_files_delegate,
-    is_openbgr_server,
+    set_macos_app_name,
+)
+from openbgr.desktop_menus import build_native_menus
+from openbgr.desktop_window import (
+    attach_window_state_persistence,
+    ensure_window_on_screen,
     load_window_state,
     open_fallback_app_window,
-    queue_open_files,
-    set_desktop_api,
-    set_macos_app_name,
+)
+from openbgr.models import MANAGER
+from openbgr.quick_action import (
+    delegate_quick_action_to_server,
+    run_cli,
+    run_quick_action,
+)
+from openbgr.server_probe import (
+    forward_open_files_to_server,
+    is_openbgr_server,
     wait_for_port_free,
     wait_for_server,
 )
-from openbgr.models import (
-    MANAGER,
-    ModelManager,
-    compact_model_cache_fp16,
-    compute_dynamic_size,
-    get_model_cache_dir,
-    get_model_disk_bytes,
-    get_preprocess_transform,
-    is_model_cached_locally,
-)
-from openbgr.pipeline import (
-    _JOB_ID_SEQ,
-    _LAST_JOB,
-    _LAST_JOB_LOCK,
-    compose_rgba,
-    decontaminate_edge_colors,
-    segment_foreground,
-    suppress_color_spill,
-)
-from openbgr.quick_action import (
-    _choose_output_folder_native,
-    _choose_save_path_native,
-    _default_output_path,
-    _osascript_quote,
-    _powershell_quote,
-    _resolve_cli_output,
-    _with_output_suffix,
-    copy_png_bytes_to_clipboard,
-    cutout_filename_for,
-    delegate_quick_action_to_server,
-    encode_cutout_image,
-    ensure_macos_notifier_app,
-    format_quick_action_notification,
-    is_quick_action_installed,
-    load_quick_action_config,
-    run_cli,
-    run_quick_action,
-    sanitize_quick_action_config,
-    save_quick_action_config,
-    send_openbgr_notification,
-    set_quick_action_installed,
-)
-
-__all__ = [
-    "APP_CONFIG_DIR",
-    "APP_ICON_PATH",
-    "APP_VERSION",
-    "BASE_DIR",
-    "DEFAULT_QUICK_ACTION_CONFIG",
-    "DEVICE",
-    "DEVICE_LABEL",
-    "DTYPE",
-    "DesktopApi",
-    "HOST_RAM_GB",
-    "HR_RESOLUTION",
-    "IMAGENET_MEAN",
-    "IMAGENET_STD",
-    "LEGACY_MATTING_REPO",
-    "MANAGER",
-    "MODELS",
-    "ModelManager",
-    "NOTIFIER_APP_PATH",
-    "NOTIFIER_ICNS_PATH",
-    "PRECISION_LABEL",
-    "QUICK_ACTION_CONFIG_PATH",
-    "RECOMMENDED_TIER",
-    "STATIC_DIR",
-    "SYSTEM_MEMORY_GB",
-    "TIERS",
-    "TIER_ALIASES",
-    "WINDOW_STATE_PATH",
-    "_JOB_ID_SEQ",
-    "_LAST_JOB",
-    "_LAST_JOB_LOCK",
-    "_PENDING_OPEN_FILES",
-    "_PENDING_OPEN_LOCK",
-    "_choose_output_folder_native",
-    "_choose_save_path_native",
-    "_default_output_path",
-    "_dir_tree_bytes",
-    "_osascript_quote",
-    "_powershell_quote",
-    "_resolve_cli_output",
-    "_with_output_suffix",
-    "api_cancel",
-    "api_get_quick_action_config",
-    "api_install_model",
-    "api_job_progress",
-    "api_open_cache_dir",
-    "api_open_files",
-    "api_open_logs_dir",
-    "api_quick_action_install",
-    "api_refine",
-    "api_remove_bg",
-    "api_run_quick_action",
-    "api_save",
-    "api_save_quick_action_config",
-    "api_status",
-    "api_take_pending_files",
-    "api_uninstall_model",
-    "app",
-    "attach_window_state_persistence",
-    "build_native_menus",
-    "compact_model_cache_fp16",
-    "compose_rgba",
-    "compute_dynamic_size",
-    "configure_macos_native_window_and_menus",
-    "copy_png_bytes_to_clipboard",
-    "cutout_filename_for",
-    "decontaminate_edge_colors",
-    "delegate_quick_action_to_server",
-    "detect_compute_device",
-    "encode_cutout_image",
-    "ensure_app_icon",
-    "ensure_macos_notifier_app",
-    "ensure_window_on_screen",
-    "format_device_label",
-    "format_quick_action_notification",
-    "forward_open_files_to_server",
-    "get_app_disk_bytes",
-    "get_host_ram_gb",
-    "get_model_cache_dir",
-    "get_model_disk_bytes",
-    "get_preprocess_transform",
-    "get_system_memory_gb",
-    "install_macos_open_documents_handler",
-    "install_macos_open_files_delegate",
-    "is_model_cached_locally",
-    "is_openbgr_server",
-    "is_quick_action_installed",
-    "lifespan",
-    "load_quick_action_config",
-    "load_window_state",
-    "main",
-    "no_cache_static",
-    "normalize_tier_key",
-    "open_fallback_app_window",
-    "open_folder_in_file_manager",
-    "queue_open_files",
-    "run_cli",
-    "run_quick_action",
-    "sanitize_quick_action_config",
-    "save_quick_action_config",
-    "segment_foreground",
-    "select_recommended_tier",
-    "send_openbgr_notification",
-    "serve_favicon",
-    "serve_index",
-    "set_desktop_api",
-    "set_macos_app_name",
-    "set_quick_action_installed",
-    "snapshot_download",
-    "suppress_color_spill",
-    "try_to_load_from_cache",
-    "wait_for_port_free",
-    "wait_for_server",
-]
 
 
 def _graceful_exit(_signum: int, _frame: Any) -> None:
-    """Immediately aborts active jobs, unloads GPU memory, and exits with zero zombie threads."""
+    """
+    Aborts active jobs and exits immediately. `unload()` is deliberately not
+    called: `get_or_load` holds the model lock across the whole download, so
+    waiting on it here could hang SIGINT for an entire first-run download.
+    `os._exit` lets the OS reclaim device memory instantly.
+    """
     MANAGER.request_cancel()
-    MANAGER.unload()
     os._exit(0)
 
 
@@ -323,7 +99,6 @@ def _start_signal_watchdog() -> None:
                     data = os.read(r_fd, 64)
                     if data and any(b in lethal for b in data):
                         MANAGER.request_cancel()
-                        MANAGER.unload()
                         os._exit(0)
             except Exception:
                 os._exit(0)
@@ -513,7 +288,7 @@ def main(argv: list[str] | None = None) -> None:
 
             webview.settings["SHOW_DEFAULT_MENUS"] = False
             api_bridge = DesktopApi()
-            _desktop_mod.set_desktop_api(api_bridge)
+            set_desktop_api(api_bridge)
             install_macos_open_documents_handler()
             install_macos_open_files_delegate()
             icon_path = ensure_app_icon()
@@ -562,12 +337,13 @@ def main(argv: list[str] | None = None) -> None:
                 start_kwargs["icon"] = icon_path
 
             webview.start(**start_kwargs)
-            # When the native desktop window is closed by the user, release
-            # device memory and terminate the process tree immediately so no
-            # background server or worker threads remain running.
+            # When the native desktop window is closed by the user, terminate
+            # the process tree immediately so no background server or worker
+            # threads remain running. As in _graceful_exit, skip unload():
+            # it can block on a whole first-run model download, and process
+            # teardown reclaims device memory anyway.
             logger.info("[Desktop] Window closed; shutting down.")
             MANAGER.request_cancel()
-            MANAGER.unload()
             os._exit(0)
         except Exception as exc:
             logger.warning("[Desktop] Native window unavailable (%s); opening app window...", exc)

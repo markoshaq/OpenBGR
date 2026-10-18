@@ -25,8 +25,10 @@ CI runs the same suite on CPU-only PyTorch, so you can verify everything locally
 ```bash
 pip install ruff mypy
 ruff check . && ruff format --check .   # lint + format
-mypy app.py openbgr                     # type-check
-python -m unittest discover -s tests -v # test suite
+mypy app.py openbgr scripts  # type-check
+python -m unittest discover -s tests -v # backend test suite
+npm ci && npx eslint static             # frontend lint (Node 18+)
+node --test "tests/*.test.mjs"          # frontend unit tests
 ```
 
 ## Guidelines
@@ -38,4 +40,4 @@ python -m unittest discover -s tests -v # test suite
 
 ## Releases
 
-Maintainer-only: pushing a `v*` tag triggers `.github/workflows/release.yml` to build the `.dmg`, `.zip`, and `.tar.gz` bundles and attach them to a GitHub Release.
+Maintainer-only: pushing a `v*` tag triggers `.github/workflows/release.yml` to build the Windows installer/portable ZIP, macOS DMG, Linux archive, and `SHA256SUMS.txt`, then attach them to a GitHub Release.

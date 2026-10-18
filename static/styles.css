@@ -1599,7 +1599,8 @@ body {
   color: #fca5a5;
   font-family: var(--mono);
   font-size: 11px;
-  padding: 8px 14px;
+  padding: 8px 34px 8px 14px;
+  text-align: left;
   z-index: 40;
   display: none;
   cursor: pointer;
@@ -1610,14 +1611,15 @@ body {
 }
 
 .error-toast.visible {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
+  display: block;
 }
 
 .error-toast::after {
   content: "";
-  flex: none;
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  transform: translateY(-50%);
   width: 15px;
   height: 15px;
   border: 1px solid currentColor;

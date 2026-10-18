@@ -47,27 +47,32 @@ if not exist ".venv" (
 
 if not exist ".venv\.installed" (
     echo [2/2] Installing AI engine dependencies ^(one-time setup^)...
-    where uv >nul 2>nul
+    where nvidia-smi >nul 2>nul
     if !errorlevel! equ 0 (
-        where nvidia-smi >nul 2>nul
+        echo       NVIDIA GPU detected - installing CUDA-accelerated PyTorch...
+        findstr /V /I /B /C:"torch" requirements.txt > ".venv\requirements-runtime.txt"
+        where uv >nul 2>nul
         if !errorlevel! equ 0 (
-            echo       NVIDIA GPU detected - installing CUDA-accelerated PyTorch...
             uv pip install --python ".venv\Scripts\python.exe" torch torchvision --index-url https://download.pytorch.org/whl/cu124
-        )
-        uv pip install --python ".venv\Scripts\python.exe" -r requirements.txt
-    ) else (
-        call ".venv\Scripts\pip.exe" install --upgrade pip -q
-        where nvidia-smi >nul 2>nul
-        if !errorlevel! equ 0 (
-            echo       NVIDIA GPU detected - installing CUDA-accelerated PyTorch...
+            uv pip install --python ".venv\Scripts\python.exe" -r ".venv\requirements-runtime.txt"
+        ) else (
+            call ".venv\Scripts\pip.exe" install --upgrade pip -q
             call ".venv\Scripts\pip.exe" install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+            call ".venv\Scripts\pip.exe" install -r ".venv\requirements-runtime.txt"
         )
-        call ".venv\Scripts\pip.exe" install -r requirements.txt
+    ) else (
+        where uv >nul 2>nul
+        if !errorlevel! equ 0 (
+            uv pip install --python ".venv\Scripts\python.exe" -r requirements.txt
+        ) else (
+            call ".venv\Scripts\pip.exe" install --upgrade pip -q
+            call ".venv\Scripts\pip.exe" install -r requirements.txt
+        )
     )
     type nul > ".venv\.installed"
 )
 
 call ".venv\Scripts\python.exe" app.py %*
 set "RC=%ERRORLEVEL%"
-if !RC! neq 0 if "%~1"=="" pause
+if !RC! neq 0 if "%~1"=="" if not defined OPENBGR_NO_PAUSE pause
 exit /b %RC%

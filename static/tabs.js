@@ -24,6 +24,7 @@ import {
   updateTierDownloadUI,
   clearTierDownloadProgress,
   formatDiskBytes,
+  clearResultState,
 } from "./state.js";
 import { renderStageGeometry, applyZoomTransform } from "./stage.js";
 import {
@@ -69,6 +70,114 @@ export function hideTabGhost() {
   tabGhostEl = null;
 }
 
+/**
+ * Builds one tab-strip element: title, close button, and the
+ * click/close/context/drag handlers that merge, reorder, and move batch items.
+ */
+function buildTabElement(tab) {
+  const isActive = tab.id === state.activeTabId;
+  const tabEl = document.createElement("div");
+  tabEl.className = `tab-item${isActive ? " active" : ""}${tab.kind === "batch" ? " batch-tab" : ""}`;
+  tabEl.setAttribute("data-tab-id", tab.id);
+  tabEl.setAttribute("role", "tab");
+  tabEl.setAttribute("aria-selected", isActive ? "true" : "false");
+  tabEl.title = tab.name;
+  tabEl.draggable = true;
+
+  const titleSpan = document.createElement("span");
+  titleSpan.className = "tab-title";
+  titleSpan.textContent =
+    tab.kind === "batch" ? `BATCH (${tab.batchFiles.length})` : tab.name;
+
+  const closeBtn = document.createElement("button");
+  closeBtn.type = "button";
+  closeBtn.className = "tab-close";
+  closeBtn.title = "Close image tab";
+  closeBtn.setAttribute("aria-label", `Close ${tab.name}`);
+  closeBtn.textContent = "x";
+  closeBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    requestCloseTab(tab.id);
+  });
+
+  tabEl.addEventListener("dragstart", (e) => {
+    state.dragTabId = tab.id;
+    e.dataTransfer.effectAllowed = "move";
+    try {
+      e.dataTransfer.setData("text/plain", tab.id);
+    } catch (_) {}
+  });
+  tabEl.addEventListener("dragend", () => {
+    state.dragTabId = null;
+    dom.tabBar
+      .querySelectorAll(".drop-target")
+      .forEach((el) => el.classList.remove("drop-target"));
+  });
+  tabEl.addEventListener("dragover", (e) => {
+    if (state.dragBatchItem) {
+      if (state.dragBatchItem.tabId === tab.id) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (tab.kind === "batch") {
+        e.dataTransfer.dropEffect = "move";
+        tabEl.classList.add("drop-target");
+        hideTabGhost();
+      } else {
+        e.dataTransfer.dropEffect = "copy";
+        const srcTab = state.tabs.find(
+          (t) => t.id === state.dragBatchItem.tabId
+        );
+        showTabGhost(
+          srcTab?.batchFiles[state.dragBatchItem.index]?.name || "image"
+        );
+      }
+      return;
+    }
+    if (!state.dragTabId || state.dragTabId === tab.id) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = "move";
+    tabEl.classList.add("drop-target");
+  });
+  tabEl.addEventListener("dragleave", () => {
+    tabEl.classList.remove("drop-target");
+  });
+  tabEl.addEventListener("drop", (e) => {
+    if (!state.dragTabId && !state.dragBatchItem) return;
+    e.preventDefault();
+    e.stopPropagation();
+    tabEl.classList.remove("drop-target");
+    hideTabGhost();
+    const item = state.dragBatchItem;
+    if (item) {
+      state.dragBatchItem = null;
+      const src = state.tabs.find((t) => t.id === item.tabId);
+      if (tab.kind === "batch") {
+        moveBatchItemToBatch(item, tab);
+      } else if (src) {
+        extractBatchItemToTab(src, item.index);
+      }
+      return;
+    }
+    const srcId = state.dragTabId;
+    state.dragTabId = null;
+    if (srcId !== tab.id) mergeTabsIntoBatch(srcId, tab.id);
+  });
+
+  tabEl.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    showTabContextMenu(tab, e.clientX, e.clientY, requestCloseTab);
+  });
+
+  tabEl.addEventListener("click", () => {
+    requestSwitchToTab(tab.id);
+  });
+
+  tabEl.appendChild(titleSpan);
+  tabEl.appendChild(closeBtn);
+  return tabEl;
+}
+
 /** Re-renders the tab strip, wiring click/close/context/drag handlers per tab. */
 export function renderTabBar() {
   if (!dom.tabBar) return;
@@ -80,110 +189,7 @@ export function renderTabBar() {
   }
 
   dom.tabBar.classList.add("visible");
-
-  state.tabs.forEach((tab) => {
-    const isActive = tab.id === state.activeTabId;
-    const tabEl = document.createElement("div");
-    tabEl.className = `tab-item${isActive ? " active" : ""}${tab.kind === "batch" ? " batch-tab" : ""}`;
-    tabEl.setAttribute("data-tab-id", tab.id);
-    tabEl.setAttribute("role", "tab");
-    tabEl.setAttribute("aria-selected", isActive ? "true" : "false");
-    tabEl.title = tab.name;
-    tabEl.draggable = true;
-
-    const titleSpan = document.createElement("span");
-    titleSpan.className = "tab-title";
-    titleSpan.textContent =
-      tab.kind === "batch" ? `BATCH (${tab.batchFiles.length})` : tab.name;
-
-    const closeBtn = document.createElement("button");
-    closeBtn.type = "button";
-    closeBtn.className = "tab-close";
-    closeBtn.title = "Close image tab";
-    closeBtn.setAttribute("aria-label", `Close ${tab.name}`);
-    closeBtn.textContent = "x";
-    closeBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      requestCloseTab(tab.id);
-    });
-
-    tabEl.addEventListener("dragstart", (e) => {
-      state.dragTabId = tab.id;
-      e.dataTransfer.effectAllowed = "move";
-      try {
-        e.dataTransfer.setData("text/plain", tab.id);
-      } catch (_) {}
-    });
-    tabEl.addEventListener("dragend", () => {
-      state.dragTabId = null;
-      dom.tabBar
-        .querySelectorAll(".drop-target")
-        .forEach((el) => el.classList.remove("drop-target"));
-    });
-    tabEl.addEventListener("dragover", (e) => {
-      if (state.dragBatchItem) {
-        if (state.dragBatchItem.tabId === tab.id) return;
-        e.preventDefault();
-        e.stopPropagation();
-        if (tab.kind === "batch") {
-          e.dataTransfer.dropEffect = "move";
-          tabEl.classList.add("drop-target");
-          hideTabGhost();
-        } else {
-          e.dataTransfer.dropEffect = "copy";
-          const srcTab = state.tabs.find(
-            (t) => t.id === state.dragBatchItem.tabId
-          );
-          showTabGhost(
-            srcTab?.batchFiles[state.dragBatchItem.index]?.name || "image"
-          );
-        }
-        return;
-      }
-      if (!state.dragTabId || state.dragTabId === tab.id) return;
-      e.preventDefault();
-      e.stopPropagation();
-      e.dataTransfer.dropEffect = "move";
-      tabEl.classList.add("drop-target");
-    });
-    tabEl.addEventListener("dragleave", () => {
-      tabEl.classList.remove("drop-target");
-    });
-    tabEl.addEventListener("drop", (e) => {
-      if (!state.dragTabId && !state.dragBatchItem) return;
-      e.preventDefault();
-      e.stopPropagation();
-      tabEl.classList.remove("drop-target");
-      hideTabGhost();
-      const item = state.dragBatchItem;
-      if (item) {
-        state.dragBatchItem = null;
-        const src = state.tabs.find((t) => t.id === item.tabId);
-        if (tab.kind === "batch") {
-          moveBatchItemToBatch(item, tab);
-        } else if (src) {
-          extractBatchItemToTab(src, item.index);
-        }
-        return;
-      }
-      const srcId = state.dragTabId;
-      state.dragTabId = null;
-      if (srcId !== tab.id) mergeTabsIntoBatch(srcId, tab.id);
-    });
-
-    tabEl.addEventListener("contextmenu", (e) => {
-      e.preventDefault();
-      showTabContextMenu(tab, e.clientX, e.clientY, requestCloseTab);
-    });
-
-    tabEl.addEventListener("click", () => {
-      requestSwitchToTab(tab.id);
-    });
-
-    tabEl.appendChild(titleSpan);
-    tabEl.appendChild(closeBtn);
-    dom.tabBar.appendChild(tabEl);
-  });
+  state.tabs.forEach((tab) => dom.tabBar.appendChild(buildTabElement(tab)));
 
   const addBtn = document.createElement("button");
   addBtn.type = "button";
@@ -331,18 +337,8 @@ export function closeTabImmediate(tabId) {
 export function resetToEmptyWorkspace() {
   setError(null);
   state.sourceFile = null;
-  state.resultBlob = null;
-  state.refineJobId = null;
-  state.previewBlob = null;
-  state.previewSignature = null;
-  state.previewSource = null;
   state.originalObjectUrl = null;
-  state.resultObjectUrl = null;
-  state.previewObjectUrl = null;
-  state.naturalWidth = 0;
-  state.naturalHeight = 0;
-  state.exportWidth = 0;
-  state.exportHeight = 0;
+  clearResultState();
 
   dom.stageSizerImg.removeAttribute("src");
   dom.beforeImg.removeAttribute("src");
@@ -525,15 +521,7 @@ export function ingestImageFile(file) {
 
   state.sourceFile = file;
   state.originalObjectUrl = objUrl;
-  state.resultBlob = null;
-  state.refineJobId = null;
-  state.previewBlob = null;
-  state.resultObjectUrl = null;
-  state.previewObjectUrl = null;
-  state.naturalWidth = 0;
-  state.naturalHeight = 0;
-  state.exportWidth = 0;
-  state.exportHeight = 0;
+  clearResultState();
   state.zoom = 1;
   state.panX = 0;
   state.panY = 0;

@@ -36,7 +36,12 @@ STATIC_DIR.mkdir(exist_ok=True)
 
 
 def _read_project_version() -> str:
-    """Reads `version` from `pyproject.toml` so the version is defined in one place."""
+    """
+    Reads `version` from `pyproject.toml` so the version is defined in one
+    place. Returns the unmistakable sentinel "0.0.0-dev" when pyproject is
+    missing or unparsable: a wrong pinned version is worse than an obviously
+    absent one.
+    """
     try:
         text = (BASE_DIR / "pyproject.toml").read_text(encoding="utf-8")
         m = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
@@ -44,7 +49,7 @@ def _read_project_version() -> str:
             return m.group(1)
     except OSError:
         pass
-    return "0.11.0"
+    return "0.0.0-dev"
 
 
 APP_VERSION = _read_project_version()
@@ -222,7 +227,6 @@ def normalize_tier_key(tier: str) -> str:
 # Selectable BiRefNet models exposed in the UI and `/api/status`.
 TIERS: dict[str, dict[str, Any]] = {
     "lite": {
-        "key": "lite",
         "label": "Lite",
         "tech_name": "BiRefNet_lite",
         "sublabel": "1K Fast",
@@ -237,7 +241,6 @@ TIERS: dict[str, dict[str, Any]] = {
         ),
     },
     "general": {
-        "key": "general",
         "label": "General",
         "tech_name": "BiRefNet",
         "sublabel": "1K Studio",
@@ -252,7 +255,6 @@ TIERS: dict[str, dict[str, Any]] = {
         ),
     },
     "hr": {
-        "key": "hr",
         "label": "Ultra HR",
         "tech_name": "BiRefNet_HR",
         "sublabel": f"2K {HR_RESOLUTION}px",
@@ -267,7 +269,6 @@ TIERS: dict[str, dict[str, Any]] = {
         ),
     },
     "portrait": {
-        "key": "portrait",
         "label": "Portrait",
         "tech_name": "BiRefNet-portrait",
         "sublabel": "1K People",
@@ -282,7 +283,6 @@ TIERS: dict[str, dict[str, Any]] = {
         ),
     },
     "matting": {
-        "key": "matting",
         "label": "Matting",
         "tech_name": "BiRefNet_HR-matting",
         "sublabel": "2K Alpha",
@@ -297,7 +297,6 @@ TIERS: dict[str, dict[str, Any]] = {
         ),
     },
     "dynamic": {
-        "key": "dynamic",
         "label": "Dynamic",
         "tech_name": "BiRefNet_dynamic",
         "sublabel": "Native Ratio",
@@ -434,7 +433,7 @@ def get_app_disk_bytes() -> int:
             return cached_val
 
     total = _dir_tree_bytes(BASE_DIR, skip_top_dirs={".git", "dist"})
-    cfg_dir = Path.home() / ".openbgr"
+    cfg_dir = APP_CONFIG_DIR
     if cfg_dir.exists():
         total += _dir_tree_bytes(cfg_dir)
 
@@ -476,7 +475,7 @@ def ensure_app_icon() -> str | None:
     Regenerates when the on-disk file predates the squircle design.
     """
     try:
-        icon_src = BASE_DIR / "icon_render.py"
+        icon_src = Path(__file__).resolve().parent / "icon_render.py"
         if (
             APP_ICON_PATH.exists()
             and icon_src.exists()
@@ -484,8 +483,7 @@ def ensure_app_icon() -> str | None:
         ):
             APP_ICON_PATH.unlink()  # stale icon from an older design
         if not APP_ICON_PATH.exists():
-            sys.path.insert(0, str(BASE_DIR))
-            import icon_render
+            from . import icon_render
 
             APP_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
             img = icon_render.render_icon(512)

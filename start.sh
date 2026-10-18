@@ -64,18 +64,21 @@ fi
 
 if [ ! -f ".venv/.installed" ]; then
   echo "[2/2] Installing AI engine dependencies (one-time setup)..."
-  if command -v uv >/dev/null 2>&1; then
-    if [ "$(uname -s)" = "Linux" ] && command -v nvidia-smi >/dev/null 2>&1; then
-      echo "      NVIDIA GPU detected - installing CUDA-accelerated PyTorch..."
+  if [ "$(uname -s)" = "Linux" ] && command -v nvidia-smi >/dev/null 2>&1; then
+    echo "      NVIDIA GPU detected - installing CUDA-accelerated PyTorch..."
+    grep -Ev '^[[:space:]]*torch' requirements.txt > .venv/requirements-runtime.txt
+    if command -v uv >/dev/null 2>&1; then
       uv pip install --python .venv/bin/python torch torchvision --index-url https://download.pytorch.org/whl/cu124
+      uv pip install --python .venv/bin/python -r .venv/requirements-runtime.txt
+    else
+      ./.venv/bin/pip install --upgrade pip -q
+      ./.venv/bin/pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+      ./.venv/bin/pip install -r .venv/requirements-runtime.txt
     fi
+  elif command -v uv >/dev/null 2>&1; then
     uv pip install --python .venv/bin/python -r requirements.txt
   else
     ./.venv/bin/pip install --upgrade pip -q
-    if [ "$(uname -s)" = "Linux" ] && command -v nvidia-smi >/dev/null 2>&1; then
-      echo "      NVIDIA GPU detected - installing CUDA-accelerated PyTorch..."
-      ./.venv/bin/pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
-    fi
     ./.venv/bin/pip install -r requirements.txt
   fi
   touch .venv/.installed

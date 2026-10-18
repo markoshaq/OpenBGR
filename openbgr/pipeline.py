@@ -100,19 +100,14 @@ def suppress_color_spill(
 
     # Compute spatially-varying local background color via fast C-accelerated BoxBlur
     bg_weight_u8 = (bg_mask * 255.0).astype(np.uint8)
-    bg_weight_blur = (
-        np.array(
-            Image.fromarray(bg_weight_u8).filter(ImageFilter.BoxBlur(24)),
-            dtype=np.float32,
+    with Image.fromarray(bg_weight_u8) as bg_weight_img:
+        bg_weight_blur = (
+            np.array(bg_weight_img.filter(ImageFilter.BoxBlur(24)), dtype=np.float32) / 255.0
         )
-        / 255.0
-    )
 
     prem_bg_u8 = np.clip(rgb_float * bg_mask[..., None], 0, 255).astype(np.uint8)
-    prem_bg_blur = np.array(
-        Image.fromarray(prem_bg_u8).filter(ImageFilter.BoxBlur(24)),
-        dtype=np.float32,
-    )
+    with Image.fromarray(prem_bg_u8) as prem_bg_img:
+        prem_bg_blur = np.array(prem_bg_img.filter(ImageFilter.BoxBlur(24)), dtype=np.float32)
 
     # Fall back to global median background color where local background weight is zero
     global_bg = np.median(rgb_float[bg_mask > 0.5], axis=0)
@@ -124,7 +119,8 @@ def suppress_color_spill(
     )
 
     # Build rim + semi-transparent receiver weight map
-    eroded_norm = np.array(mask_pil.filter(ImageFilter.MinFilter(15)), dtype=np.float32) / 255.0
+    with mask_pil.filter(ImageFilter.MinFilter(15)) as eroded_pil:
+        eroded_norm = np.array(eroded_pil, dtype=np.float32) / 255.0
     solid_rim_weight = np.clip(alpha_norm - eroded_norm, 0.0, 1.0)
     translucent_weight = np.clip(4.0 * alpha_norm * (1.0 - alpha_norm), 0.0, 1.0)
     receiver_weight = np.clip(
@@ -155,6 +151,17 @@ def suppress_color_spill(
 _JOB_ID_SEQ = itertools.count(1)
 _LAST_JOB: dict[str, Any] = {}
 _LAST_JOB_LOCK = threading.Lock()
+
+
+def get_last_job(job_id: int) -> dict[str, Any] | None:
+    """
+    Returns a snapshot of the cached last-job raw RGB/alpha iff `job_id`
+    matches the latest completed job, else None. Keeps `_LAST_JOB` and its
+    lock private to this module.
+    """
+    with _LAST_JOB_LOCK:
+        job = dict(_LAST_JOB)
+    return job if job.get("id") == job_id else None
 
 
 def compose_rgba(

@@ -657,7 +657,7 @@
         <div class="prefs-header">
           <div class="prefs-title-group">
             <span class="modal-title" id="infoModalTitle">PREFERENCES</span>
-            <span class="prefs-subtitle">OPENBGR <span id="prefsVersion">V0.11.0</span></span>
+            <span class="prefs-subtitle">OPENBGR <span id="prefsVersion">V--</span></span>
           </div>
           <button type="button" class="prefs-close" id="btnPrefsCloseX" aria-label="Close preferences">X</button>
         </div>
@@ -863,7 +863,7 @@
 
               <div class="pane-subheading">CHECKPOINTS</div>
               <div class="pref-card model-inventory">
-                <div class="model-row" id="sysModel-lite" data-model-key="lite">
+                <div class="model-row" data-model-key="lite">
                   <div class="model-meta">
                     <span class="model-name">LITE <span class="model-tech">BiRefNet_lite</span></span>
                     <span class="model-desc">Fast general cutouts for quick batches and CPUs.</span>
@@ -873,7 +873,7 @@
                     <button type="button" class="action-btn model-uninstall-btn" data-uninstall-model="lite" id="sysbtn-lite" disabled>NOT INSTALLED</button>
                   </div>
                 </div>
-                <div class="model-row" id="sysModel-general" data-model-key="general">
+                <div class="model-row" data-model-key="general">
                   <div class="model-meta">
                     <span class="model-name">GENERAL <span class="model-tech">BiRefNet</span></span>
                     <span class="model-desc">All-round model for products, objects, and everyday photos.</span>
@@ -883,7 +883,7 @@
                     <button type="button" class="action-btn model-uninstall-btn" data-uninstall-model="general" id="sysbtn-general" disabled>NOT INSTALLED</button>
                   </div>
                 </div>
-                <div class="model-row" id="sysModel-hr" data-model-key="hr">
+                <div class="model-row" data-model-key="hr">
                   <div class="model-meta">
                     <span class="model-name">ULTRA HR <span class="model-tech">BiRefNet_HR</span></span>
                     <span class="model-desc">Native 2048px model for 4K/8K photos and fine edge detail.</span>
@@ -893,7 +893,7 @@
                     <button type="button" class="action-btn model-uninstall-btn" data-uninstall-model="hr" id="sysbtn-hr" disabled>NOT INSTALLED</button>
                   </div>
                 </div>
-                <div class="model-row" id="sysModel-portrait" data-model-key="portrait">
+                <div class="model-row" data-model-key="portrait">
                   <div class="model-meta">
                     <span class="model-name">PORTRAIT <span class="model-tech">BiRefNet-portrait</span></span>
                     <span class="model-desc">Tuned for people, headshots, flyaway hair, and eyelashes.</span>
@@ -903,7 +903,7 @@
                     <button type="button" class="action-btn model-uninstall-btn" data-uninstall-model="portrait" id="sysbtn-portrait" disabled>NOT INSTALLED</button>
                   </div>
                 </div>
-                <div class="model-row" id="sysModel-matting" data-model-key="matting">
+                <div class="model-row" data-model-key="matting">
                   <div class="model-meta">
                     <span class="model-name">MATTING <span class="model-tech">BiRefNet_HR-matting</span></span>
                     <span class="model-desc">Soft alpha matting for glass, smoke, sheer fabric, and fine hair.</span>
@@ -913,7 +913,7 @@
                     <button type="button" class="action-btn model-uninstall-btn" data-uninstall-model="matting" id="sysbtn-matting" disabled>NOT INSTALLED</button>
                   </div>
                 </div>
-                <div class="model-row" id="sysModel-dynamic" data-model-key="dynamic">
+                <div class="model-row" data-model-key="dynamic">
                   <div class="model-meta">
                     <span class="model-name">DYNAMIC <span class="model-tech">BiRefNet_dynamic</span></span>
                     <span class="model-desc">Preserves native aspect ratio up to 2K for panoramas and banners.</span>
@@ -949,7 +949,7 @@
                 <div class="spec-row">
                   <span class="spec-key">DIAGNOSTIC LOGS</span>
                   <span class="spec-val spec-val-action">
-                    <span id="sysLogPath">~/.openbgr/openbgr.log</span>
+                    <span>~/.openbgr/openbgr.log</span>
                     <button type="button" class="cache-folder-btn" id="btnOpenLogsDir" title="Open logs folder" aria-label="Open logs folder">
                       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                         <path d="M1.5 3.5h4.2l1.6 1.8h7.2v7.2h-13z"></path>
@@ -1054,7 +1054,7 @@
               <div class="pane-heading">ABOUT</div>
               <div class="about-mark">
                 <span class="about-word">OPENBGR</span>
-                <span class="about-ver" id="aboutVersion">V0.11.0</span>
+                <span class="about-ver" id="aboutVersion">V--</span>
               </div>
               <p class="about-blurb">
                 A free, open-source utility powered by BiRefNet models. After a

@@ -17,7 +17,7 @@ body:
     attributes:
       label: Install type
       options:
-        - Release build (.dmg / .zip / .tar.gz)
+        - Release build (.exe / .dmg / .zip / .tar.gz)
         - Running from source (start.sh / start.bat)
         - Headless / CLI only
     validations:

@@ -400,8 +400,6 @@ export const dom = {
   btnDespill: document.getElementById("btnDespill"),
   shadowCutoffSlider: document.getElementById("shadowCutoffSlider"),
   shadowCutoffLabel: document.getElementById("shadowCutoffLabel"),
-
-  formatRow: document.getElementById("formatRow"),
   btnFileDest: document.getElementById("btnFileDest"),
 
   exportScaleSlider: document.getElementById("exportScaleSlider"),
@@ -477,6 +475,25 @@ export function createTabRecord(overrides = {}) {
 /** Generates sequential `Pasted Image N` names for clipboard-ingested images. */
 export function nextClipboardName() {
   return `CLIPBOARD_${nextTabSeq}.PNG`;
+}
+
+/**
+ * Clears the result/preview/dimension fields of the live `state` object.
+ * Shared by workspace resets and new ingests so the two can't drift (ingest
+ * previously left a stale `previewSource` blob pinned from the last image).
+ */
+export function clearResultState() {
+  state.resultBlob = null;
+  state.refineJobId = null;
+  state.previewBlob = null;
+  state.previewSignature = null;
+  state.previewSource = null;
+  state.resultObjectUrl = null;
+  state.previewObjectUrl = null;
+  state.naturalWidth = 0;
+  state.naturalHeight = 0;
+  state.exportWidth = 0;
+  state.exportHeight = 0;
 }
 
 /** Revokes all `blob:` object URLs owned by a tab before it is discarded. */
