@@ -6,18 +6,20 @@
 
 Multi-tab background removal studio powered by [BiRefNet](https://github.com/ZhengPeng7/BiRefNet), running entirely on your machine. FastAPI backend, pywebview desktop shell, vanilla ES-module frontend with no build step. Exports full-resolution images in multiple formats with no telemetry, watermarks, or compression.
 
+Release notes live in [CHANGELOG.md](./CHANGELOG.md) and on the [Releases](https://github.com/markoshaq/OpenBGR/releases) page.
+
 ![OpenBGR workspace](docs/screenshot.png)
 
 ## Features
 
 - **100% offline after setup.** Weights download once from Hugging Face, then run strictly from local cache. No uploads, telemetry, accounts, or subscriptions.
-- **Multi-tab workspace.** `⌘1`-`⌘9` / `Ctrl+1`-`Ctrl+9` or `⌃Tab` / `Ctrl+Tab` to switch, drag tabs together to merge them into a batch, per-tab zoom/pan/export settings.
+- Tabs for everything. `⌘1`-`⌘9` / `Ctrl+1`-`Ctrl+9` or `⌃Tab` to switch, drag tabs together to merge them into a batch, per-tab zoom/pan/export settings.
 - **Batch processing.** Queue any number of images under one settings snapshot, with per-file status and recovery, drag-out extraction, and folder or single-ZIP export.
 - **Six specialized models.** From a fast `Lite` build for CPUs to 2K soft-alpha `Matting`. See the [model table](#models).
-- **Zoom, pan & 4x loupe.** Pinch, two-finger, and `Space + Drag` navigation (`100%-800%`), view hotkeys (`1`/`2`/`3`), and a `Z`-key magnifier for hair and edges.
-- **Live export preview.** `PNG`, `WEBP`, `JPG`, or alpha `MASK` at any scale or exact pixel size, with aspect lock, matte backdrop compositing, and a real-time file-size readout, all without re-running inference.
+- Zoom and inspect with pinch, two-finger, or `Space + Drag` (`100%-800%`), `1`/`2`/`3` view hotkeys, and a `Z`-key 4x loupe for hair and edges.
+- **Live export preview.** `PNG`, `WEBP`, `JPG`, or alpha `MASK` at any scale or exact pixel size, with aspect lock and matte backdrop compositing, all without re-running inference.
 - **Instant edge refinement.** Defringe, color-spill suppression, and a shadow/reflection alpha cutoff, re-applied in ~20 ms without re-running the model.
-- **Native desktop window.** `pywebview` app window with native menus, themes, clipboard paste, Save-As/folder dialogs, shortcuts pane, window-state restore, and browser fallback.
+- The desktop window is a `pywebview` shell with native menus, themes, clipboard paste, Save-As/folder dialogs, a shortcuts pane, and window-state restore. Falls back to a plain browser tab if needed.
 - **Model management.** Right-click a model card to install/uninstall with live download progress, open the HF cache or logs folder, and see disk usage per model. `FP16` inference on CUDA and Apple MPS.
 
 ## Installation
@@ -76,7 +78,7 @@ On Windows use `start.bat` and `scripts\install_windows_context_menu.bat`; on Li
 
 ## Right-Click / "Open With" Integration
 
-OpenBGR can be wired into your OS file manager from **Preferences > Quick Action > Right-Click Context Menu** (one-click **Install** / **Uninstall**), or via the helper scripts below. You can customize the Quick Action model preset, save destination (same folder or Save dialog), output format (`PNG`, `WEBP`, `JPG`, `MASK`), edge refinement, clipboard copy, and completion notifications in Preferences. Everything stays 100% local: by default the cutout is written next to the original as `<name>-cutout.png` and nothing is uploaded.
+OpenBGR can be wired into your OS file manager from **Preferences > Quick Action > Right-Click Context Menu** (one-click **Install** / **Uninstall**), or via the helper scripts below. You can customize the Quick Action model preset, save destination (same folder or Save dialog), output format (`PNG`, `WEBP`, `JPG`, `MASK`), edge refinement, clipboard copy, and completion notifications in Preferences. By default the cutout is written next to the original as `<name>-cutout.png`.
 
 **macOS.** Finder Quick Action (right-click > Quick Actions > *Remove Background with OpenBGR*):
 
