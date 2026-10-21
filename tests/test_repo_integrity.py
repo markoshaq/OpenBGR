@@ -1,5 +1,5 @@
 """
-Repository-integrity tests: version single-sourcing, dependency-list sync,
+Repository-integrity tests: version and dependency single-sourcing,
 release payload contents, and frontend ES module / DOM integrity.
 
 Run with:
@@ -44,20 +44,27 @@ class TestRepoIntegrity(unittest.TestCase):
         self.assertEqual(pkg_lock["version"], canonical)
         self.assertEqual(pkg_lock["packages"][""]["version"], canonical)
 
-    def test_dependency_lists_stay_in_sync(self) -> None:
-        """`requirements.txt` and `pyproject.toml` declare identical dependencies."""
-        requirements = {
+    def test_dependencies_single_sourced_from_requirements_txt(self) -> None:
+        """`requirements.txt` is the only dependency list; pyproject consumes it."""
+        import tomllib
+
+        parsed = tomllib.loads((ROOT_DIR / "pyproject.toml").read_text())
+        project = parsed["project"]
+        self.assertNotIn("dependencies", project)
+        self.assertIn("dependencies", project.get("dynamic", []))
+        self.assertEqual(
+            parsed["tool"]["setuptools"]["dynamic"]["dependencies"]["file"],
+            ["requirements.txt"],
+        )
+
+        requirements = [
             line.strip()
             for line in (ROOT_DIR / "requirements.txt").read_text().splitlines()
             if line.strip() and not line.lstrip().startswith("#")
-        }
-
-        import tomllib
-
-        pyproject_deps = set(
-            tomllib.loads((ROOT_DIR / "pyproject.toml").read_text())["project"]["dependencies"]
-        )
-        self.assertEqual(requirements, pyproject_deps)
+        ]
+        self.assertTrue(requirements)
+        for req in requirements:
+            self.assertRegex(req, r"^[A-Za-z0-9][A-Za-z0-9._-]*")
 
     def test_frontend_modules_and_dom_ids(self) -> None:
         """Every `getElementById` in the ES modules resolves to a real `id` in index.html."""

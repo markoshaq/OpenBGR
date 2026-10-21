@@ -38,9 +38,16 @@ if not exist ".venv" (
             python -m venv .venv
         ) else (
             echo [1/2] Python 3.10+ not found. Automatically installing standalone Python via uv...
-            powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://astral.sh/uv/install.ps1 | iex"
-            set "PATH=%USERPROFILE%\.local\bin;%USERPROFILE%\.cargo\bin;%PATH%"
-            uv venv .venv --python 3.12
+            :: Prefer pip over piping a remote script into a shell; the pinned
+            :: standalone installer is the last resort when pip is unavailable.
+            python -m pip install --user uv >nul 2>nul
+            if !errorlevel! equ 0 (
+                python -m uv venv .venv --python 3.12
+            ) else (
+                powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://astral.sh/uv/0.13.4/install.ps1 | iex"
+                set "PATH=%USERPROFILE%\.local\bin;%USERPROFILE%\.cargo\bin;%PATH%"
+                uv venv .venv --python 3.12
+            )
         )
     )
 )

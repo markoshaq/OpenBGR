@@ -59,7 +59,7 @@ Test coverage spans the pipeline, API contracts, CLI and Quick Action runners, r
 │   ├── desktop_cocoa.py    # macOS-only: app name, NSMenu/appearance & 'odoc' handlers
 │   ├── server_probe.py     # Local-server probes & single-instance file forwarding
 │   └── api.py              # FastAPI application and HTTP endpoints
-├── pyproject.toml          # Project metadata, ruff & mypy configuration
+├── pyproject.toml          # Project metadata, ruff & mypy config (deps read from requirements.txt)
 ├── docs/
 │   └── demo.gif            # README demo
 ├── static/
@@ -92,11 +92,25 @@ Test coverage spans the pipeline, API contracts, CLI and Quick Action runners, r
 ├── Start Mac.command       # macOS Finder launcher
 ├── start.sh                # macOS / Linux bootstrapper
 ├── start.bat               # Windows bootstrapper
-└── requirements.txt        # Python dependencies
+└── requirements.txt        # Canonical Python dependency list
 ```
 
 ## Releases
 
 Maintainer-only: pushing a `v*` tag triggers `.github/workflows/release.yml` to build the Windows installer/portable ZIP, macOS DMG, Linux archive, and `SHA256SUMS.txt`, then attach them to a GitHub Release. To build the bundles locally into `dist/`, run `python3 scripts/build_release.py`.
 
-To bump the version, run `python3 scripts/bump_version.py X.Y.Z`. It updates `pyproject.toml`, `package.json`, and `package-lock.json` together. `pyproject.toml` is the canonical source; `test_version_single_sourced_from_pyproject` fails CI if any file drifts.
+To bump the version, run `python3 scripts/bump_version.py X.Y.Z`. It updates `pyproject.toml`, `package.json`, and `package-lock.json` together. `pyproject.toml` is the canonical source; `test_version_single_sourced_from_pyproject` fails CI if any file drifts. The same applies to `requirements.txt` for dependencies: `pyproject.toml` reads them dynamically, so edit the txt file only.
+
+Tag a release when `main` has soaked for a few days and the checklist below passes, not on a schedule.
+
+### Manual release checklist
+
+CI covers lint, types, and unit tests; it cannot exercise OS integrations or the bundled artifacts. Before tagging a `v*` release, run through this on each OS you can test:
+
+- Fresh checkout with no `.venv`: `start.sh` / `start.bat` provisions and opens the studio.
+- Drop an image in, run a cutout, export a PNG and a small batch ZIP.
+- "Open With" / context menu / Quick Action once while the app is running and once while closed; the cutout lands next to the source.
+- `python app.py --cli photo.png` writes `photo-cutout.png`.
+- Model install and uninstall from the UI, with progress and disk usage updating.
+- Restart restarts; window size and preferences survive relaunch.
+- Built artifacts in `dist/`: launch the installer or portable bundle and run one cutout.

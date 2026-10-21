@@ -455,8 +455,15 @@ if [ ! -f "$VENV_DIR/.installed" ]; then
     fi
   fi
   if ! command -v uv >/dev/null 2>&1 && [ "$HAS_PY310" != "1" ]; then
-    curl -LsSf https://astral.sh/uv/install.sh | sh >>"$LOG_FILE" 2>&1
-    export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+    # Prefer pip over piping a remote script into a shell; the pinned
+    # standalone installer is the last resort when pip is unavailable.
+    if command -v python3 >/dev/null 2>&1 && python3 -m pip --version >/dev/null 2>&1; then
+      python3 -m pip install --user uv >>"$LOG_FILE" 2>&1
+    fi
+    if ! command -v uv >/dev/null 2>&1; then
+      curl -LsSf https://astral.sh/uv/0.13.4/install.sh | sh >>"$LOG_FILE" 2>&1
+      export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+    fi
   fi
   if command -v uv >/dev/null 2>&1; then
     uv venv "$VENV_DIR" --python 3.12 >>"$LOG_FILE" 2>&1

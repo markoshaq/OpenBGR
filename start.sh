@@ -48,17 +48,24 @@ if [ -d ".venv" ] && [ ! -x ".venv/bin/python" ]; then
 fi
 
 if [ ! -d ".venv" ]; then
+  if ! command -v uv >/dev/null 2>&1 && [ "$HAS_PY310" != "1" ]; then
+    echo "[1/2] Python 3.10+ not found. Installing uv to fetch a standalone Python..."
+    # Prefer pip over piping a remote script into a shell; the pinned
+    # standalone installer is the last resort when pip is unavailable.
+    if command -v python3 >/dev/null 2>&1 && python3 -m pip --version >/dev/null 2>&1; then
+      python3 -m pip install --user uv
+    fi
+    if ! command -v uv >/dev/null 2>&1; then
+      curl -LsSf https://astral.sh/uv/0.13.4/install.sh | sh
+      export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+    fi
+  fi
   if command -v uv >/dev/null 2>&1; then
     echo "[1/2] Creating virtual environment with uv..."
     uv venv .venv --python 3.12
-  elif [ "$HAS_PY310" = "1" ]; then
+  else
     echo "[1/2] Creating virtual environment (.venv)..."
     python3 -m venv .venv
-  else
-    echo "[1/2] Python 3.10+ not found. Installing standalone Python via uv..."
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
-    uv venv .venv --python 3.12
   fi
 fi
 
