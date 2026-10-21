@@ -8,7 +8,7 @@ Multi-tab background removal studio powered by [BiRefNet](https://github.com/Zhe
 
 Release notes live in [CHANGELOG.md](./CHANGELOG.md) and on the [Releases](https://github.com/markoshaq/OpenBGR/releases) page.
 
-![OpenBGR workspace](docs/screenshot.png)
+![OpenBGR demo](docs/demo.gif)
 
 ## Features
 
@@ -187,7 +187,8 @@ npm ci && npx eslint static             # frontend lint (Node 18+)
 │   └── api.py              # FastAPI application and HTTP endpoints
 ├── pyproject.toml          # Project metadata, ruff & mypy configuration
 ├── docs/
-│   └── screenshot.png      # README hero image
+│   ├── demo.gif            # README demo
+│   └── screenshot.png      # Workspace screenshot
 ├── static/
 │   ├── index.html          # 3-column studio workspace
 │   ├── styles.css          # Stylesheet
