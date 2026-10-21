@@ -45,8 +45,15 @@ done
 [ "${#files[@]}" -eq 0 ] && exit 0
 
 # Fast path: delegate the batch to the already-running local OpenBGR server.
+# Mutating endpoints require the per-session token the server writes to
+# ~/.openbgr/session_token at startup; a missing or stale token makes the
+# request fail and execution falls through to the cold path below.
 if server_alive; then
   curl_args=(-sSfm 300 -X POST "$API/api/quick-action")
+  TOKEN_FILE="$HOME/.openbgr/session_token"
+  if [ -f "$TOKEN_FILE" ]; then
+    curl_args+=(-H "x-openbgr-token: $(cat "$TOKEN_FILE")")
+  fi
   for f in "${files[@]}"; do
     curl_args+=(--data-urlencode "files=$f")
   done

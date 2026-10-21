@@ -67,6 +67,23 @@ export const ACCENTS = {
 const STORAGE_KEY_CONFIRM_CLOSE = "openbgr_confirm_close_tab";
 const STORAGE_KEY_PREFS = "openbgr_prefs";
 
+/**
+ * Per-session API token injected by the server into the served page's
+ * `<meta name="openbgr-api-token">`. Mutating `/api/*` endpoints reject
+ * requests that lack it, which blocks cross-origin drive-by POSTs.
+ */
+export const API_TOKEN =
+  document
+    .querySelector('meta[name="openbgr-api-token"]')
+    ?.getAttribute("content") || "";
+
+/** `fetch` wrapper that attaches the session token to every API call. */
+export function apiFetch(url, options = {}) {
+  const headers = new Headers(options.headers || {});
+  if (API_TOKEN) headers.set("x-openbgr-token", API_TOKEN);
+  return fetch(url, { ...options, headers });
+}
+
 /** Returns the factory-default preference snapshot (theme, model, filters, export). */
 export function getDefaultPrefs() {
   return {
@@ -299,6 +316,8 @@ export const state = {
   resultBlob: null,
   refineJobId: null,
   refineToken: 0,
+  refineInFlight: false,
+  refinePending: false,
   previewBlob: null,
   previewSignature: null,
   previewSource: null,
@@ -334,6 +353,7 @@ export const state = {
     failed: 0,
     cancelled: false,
     results: [],
+    zipWriter: null,
   },
   dragTabId: null,
   dragBatchItem: null,
@@ -695,17 +715,49 @@ export function blobToBase64(blob) {
   });
 }
 
-/** Normalizes a native-dialog result into an array of `{name, blob}` entries. */
-export function filesFromDialogResult(res) {
-  if (Array.isArray(res?.files) && res.files.length > 0) {
-    return res.files.map(
-      (f) => new File([base64ToBlob(f.data_b64)], f.name || "image.png")
-    );
-  }
-  if (res?.data_b64) {
-    return [new File([base64ToBlob(res.data_b64)], res.name || "image.png")];
-  }
-  return [];
+const IMAGE_EXT_RE = /\.(png|jpe?g|webp|bmp|gif|tiff?)$/i;
+
+/** True for image files by MIME type, with an extension check for empty types. */
+export function isImageFile(f) {
+  return Boolean(
+    f && (f.type?.startsWith("image/") || IMAGE_EXT_RE.test(f.name || ""))
+  );
+}
+
+/**
+ * Normalizes a native-dialog result into an array of `File`s. Entries carry a
+ * one-shot `file_id` whose bytes stream over HTTP from the local server;
+ * legacy `{data_b64}` payloads (clipboard reads) are decoded inline.
+ */
+export async function filesFromDialogResult(res) {
+  const entries = Array.isArray(res?.files)
+    ? res.files
+    : res?.file_id || res?.data_b64
+      ? [res]
+      : [];
+  const files = await Promise.all(
+    entries.map(async (entry) => {
+      if (entry.file_id) {
+        try {
+          const r = await fetch(
+            `/api/local-file?file_id=${encodeURIComponent(entry.file_id)}`
+          );
+          if (r.ok) {
+            return new File([await r.blob()], entry.name || "image.png");
+          }
+        } catch (_) {}
+        return null;
+      }
+      if (entry.data_b64) {
+        return new File(
+          [base64ToBlob(entry.data_b64)],
+          entry.name || "image.png"
+        );
+      }
+      return null;
+    })
+  );
+  return files.filter(Boolean);
 }
 
 /** Browser-mode fallback: triggers an anchor download for a blob. */

@@ -15,10 +15,12 @@ from typing import Any
 from PIL import Image
 
 from .config import (
+    API_TOKEN_HEADER,
     RECOMMENDED_TIER,
     TIERS,
     logger,
     normalize_tier_key,
+    read_api_token,
 )
 from .models import MANAGER, set_job_phase
 from .pipeline import segment_foreground
@@ -114,6 +116,7 @@ def delegate_quick_action_to_server(inputs: list[str]) -> dict[str, Any] | None:
     Action batch over HTTP so Windows context-menu invocations and CLI calls
     reuse the warm GPU/MPS model with zero cold-start overhead.
     """
+    import urllib.error
     import urllib.parse
     import urllib.request
 
@@ -129,11 +132,27 @@ def delegate_quick_action_to_server(inputs: list[str]) -> dict[str, Any] | None:
             return None
         data = urllib.parse.urlencode([("files", p) for p in resolved]).encode("utf-8")
         req = urllib.request.Request(f"{api}/api/quick-action", data=data, method="POST")
+        token = read_api_token()
+        if token:
+            req.add_header(API_TOKEN_HEADER, token)
         with urllib.request.urlopen(req, timeout=300) as res:
             payload = json.loads(res.read().decode("utf-8"))
             if isinstance(payload, dict) and ("ok" in payload or "cancelled" in payload):
                 return payload
+    except urllib.error.HTTPError:
+        # The server answered with an error status; nothing is left running
+        # server-side, so a local rerun cannot duplicate outputs.
+        return None
     except Exception:
+        # A timeout or dropped connection after the POST leaves the batch
+        # running server-side (it runs detached via asyncio.to_thread), so a
+        # local rerun would duplicate every output file. Re-probe once: a live
+        # server owns the job; only a dead one makes local fallback safe.
+        if is_openbgr_server(api, timeout_s=1.5):
+            logger.info(
+                "[QuickAction] Lost the delegated run's response; the server is still processing it."
+            )
+            return {"ok": True, "delegated": True}
         return None
     return None
 
@@ -185,6 +204,7 @@ def run_quick_action(inputs: list[str]) -> dict[str, Any]:
 
     succeeded_names: list[str] = []
     outputs_written: list[str] = []
+    cancelled = False
 
     logger.info(
         "[QuickAction] Processing %d image%s with %s (%s).",
@@ -237,6 +257,10 @@ def run_quick_action(inputs: list[str]) -> dict[str, Any]:
 
             succeeded_names.append(src.name)
             outputs_written.append(str(out_path))
+        except InterruptedError:
+            logger.info("[QuickAction] Cancelled: %s", src.name)
+            cancelled = True
+            break
         except Exception:
             logger.exception("[QuickAction] Failed %s.", src.name)
             failed += 1
@@ -266,6 +290,7 @@ def run_quick_action(inputs: list[str]) -> dict[str, Any]:
 
     return {
         "ok": failed == 0 and len(succeeded_names) > 0,
+        "cancelled": cancelled,
         "succeeded": succeeded_names,
         "outputs": outputs_written,
         "failed": failed,

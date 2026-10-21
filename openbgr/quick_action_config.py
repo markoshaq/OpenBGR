@@ -10,6 +10,7 @@ import os
 import platform
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -81,8 +82,25 @@ def save_quick_action_config(cfg: dict[str, Any]) -> dict[str, Any]:
     return clean
 
 
+# Short-TTL cache for the installed-state probe: the Windows check shells out
+# to `reg query` (~50ms), so status fetches shouldn't respawn it back to back.
+_QA_INSTALLED_TTL_S = 5.0
+_qa_installed_cache: tuple[float, bool] | None = None
+
+
 def is_quick_action_installed() -> bool:
     """Checks whether the OS right-click Quick Action / context menu is currently installed."""
+    global _qa_installed_cache
+    now = time.monotonic()
+    if _qa_installed_cache is not None and now - _qa_installed_cache[0] < _QA_INSTALLED_TTL_S:
+        return _qa_installed_cache[1]
+    result = _probe_quick_action_installed()
+    _qa_installed_cache = (now, result)
+    return result
+
+
+def _probe_quick_action_installed() -> bool:
+    """Runs the platform-specific installed-state check."""
     sys_name = platform.system()
     if sys_name == "Darwin":
         wf = (
@@ -115,6 +133,8 @@ def is_quick_action_installed() -> bool:
 
 def set_quick_action_installed(install: bool = True) -> tuple[bool, str]:
     """Runs the platform Quick Action / context-menu installer or uninstaller."""
+    global _qa_installed_cache
+    _qa_installed_cache = None
     sys_name = platform.system()
     try:
         if sys_name == "Darwin":

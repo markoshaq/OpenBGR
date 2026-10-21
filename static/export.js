@@ -7,6 +7,7 @@
 import {
   state,
   dom,
+  apiFetch,
   masterCutoutImg,
   getActiveTab,
   saveStateToActiveTab,
@@ -205,8 +206,46 @@ function exportSignature() {
   });
 }
 
-/** Re-renders the processed preview on canvas after backdrop/scale changes. */
-export async function updateLiveStagePreview() {
+// Longest-side cap for the live stage preview in pixels. Full-res canvas
+// work is only needed for the actual export; the stage just needs enough
+// pixels to stay crisp at display size with some zoom headroom.
+const PREVIEW_MAX_SIDE = 2048;
+const PREVIEW_DEBOUNCE_MS = 150;
+const PREVIEW_THROTTLE_MS = 400;
+
+let previewTimer = null;
+let previewLastStart = 0;
+
+/** Export dims clamped to the preview cap, never upscaled past the target. */
+function previewTargetSize() {
+  const srcW = state.naturalWidth || masterCutoutImg.naturalWidth;
+  const srcH = state.naturalHeight || masterCutoutImg.naturalHeight;
+  const targetW = Math.max(1, state.exportWidth || srcW);
+  const targetH = Math.max(1, state.exportHeight || srcH);
+  const k = Math.min(1, PREVIEW_MAX_SIDE / Math.max(targetW, targetH));
+  return {
+    w: Math.max(1, Math.round(targetW * k)),
+    h: Math.max(1, Math.round(targetH * k)),
+  };
+}
+
+/** True when export settings change pixels (cutoff, matte, mask); else the raw cutout is shown. */
+function previewNeedsRender() {
+  return (
+    state.shadowCutoff > 0 ||
+    state.activeBackdrop !== "checker" ||
+    state.exportFormat === "jpg" ||
+    state.exportFormat === "mask"
+  );
+}
+
+/**
+ * Schedules a preview re-render after backdrop/scale/cutoff changes. Bursts of
+ * input events (slider drags, keystrokes) coalesce into one render every
+ * PREVIEW_THROTTLE_MS plus a trailing render PREVIEW_DEBOUNCE_MS after the
+ * last event, so full-canvas encodes can't pile up on the main thread.
+ */
+export function updateLiveStagePreview() {
   if (
     !state.resultBlob ||
     !masterCutoutImg.complete ||
@@ -214,16 +253,66 @@ export async function updateLiveStagePreview() {
   ) {
     return;
   }
-
   const token = ++state.previewRenderToken;
-  const signature = exportSignature();
+  const now = performance.now();
+  clearTimeout(previewTimer);
+  if (now - previewLastStart >= PREVIEW_THROTTLE_MS) {
+    previewLastStart = now;
+    renderLivePreview(token);
+    return;
+  }
+  previewTimer = setTimeout(() => {
+    previewLastStart = performance.now();
+    renderLivePreview(token);
+  }, PREVIEW_DEBOUNCE_MS);
+}
+
+/**
+ * Renders the stage preview: the raw cutout is reused verbatim when nothing
+ * changes pixels; otherwise the cutoff/matte/mask is drawn at display
+ * resolution (not full res). `previewSignature` records what the blob
+ * actually is so `exportActiveImage` only reuses it when it is byte-exact.
+ */
+async function renderLivePreview(token) {
   const source = state.resultBlob;
+  if (!source || !masterCutoutImg.complete || !masterCutoutImg.naturalWidth) {
+    return;
+  }
   try {
-    const blob = await buildExportBlob(state.exportFormat);
+    let blob;
+    let renderedSig;
+    if (!previewNeedsRender()) {
+      blob = source;
+      renderedSig = JSON.stringify({
+        format: "png",
+        w: state.naturalWidth || masterCutoutImg.naturalWidth,
+        h: state.naturalHeight || masterCutoutImg.naturalHeight,
+        cutoff: 0,
+        backdrop: "checker",
+      });
+    } else {
+      const srcW = state.naturalWidth || masterCutoutImg.naturalWidth;
+      const srcH = state.naturalHeight || masterCutoutImg.naturalHeight;
+      const { w, h } = previewTargetSize();
+      blob = await renderExportBlob(masterCutoutImg, srcW, srcH, {
+        format: state.exportFormat,
+        targetW: w,
+        targetH: h,
+        shadowCutoff: state.shadowCutoff,
+        backdrop: state.activeBackdrop,
+      });
+      renderedSig = JSON.stringify({
+        format: state.exportFormat,
+        w,
+        h,
+        cutoff: state.shadowCutoff,
+        backdrop: state.activeBackdrop,
+      });
+    }
     if (token !== state.previewRenderToken) return;
 
     state.previewBlob = blob;
-    state.previewSignature = signature;
+    state.previewSignature = renderedSig;
     state.previewSource = source;
     if (
       state.previewObjectUrl &&
@@ -237,10 +326,13 @@ export async function updateLiveStagePreview() {
         ? state.resultObjectUrl
         : URL.createObjectURL(blob);
     dom.afterImg.src = state.previewObjectUrl;
-    // previewBlob is encoded through the exact export path, so its byte size
-    // is the real output file size, not an estimate.
+    // The byte size is only honest when the preview blob is exactly what an
+    // export would produce (raw-passthrough or an uncapped render).
     if (dom.exportSizeLabel) {
-      dom.exportSizeLabel.textContent = formatDiskBytes(blob.size);
+      dom.exportSizeLabel.textContent =
+        renderedSig === exportSignature()
+          ? formatDiskBytes(blob.size)
+          : "...";
     }
     saveStateToActiveTab();
   } catch (_) {}
@@ -415,7 +507,7 @@ async function postSaveFile(dir, filename, blob) {
   fd.append("directory", dir);
   fd.append("filename", filename);
   fd.append("file", blob, filename);
-  return fetch("/api/save", { method: "POST", body: fd });
+  return apiFetch("/api/save", { method: "POST", body: fd });
 }
 
 /** Writes one exported batch file to the batch's output directory (or downloads it). */
@@ -553,64 +645,160 @@ function crc32(u8) {
   return (c ^ 0xffffffff) >>> 0;
 }
 
+const ZIP_ENCODER = new TextEncoder();
+// STORED-ZIP header fields are uint32 offsets and a uint16 entry count;
+// silently truncating past them yields a corrupt archive.
+const ZIP_U32_MAX = 0xffffffff;
+const ZIP_U16_MAX = 0xffff;
+const ZIP_TOO_LARGE_MSG =
+  "Batch exceeds the 4 GiB ZIP limit; save to an output folder instead.";
+
+/** Builds the 30-byte local header plus UTF-8 name bytes for one STORED entry. */
+function zipLocalPieces(name, data) {
+  const nameBytes = ZIP_ENCODER.encode(name);
+  // Bit 11 marks the entry name as UTF-8; without it, extractors assume
+  // CP437 and non-ASCII filenames come out as mojibake.
+  const utf8Flag = nameBytes.length !== name.length ? 0x0800 : 0;
+  const crc = crc32(data);
+  const local = new DataView(new ArrayBuffer(30));
+  local.setUint32(0, 0x04034b50, true);
+  local.setUint16(4, 20, true);
+  local.setUint16(6, utf8Flag, true);
+  local.setUint16(8, 0, true);
+  local.setUint16(10, 0, true);
+  local.setUint16(12, 0, true);
+  local.setUint32(14, crc, true);
+  local.setUint32(18, data.length, true);
+  local.setUint32(22, data.length, true);
+  local.setUint16(26, nameBytes.length, true);
+  local.setUint16(28, 0, true);
+  return { local: local.buffer, nameBytes, crc, size: data.length, utf8Flag };
+}
+
+/** Builds the 46-byte central-directory record for a written entry. */
+function zipCentralRecord(e) {
+  const cd = new DataView(new ArrayBuffer(46));
+  cd.setUint32(0, 0x02014b50, true);
+  cd.setUint16(4, 20, true);
+  cd.setUint16(6, 20, true);
+  cd.setUint16(8, e.utf8Flag, true);
+  cd.setUint16(10, 0, true);
+  cd.setUint16(12, 0, true);
+  cd.setUint16(14, 0, true);
+  cd.setUint32(16, e.crc, true);
+  cd.setUint32(20, e.size, true);
+  cd.setUint32(24, e.size, true);
+  cd.setUint16(28, e.nameBytes.length, true);
+  cd.setUint32(42, e.offset, true);
+  return cd.buffer;
+}
+
+/** Builds the 22-byte end-of-central-directory record. */
+function zipEocd(count, cdSize, cdStart) {
+  const eocd = new DataView(new ArrayBuffer(22));
+  eocd.setUint32(0, 0x06054b50, true);
+  eocd.setUint16(8, count, true);
+  eocd.setUint16(10, count, true);
+  eocd.setUint32(12, cdSize, true);
+  eocd.setUint32(16, cdStart, true);
+  return eocd.buffer;
+}
+
 /**
  * Builds an uncompressed (STORED) ZIP archive in memory. Image payloads are
  * already compressed, so store-only avoids extra CPU passes with no size cost.
  */
 export function buildZip(entries) {
-  const enc = new TextEncoder();
   const chunks = [];
   const central = [];
   let offset = 0;
 
   for (const { name, data } of entries) {
-    const nameBytes = enc.encode(name);
-    // Bit 11 marks the entry name as UTF-8; without it, extractors assume
-    // CP437 and non-ASCII filenames come out as mojibake.
-    const utf8Flag = nameBytes.length !== name.length ? 0x0800 : 0;
-    const crc = crc32(data);
-    const local = new DataView(new ArrayBuffer(30));
-    local.setUint32(0, 0x04034b50, true);
-    local.setUint16(4, 20, true);
-    local.setUint16(6, utf8Flag, true);
-    local.setUint16(8, 0, true);
-    local.setUint16(10, 0, true);
-    local.setUint16(12, 0, true);
-    local.setUint32(14, crc, true);
-    local.setUint32(18, data.length, true);
-    local.setUint32(22, data.length, true);
-    local.setUint16(26, nameBytes.length, true);
-    local.setUint16(28, 0, true);
-    chunks.push(local.buffer, nameBytes, data);
-    central.push({ nameBytes, crc, size: data.length, offset, utf8Flag });
-    offset += 30 + nameBytes.length + data.length;
+    if (offset > ZIP_U32_MAX || data.length > ZIP_U32_MAX) {
+      throw new Error(ZIP_TOO_LARGE_MSG);
+    }
+    const p = zipLocalPieces(name, data);
+    chunks.push(p.local, p.nameBytes, data);
+    central.push({
+      nameBytes: p.nameBytes,
+      crc: p.crc,
+      size: p.size,
+      offset,
+      utf8Flag: p.utf8Flag,
+    });
+    offset += 30 + p.nameBytes.length + p.size;
   }
 
   const cdStart = offset;
   for (const e of central) {
-    const cd = new DataView(new ArrayBuffer(46));
-    cd.setUint32(0, 0x02014b50, true);
-    cd.setUint16(4, 20, true);
-    cd.setUint16(6, 20, true);
-    cd.setUint16(8, e.utf8Flag, true);
-    cd.setUint16(10, 0, true);
-    cd.setUint16(12, 0, true);
-    cd.setUint16(14, 0, true);
-    cd.setUint32(16, e.crc, true);
-    cd.setUint32(20, e.size, true);
-    cd.setUint32(24, e.size, true);
-    cd.setUint16(28, e.nameBytes.length, true);
-    cd.setUint32(42, e.offset, true);
-    chunks.push(cd.buffer, e.nameBytes);
+    chunks.push(zipCentralRecord(e), e.nameBytes);
     offset += 46 + e.nameBytes.length;
   }
+  if (
+    central.length > ZIP_U16_MAX ||
+    offset - cdStart > ZIP_U32_MAX ||
+    cdStart > ZIP_U32_MAX
+  ) {
+    throw new Error(ZIP_TOO_LARGE_MSG);
+  }
 
-  const eocd = new DataView(new ArrayBuffer(22));
-  eocd.setUint32(0, 0x06054b50, true);
-  eocd.setUint16(8, central.length, true);
-  eocd.setUint16(10, central.length, true);
-  eocd.setUint32(12, offset - cdStart, true);
-  eocd.setUint32(16, cdStart, true);
-  chunks.push(eocd.buffer);
+  chunks.push(zipEocd(central.length, offset - cdStart, cdStart));
   return new Blob(chunks, { type: "application/zip" });
+}
+
+/**
+ * Incremental STORED-zip writer for a FileSystemWritableFileStream. Each
+ * entry is flushed to disk as it is produced, so a large batch holds at most
+ * one output file's bytes in memory at a time.
+ */
+export function createZipWriter(writable) {
+  const central = [];
+  const names = new Set();
+  let offset = 0;
+  return {
+    names,
+    async add(name, data) {
+      if (offset > ZIP_U32_MAX || data.length > ZIP_U32_MAX) {
+        throw new Error(ZIP_TOO_LARGE_MSG);
+      }
+      const p = zipLocalPieces(name, data);
+      await writable.write(p.local);
+      await writable.write(p.nameBytes);
+      await writable.write(data);
+      central.push({
+        nameBytes: p.nameBytes,
+        crc: p.crc,
+        size: p.size,
+        offset,
+        utf8Flag: p.utf8Flag,
+      });
+      offset += 30 + p.nameBytes.length + p.size;
+    },
+    async close() {
+      const cdStart = offset;
+      let cdSize = 0;
+      for (const e of central) cdSize += 46 + e.nameBytes.length;
+      if (
+        central.length > ZIP_U16_MAX ||
+        cdSize > ZIP_U32_MAX ||
+        cdStart > ZIP_U32_MAX
+      ) {
+        try {
+          await writable.abort();
+        } catch (_) {}
+        throw new Error(ZIP_TOO_LARGE_MSG);
+      }
+      for (const e of central) {
+        await writable.write(zipCentralRecord(e));
+        await writable.write(e.nameBytes);
+      }
+      await writable.write(zipEocd(central.length, cdSize, cdStart));
+      await writable.close();
+    },
+    async abort() {
+      try {
+        await writable.abort();
+      } catch (_) {}
+    },
+  };
 }

@@ -7,6 +7,7 @@ import {
   state,
   dom,
   prefs,
+  apiFetch,
   savePrefs,
   getActiveTab,
   defaultTierForNewTab,
@@ -17,6 +18,7 @@ import {
   openConfirmModal,
   triggerOpenFileDialog,
   filesFromDialogResult,
+  isImageFile,
   downloadBlob,
   FORMAT_EXT,
   formatElapsed,
@@ -26,6 +28,7 @@ import {
   buildBatchExportBlob,
   saveBatchFile,
   buildZip,
+  createZipWriter,
 } from "./export.js";
 import {
   renderTabBar,
@@ -74,7 +77,7 @@ export async function pickImageFiles(cb) {
         setError(res.error);
         return;
       }
-      const files = filesFromDialogResult(res);
+      const files = await filesFromDialogResult(res);
       if (files.length > 0) cb(files);
       return;
     } catch (_) {}
@@ -85,8 +88,13 @@ export async function pickImageFiles(cb) {
 
 /** Creates a batch tab from a file list and switches to it. */
 function createBatchTab(files) {
-  const list = Array.from(files || []).filter(Boolean);
-  if (!list.length) return;
+  const list = Array.from(files || []).filter(isImageFile);
+  if (!list.length) {
+    if (Array.from(files || []).length) {
+      setError("Only image files can be processed.");
+    }
+    return;
+  }
   saveStateToActiveTab();
 
   const tab = createTabRecord({
@@ -107,16 +115,21 @@ function createBatchTab(files) {
 
 /** Appends files to an existing batch tab's queue and re-renders its panel. */
 export function addFilesToBatchTab(tab, files) {
-  Array.from(files || [])
-    .filter(Boolean)
-    .forEach((f) =>
-      tab.batchFiles.push({
-        file: f,
-        name: f.name || "image",
-        size: f.size || 0,
-        status: "queued",
-      })
-    );
+  const all = Array.from(files || []).filter(Boolean);
+  const images = all.filter(isImageFile);
+  if (all.length && images.length === 0) {
+    setError("Only image files can be processed.");
+  } else if (images.length < all.length) {
+    setError("Non-image files skipped.");
+  }
+  images.forEach((f) =>
+    tab.batchFiles.push({
+      file: f,
+      name: f.name || "image",
+      size: f.size || 0,
+      status: "queued",
+    })
+  );
   if (tab.id === state.activeTabId) renderBatchPanel(tab);
   renderTabBar();
 }
@@ -133,13 +146,21 @@ function formatFileSize(n) {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/** Re-renders the batch queue list, counters, and Run button state. */
-export function renderBatchPanel(tab) {
-  if (!dom.batchPanel || tab.kind !== "batch") return;
-  dom.batchPanel.classList.add("active");
-  dom.stage.classList.remove("visible");
-  dom.emptyState.style.display = "none";
+/**
+ * Updates the batch header counters, check-all state, row disabled flags, and
+ * Run button label without rebuilding the queue DOM. Called from
+ * `syncMenuBarState`, which fires on every state change; the row list itself
+ * is only rebuilt by `renderBatchPanel` on structural changes.
+ */
+// Row elements of the currently rendered batch panel, indexed by queue
+// position, so status/toggle updates avoid O(n) selector scans per event.
+let batchRowEls = [];
+// Whether the row buttons were last disabled; the O(n) write only repeats
+// when the running flag actually flips, not on every state sync.
+let batchListDisabled = null;
 
+export function syncBatchPanelChrome(tab) {
+  if (!dom.batchPanel || tab.kind !== "batch") return;
   const n = tab.batchFiles.length;
   const selCount = tab.batchFiles.filter((e) => e.selected !== false).length;
   const runningThis = state.batch.running && state.batch.tabId === tab.id;
@@ -153,9 +174,41 @@ export function renderBatchPanel(tab) {
       selCount === 0 ? "" : selCount === n ? "x" : "–";
     dom.batchCheckAll.classList.toggle("on", selCount > 0);
     dom.batchCheckAll.disabled = state.batch.running;
+  }
+
+  // Cosmetic disable while a run owns the queue; the click guards still check
+  // `state.batch.running` so a stale row can't mutate mid-flight.
+  if (batchListDisabled !== state.batch.running) {
+    batchListDisabled = state.batch.running;
+    for (const row of batchRowEls) {
+      row.firstElementChild.disabled = state.batch.running;
+      row.lastElementChild.disabled = state.batch.running;
+    }
+  }
+
+  if (dom.btnDownload) {
+    dom.btnDownload.classList.toggle(
+      "disabled",
+      n === 0 || selCount === 0 || (state.isProcessing && !runningThis)
+    );
+    dom.btnDownload.textContent = runningThis ? "BATCH RUNNING…" : "RUN BATCH";
+  }
+}
+
+/** Re-renders the batch queue list, counters, and Run button state. */
+export function renderBatchPanel(tab) {
+  if (!dom.batchPanel || tab.kind !== "batch") return;
+  dom.batchPanel.classList.add("active");
+  dom.stage.classList.remove("visible");
+  dom.emptyState.style.display = "none";
+
+  if (dom.batchCheckAll) {
     dom.batchCheckAll.onclick = () => {
       if (state.batch.running) return;
-      const turnOn = selCount !== n;
+      const selCount = tab.batchFiles.filter(
+        (e) => e.selected !== false
+      ).length;
+      const turnOn = selCount !== tab.batchFiles.length;
       tab.batchFiles.forEach((e) => {
         e.selected = turnOn;
         if (!turnOn && e.status === "queued") e.status = "skipped";
@@ -167,8 +220,9 @@ export function renderBatchPanel(tab) {
 
   updateDestUI();
 
+  batchRowEls = [];
   dom.batchList.replaceChildren();
-  if (n === 0) {
+  if (tab.batchFiles.length === 0) {
     const hint = document.createElement("div");
     hint.className = "batch-empty-hint";
     hint.textContent = "EMPTY BATCH - DROP IMAGES OR USE ADD IMAGE";
@@ -181,12 +235,16 @@ export function renderBatchPanel(tab) {
     row.className = `batch-row${on ? "" : " off"}`;
     row.setAttribute("data-idx", String(i));
     row.draggable = true;
+    batchRowEls.push(row);
     row.addEventListener("dragstart", (e) => {
       if (state.batch.running) {
         e.preventDefault();
         return;
       }
-      state.dragBatchItem = { tabId: tab.id, index: i };
+      state.dragBatchItem = {
+        tabId: tab.id,
+        index: Number(row.getAttribute("data-idx")),
+      };
       row.classList.add("dragging");
       e.dataTransfer.effectAllowed = "copyMove";
       try {
@@ -213,10 +271,21 @@ export function renderBatchPanel(tab) {
     chk.addEventListener("click", (e) => {
       e.stopPropagation();
       if (state.batch.running) return;
-      entry.selected = !on;
-      if (!entry.selected && entry.status === "queued") entry.status = "skipped";
-      if (entry.selected && entry.status === "skipped") entry.status = "queued";
-      renderBatchPanel(tab);
+      // Look up the row's live index: rows re-index after removals, so a
+      // closure over the render-time `i` would target the wrong entry.
+      const idx = Number(row.getAttribute("data-idx"));
+      const ent = tab.batchFiles[idx];
+      if (!ent) return;
+      const on = ent.selected === false;
+      ent.selected = on;
+      if (!on && ent.status === "queued") ent.status = "skipped";
+      if (on && ent.status === "skipped") ent.status = "queued";
+      row.classList.toggle("off", !on);
+      chk.classList.toggle("on", on);
+      chk.setAttribute("aria-checked", String(on));
+      chk.textContent = on ? "x" : "";
+      updateBatchRowStatus(tab, idx);
+      syncBatchPanelChrome(tab);
     });
 
     const name = document.createElement("span");
@@ -234,36 +303,39 @@ export function renderBatchPanel(tab) {
     rm.className = "batch-row-remove";
     rm.textContent = "x";
     rm.title = "Remove from batch";
+    rm.disabled = state.batch.running;
     rm.addEventListener("click", (e) => {
       e.stopPropagation();
       if (state.batch.running) return;
-      tab.batchFiles.splice(i, 1);
+      const idx = Number(row.getAttribute("data-idx"));
+      if (idx < 0 || idx >= tab.batchFiles.length) return;
+      tab.batchFiles.splice(idx, 1);
       if (tab.batchFiles.length === 0) {
+        batchRowEls = [];
         closeTabImmediate(tab.id);
-      } else {
-        renderBatchPanel(tab);
-        renderTabBar();
+        return;
       }
+      batchRowEls.splice(idx, 1)[0].remove();
+      // Re-index the rows after the removed one; handlers read data-idx live.
+      for (let j = idx; j < batchRowEls.length; j++) {
+        batchRowEls[j].setAttribute("data-idx", String(j));
+      }
+      syncBatchPanelChrome(tab);
+      renderTabBar();
     });
     row.append(chk, name, size, st, rm);
     dom.batchList.appendChild(row);
   });
 
-  if (dom.btnDownload) {
-    dom.btnDownload.classList.toggle(
-      "disabled",
-      n === 0 || selCount === 0 || (state.isProcessing && !runningThis)
-    );
-    dom.btnDownload.textContent = runningThis ? "BATCH RUNNING…" : "RUN BATCH";
-  }
+  syncBatchPanelChrome(tab);
 }
 
 /** Sets one row's status chip and optional detail message. */
 function updateBatchRowStatus(tab, i) {
   if (tab.id !== state.activeTabId || !dom.batchList) return;
-  const row = dom.batchList.querySelector(`.batch-row[data-idx="${i}"]`);
-  if (!row) return;
+  const row = batchRowEls[i];
   const entry = tab.batchFiles[i];
+  if (!row || !entry) return;
   const st = row.querySelector(".batch-row-status");
   if (st) {
     st.className = `batch-row-status st-${entry.status}`;
@@ -515,7 +587,7 @@ async function processBatchEntry(batch, entry, snap, outputDir, controller) {
   fd.append("defringe", snap.defringe ? "true" : "false");
   fd.append("despill", snap.despill ? "true" : "false");
 
-  const response = await fetch("/api/remove-bg", {
+  const response = await apiFetch("/api/remove-bg", {
     method: "POST",
     body: fd,
     signal: controller.signal,
@@ -551,10 +623,21 @@ async function processBatchEntry(batch, entry, snap, outputDir, controller) {
     const ok = await saveBatchFile(outputDir, outName, outBlob);
     return ok ? "done" : "failed";
   }
-  const taken = new Set(batch.results.map((r) => r.name));
+  const taken = batch.zipWriter
+    ? batch.zipWriter.names
+    : new Set(batch.results.map((r) => r.name));
   let n = 1;
   while (taken.has(outName)) {
     outName = `${stem}-${suffix}-${n++}.${ext}`;
+  }
+  if (batch.zipWriter) {
+    // Streaming zip: the entry lands on disk immediately, so the batch never
+    // holds more than one output file's bytes in memory at a time.
+    await batch.zipWriter.add(
+      outName,
+      new Uint8Array(await outBlob.arrayBuffer())
+    );
+    return "done";
   }
   batch.results.push({ name: outName, blob: outBlob });
   return "done";
@@ -608,6 +691,31 @@ export async function runBatch(tab) {
       tab.outputDir = outputDir;
       if (tab.id === state.activeTabId) state.outputDir = outputDir;
     } catch (_) {}
+  }
+
+  // Browser path with no output folder: ask for the zip location up front
+  // (the RUN BATCH click still counts as user activation) and stream each
+  // entry to disk as it finishes, instead of buffering every blob for a
+  // monolithic download. Browsers without the File System Access API fall
+  // back to the in-memory zip below.
+  let zipHandle = null;
+  if (!outputDir && window.showSaveFilePicker) {
+    try {
+      zipHandle = await window.showSaveFilePicker({
+        suggestedName: "openbgr-cutouts.zip",
+        types: [
+          {
+            description: "ZIP archive",
+            accept: { "application/zip": [".zip"] },
+          },
+        ],
+      });
+      batch.zipWriter = createZipWriter(await zipHandle.createWritable());
+    } catch (pickerErr) {
+      if (pickerErr?.name === "AbortError") return;
+      batch.zipWriter = null;
+      zipHandle = null;
+    }
   }
 
   batch.running = true;
@@ -693,14 +801,29 @@ export async function runBatch(tab) {
   dom.busyOverlay.classList.remove("active");
   stopJobProgressPolling();
 
-  if (!outputDir && batch.results.length > 0) {
+  if (batch.zipWriter) {
+    if (wasCancelled) {
+      await batch.zipWriter.abort();
+    } else {
+      try {
+        await batch.zipWriter.close();
+      } catch (_) {
+        setError("Failed to write the ZIP archive.");
+      }
+    }
+    batch.zipWriter = null;
+  } else if (!outputDir && batch.results.length > 0) {
     const entries = await Promise.all(
       batch.results.map(async (r) => ({
         name: r.name,
         data: new Uint8Array(await r.blob.arrayBuffer()),
       }))
     );
-    downloadBlob(buildZip(entries), "openbgr-cutouts.zip");
+    try {
+      downloadBlob(buildZip(entries), "openbgr-cutouts.zip");
+    } catch (zipErr) {
+      setError(zipErr?.message || "Failed to build the ZIP archive.");
+    }
   }
   batch.results = [];
 
@@ -725,7 +848,9 @@ export async function runBatch(tab) {
         (batch.failed > 0 ? `, ${batch.failed} failed` : "") +
         (outputDir
           ? `.\nSaved to: ${outputDir}`
-          : ".\nDownloaded as openbgr-cutouts.zip."),
+          : zipHandle
+            ? `.\nSaved to: ${zipHandle.name}`
+            : ".\nDownloaded as openbgr-cutouts.zip."),
       confirmText: "DONE",
       hideCancel: true,
     },

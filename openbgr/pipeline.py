@@ -13,6 +13,7 @@ from typing import Any
 import numpy as np
 import torch
 from PIL import Image, ImageFilter, ImageOps
+from scipy.ndimage import maximum_filter1d, minimum_filter1d
 from torchvision import transforms
 
 from .config import (
@@ -28,6 +29,36 @@ from .models import (
     get_preprocess_transform,
     set_job_phase,
 )
+
+
+def _square_min_filter(arr: np.ndarray, size: int) -> np.ndarray:
+    """
+    Square morphological min filter computed as two separable 1-D passes
+    (horizontal then vertical). Output is identical to PIL's
+    `ImageFilter.MinFilter(size)` on `mode="nearest"` borders, but costs
+    O(2*size) per pixel instead of O(size^2).
+    """
+    return minimum_filter1d(
+        minimum_filter1d(arr, size, axis=0, mode="nearest"),
+        size,
+        axis=1,
+        mode="nearest",
+    )
+
+
+def _square_max_filter(arr: np.ndarray, size: int) -> np.ndarray:
+    """
+    Square morphological max filter computed as two separable 1-D passes
+    (horizontal then vertical). Output is identical to PIL's
+    `ImageFilter.MaxFilter(size)` on `mode="nearest"` borders, but costs
+    O(2*size) per pixel instead of O(size^2).
+    """
+    return maximum_filter1d(
+        maximum_filter1d(arr, size, axis=0, mode="nearest"),
+        size,
+        axis=1,
+        mode="nearest",
+    )
 
 
 def decontaminate_edge_colors(rgb_np: np.ndarray, alpha_np: np.ndarray) -> np.ndarray:
@@ -53,30 +84,28 @@ def decontaminate_edge_colors(rgb_np: np.ndarray, alpha_np: np.ndarray) -> np.nd
     if not np.any(edge_mask):
         return rgb_np
 
-    # Higher alpha pixels retain more of their original RGB; lower alpha pixels
-    # receive stronger foreground color propagation.
-    fg_weight = np.clip((alpha_norm - 0.5) * 2.0, 0.0, 1.0)[..., None]
-    rgb_float = rgb_np.astype(np.float32)
-
     # Dilate nearby solid foreground colors outward and smooth transitions.
-    dilated_pil = (
-        Image.fromarray(rgb_np).filter(ImageFilter.MaxFilter(5)).filter(ImageFilter.BoxBlur(1))
-    )
-    smooth_fg = np.array(dilated_pil, dtype=np.float32)
-    dilated_pil.close()
+    dilated_np = _square_max_filter(rgb_np, 5)
+    with Image.fromarray(dilated_np).filter(ImageFilter.BoxBlur(1)) as dilated_pil:
+        smooth_fg = np.array(dilated_pil, dtype=np.float32)
 
+    # Higher alpha pixels retain more of their original RGB; lower alpha pixels
+    # receive stronger foreground color propagation. Indexing by edge_mask runs
+    # the blend on an (n_edge, 3) subset instead of materializing ~1GB of
+    # full-frame float32 temporaries on 24MP images.
+    fg_weight = np.clip((alpha_norm[edge_mask] - 0.5) * 2.0, 0.0, 1.0)[:, None]
     blend_strength = (1.0 - fg_weight) * 0.65
-    cleaned_rgb = np.where(
-        edge_mask[..., None],
-        rgb_float * (1.0 - blend_strength) + smooth_fg * blend_strength,
-        rgb_float,
-    )
-    return np.clip(cleaned_rgb, 0, 255).astype(np.uint8)
+    cleaned_rgb = rgb_np.copy()
+    cleaned_rgb[edge_mask] = np.clip(
+        rgb_np[edge_mask].astype(np.float32) * (1.0 - blend_strength)
+        + smooth_fg[edge_mask] * blend_strength,
+        0,
+        255,
+    ).astype(np.uint8)
+    return cleaned_rgb
 
 
-def suppress_color_spill(
-    rgb_np: np.ndarray, mask_pil: Image.Image, alpha_norm: np.ndarray
-) -> np.ndarray:
+def suppress_color_spill(rgb_np: np.ndarray, alpha_norm: np.ndarray) -> np.ndarray:
     """
     Neutralizes background color spill (rim reflections & color bounce) along
     the outer boundary of the subject and inside semi-transparent glass/hair.
@@ -85,7 +114,7 @@ def suppress_color_spill(
     1. Estimates the local removed background RGB color (`local_bg`) adjacent to
        the subject via normalized box-filter convolution over background pixels (`alpha < 0.15`).
     2. Computes a spill receiver weight map combining:
-       - The outer solid rim of the subject (via morphological erosion `MinFilter(15)`).
+       - The outer solid rim of the subject (via a separable 15x15 morphological erosion).
        - Semi-transparent regions (`0.02 < alpha < 0.98`, such as hair, glass, or sheer fabric).
     3. Projects each receiver pixel's chromatic vector (`RGB - Luma`) onto the local
        background's chromatic vector (`B_local - B_luma`). Any positive chromatic alignment
@@ -96,31 +125,10 @@ def suppress_color_spill(
     if not np.any(bg_mask > 0):
         return rgb_np
 
-    rgb_float = rgb_np.astype(np.float32)
-
-    # Compute spatially-varying local background color via fast C-accelerated BoxBlur
-    bg_weight_u8 = (bg_mask * 255.0).astype(np.uint8)
-    with Image.fromarray(bg_weight_u8) as bg_weight_img:
-        bg_weight_blur = (
-            np.array(bg_weight_img.filter(ImageFilter.BoxBlur(24)), dtype=np.float32) / 255.0
-        )
-
-    prem_bg_u8 = np.clip(rgb_float * bg_mask[..., None], 0, 255).astype(np.uint8)
-    with Image.fromarray(prem_bg_u8) as prem_bg_img:
-        prem_bg_blur = np.array(prem_bg_img.filter(ImageFilter.BoxBlur(24)), dtype=np.float32)
-
-    # Fall back to global median background color where local background weight is zero
-    global_bg = np.median(rgb_float[bg_mask > 0.5], axis=0)
-    valid_w = bg_weight_blur[..., None] > 0.02
-    local_bg = np.where(
-        valid_w,
-        prem_bg_blur / np.maximum(bg_weight_blur[..., None], 0.02),
-        global_bg,
-    )
-
-    # Build rim + semi-transparent receiver weight map
-    with mask_pil.filter(ImageFilter.MinFilter(15)) as eroded_pil:
-        eroded_norm = np.array(eroded_pil, dtype=np.float32) / 255.0
+    # Build rim + semi-transparent receiver weight map. It does not depend on
+    # the blurred background maps, so computing it first lets the no-receiver
+    # early-out skip the BoxBlur passes entirely.
+    eroded_norm = _square_min_filter(alpha_norm, 15)
     solid_rim_weight = np.clip(alpha_norm - eroded_norm, 0.0, 1.0)
     translucent_weight = np.clip(4.0 * alpha_norm * (1.0 - alpha_norm), 0.0, 1.0)
     receiver_weight = np.clip(
@@ -130,19 +138,48 @@ def suppress_color_spill(
     if not np.any(receiver_weight > 0.01):
         return rgb_np
 
+    # Compute spatially-varying local background color via fast C-accelerated BoxBlur
+    bg_weight_u8 = (bg_mask * 255.0).astype(np.uint8)
+    with Image.fromarray(bg_weight_u8) as bg_weight_img:
+        bg_weight_blur = (
+            np.array(bg_weight_img.filter(ImageFilter.BoxBlur(24)), dtype=np.float32) / 255.0
+        )
+
+    prem_bg_u8 = rgb_np * bg_mask.astype(np.uint8)[..., None]
+    with Image.fromarray(prem_bg_u8) as prem_bg_img:
+        prem_bg_blur = np.array(prem_bg_img.filter(ImageFilter.BoxBlur(24)), dtype=np.float32)
+
+    # Fall back to global median background color where local background weight
+    # is zero. A strided spatial subsample keeps the median robust without
+    # copying ~70MB of masked pixels on 24MP inputs.
+    global_bg = np.median(rgb_np[::8, ::8][bg_mask[::8, ::8] > 0.5], axis=0).astype(np.float32)
+
+    # The chromatic projection only runs on receiver pixels (the rim plus
+    # semi-transparent areas): extracting that (n_recv, 3) subset avoids
+    # keeping ~1GB of full-frame float32 chroma maps live on 24MP images.
+    recv_mask = receiver_weight > 0
+    bg_w = bg_weight_blur[recv_mask]
+    local_bg = np.where(
+        (bg_w > 0.02)[:, None],
+        prem_bg_blur[recv_mask] / np.maximum(bg_w, 0.02)[:, None],
+        global_bg,
+    )
+
     # Chromatic projection: isolate color cast without altering pixel luminance
-    fg_luma = np.mean(rgb_float, axis=-1, keepdims=True)
+    fg_sub = rgb_np[recv_mask].astype(np.float32)
+    fg_luma = np.mean(fg_sub, axis=-1, keepdims=True)
     bg_luma = np.mean(local_bg, axis=-1, keepdims=True)
-    fg_chroma = rgb_float - fg_luma
+    fg_chroma = fg_sub - fg_luma
     bg_chroma = local_bg - bg_luma
 
     bg_chroma_norm_sq = np.sum(bg_chroma * bg_chroma, axis=-1, keepdims=True) + 1e-5
     proj = np.sum(fg_chroma * bg_chroma, axis=-1, keepdims=True) / bg_chroma_norm_sq
     # Only subtract positive chromatic alignment (up to 100% of background chroma)
-    spill_amount = np.clip(proj, 0.0, 1.0) * receiver_weight[..., None]
+    spill_amount = np.clip(proj, 0.0, 1.0) * receiver_weight[recv_mask][:, None]
 
-    despilled = rgb_float - spill_amount * bg_chroma
-    return np.clip(despilled, 0, 255).astype(np.uint8)
+    despilled = rgb_np.copy()
+    despilled[recv_mask] = np.clip(fg_sub - spill_amount * bg_chroma, 0, 255).astype(np.uint8)
+    return despilled
 
 
 # Cached raw outputs of the most recent segmentation job. Storing the
@@ -151,6 +188,11 @@ def suppress_color_spill(
 _JOB_ID_SEQ = itertools.count(1)
 _LAST_JOB: dict[str, Any] = {}
 _LAST_JOB_LOCK = threading.Lock()
+
+# Serializes compose_rgba across threads: segment_foreground runs it inside
+# inference_lock while /api/refine calls it standalone. Concurrent passes
+# would pile ~1GB of float32 temporaries onto a 24MP job.
+_COMPOSE_LOCK = threading.Lock()
 
 
 def get_last_job(job_id: int) -> dict[str, Any] | None:
@@ -172,18 +214,15 @@ def compose_rgba(
     composites the final 32-bit RGBA image. Runs in milliseconds (pure NumPy /
     Pillow C filters); no neural network involved.
     """
-    if defringe:
-        rgb_np = decontaminate_edge_colors(rgb_raw, alpha_np)
-    else:
-        rgb_np = rgb_raw
-    if despill:
-        alpha_norm = alpha_np.astype(np.float32) / 255.0
-        mask_pil = Image.fromarray(alpha_np)
-        try:
-            rgb_np = suppress_color_spill(rgb_np, mask_pil, alpha_norm)
-        finally:
-            mask_pil.close()
-    return Image.fromarray(np.dstack((rgb_np, alpha_np)))
+    with _COMPOSE_LOCK:
+        if defringe:
+            rgb_np = decontaminate_edge_colors(rgb_raw, alpha_np)
+        else:
+            rgb_np = rgb_raw
+        if despill:
+            alpha_norm = alpha_np.astype(np.float32) / 255.0
+            rgb_np = suppress_color_spill(rgb_np, alpha_norm)
+        return Image.fromarray(np.dstack((rgb_np, alpha_np)))
 
 
 def segment_foreground(

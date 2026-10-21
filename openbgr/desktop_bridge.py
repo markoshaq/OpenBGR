@@ -9,6 +9,7 @@ import base64
 import io
 import os
 import platform
+import secrets
 import shutil
 import subprocess
 import sys
@@ -27,6 +28,22 @@ from .quick_action_native import copy_png_bytes_to_clipboard
 
 # File types accepted from OS open-file events and clipboard path drops.
 _IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"})
+
+# Common image-data UTI types on the macOS pasteboard. Anything outside this
+# set falls back to NSImage.canInitWithPasteboard_ for fringe formats.
+_PASTEBOARD_IMAGE_UTIS = frozenset(
+    {
+        "public.png",
+        "public.tiff",
+        "public.jpeg",
+        "public.webp",
+        "public.heic",
+        "public.heif",
+        "com.compuserve.gif",
+        "com.microsoft.bmp",
+    }
+)
+_PASTEBOARD_FILE_TYPES = frozenset({"NSFilenamesPboardType", "public.file-url"})
 
 # Image paths handed to the app by the OS (argv / macOS 'odoc' AppleEvent) that
 # the frontend should ingest into tabs once the window is ready.
@@ -53,30 +70,47 @@ def get_pending_open_files_count() -> int:
         return len(_PENDING_OPEN_FILES)
 
 
-def _payload_for_paths(paths: list[Path], max_bytes: int) -> dict[str, Any]:
-    """Reads image files from disk into the {name, data_b64} dialog payload shape."""
-    files_out: list[dict[str, str]] = []
-    for file_path in paths:
-        if not file_path.is_file():
-            continue
-        try:
-            data = file_path.read_bytes()
-        except OSError:
-            continue
-        if len(data) > max_bytes:
-            return {
-                "cancelled": True,
-                "error": f"'{file_path.name}' exceeds the 48 MB native-dialog limit.",
-            }
-        files_out.append(
-            {
-                "name": file_path.name,
-                "data_b64": base64.b64encode(data).decode("ascii"),
-            }
-        )
-    if not files_out:
-        return {"files": []}
-    return {"files": files_out}
+# One-shot registry mapping opaque ids to local paths the user explicitly
+# handed to the app (native dialog picks, OS 'open with' events). Bytes are
+# served over `GET /api/local-file` instead of base64 through the JS bridge,
+# which removes the old 48 MB payload cap and the JSON encode/decode pass.
+_LOCAL_FILE_LOCK = threading.Lock()
+_LOCAL_FILES: dict[str, tuple[Path, float]] = {}
+_LOCAL_FILE_TTL_S = 600.0
+
+
+def _purge_expired_local_files() -> None:
+    """Drops stale file grants (caller must hold `_LOCAL_FILE_LOCK`)."""
+    now = time.monotonic()
+    stale = [k for k, (_, at) in _LOCAL_FILES.items() if now - at > _LOCAL_FILE_TTL_S]
+    for k in stale:
+        _LOCAL_FILES.pop(k, None)
+
+
+def register_local_files(paths: list[Path]) -> list[dict[str, Any]]:
+    """Grants one-time HTTP read access to user-picked files; returns {name, file_id, size} entries."""
+    granted: list[dict[str, Any]] = []
+    with _LOCAL_FILE_LOCK:
+        _purge_expired_local_files()
+        for file_path in paths:
+            try:
+                if not file_path.is_file():
+                    continue
+                size = file_path.stat().st_size
+            except OSError:
+                continue
+            file_id = secrets.token_urlsafe(16)
+            _LOCAL_FILES[file_id] = (file_path, time.monotonic())
+            granted.append({"name": file_path.name, "file_id": file_id, "size": size})
+    return granted
+
+
+def pop_local_file(file_id: str) -> Path | None:
+    """Returns the granted path for `file_id` once, or None when unknown or expired."""
+    with _LOCAL_FILE_LOCK:
+        _purge_expired_local_files()
+        entry = _LOCAL_FILES.pop(file_id, None)
+    return entry[0] if entry else None
 
 
 def take_pending_files() -> dict[str, Any]:
@@ -86,10 +120,7 @@ def take_pending_files() -> dict[str, Any]:
         _PENDING_OPEN_FILES.clear()
     if not paths:
         return {"files": []}
-    payload = _payload_for_paths([Path(p) for p in paths], DesktopApi.OPEN_DIALOG_MAX_BYTES)
-    if not payload.get("files") and "error" not in payload:
-        return {"files": []}
-    return payload
+    return {"files": register_local_files([Path(p) for p in paths])}
 
 
 def queue_open_files(paths: Any) -> None:
@@ -136,16 +167,40 @@ class DesktopApi:
     and theme synchronization, external browser links, and clean Quit.
     """
 
-    # Safety cap for the base64 bridge payload when reading picked images (~64 MP photos are fine).
+    # Safety cap for the base64 bridge payload used by clipboard image reads.
+    # File picks use file_id grants streamed over HTTP, so they are uncapped.
     OPEN_DIALOG_MAX_BYTES = 48 * 1024 * 1024
 
     def __init__(self) -> None:
         """The pywebview window handle is attached after `create_window`."""
         self.window: Any = None
+        # (sequence, has_image) of the last clipboard probe. Each OS exposes a
+        # cheap change counter so per-focus probes can skip the expensive
+        # content decode while the clipboard is unchanged.
+        self._clip_seq: Any = None
+        self._clip_has_image: bool | None = None
 
     def take_pending_files(self) -> dict[str, Any]:
         """Drains OS-delivered open-file requests (argv / macOS 'odoc') for ingestion."""
         return take_pending_files()
+
+    @staticmethod
+    def _macos_clipboard_paths() -> list[str]:
+        """Returns file paths on the macOS pasteboard (Finder copies), or []."""
+        try:
+            import AppKit
+
+            pb = AppKit.NSPasteboard.generalPasteboard()
+            paths = [str(p) for p in (pb.propertyListForType_("NSFilenamesPboardType") or [])]
+            if not paths:
+                url_str = pb.stringForType_("public.file-url")
+                if url_str:
+                    from urllib.parse import unquote, urlparse
+
+                    paths = [unquote(urlparse(url_str).path)]
+            return paths
+        except Exception:
+            return []
 
     @staticmethod
     def _dialog_mode(webview_mod: Any, kind: str) -> Any:
@@ -156,7 +211,7 @@ class DesktopApi:
         return getattr(webview_mod, f"{kind}_DIALOG")
 
     def open_image_dialog(self) -> dict[str, Any]:
-        """Opens the native Open File dialog and returns selected images as base64."""
+        """Opens the native Open File dialog and returns one-shot file grants for the picks."""
         if self.window is None:
             return {"cancelled": True}
         try:
@@ -174,12 +229,10 @@ class DesktopApi:
                 return {"cancelled": True}
 
             paths = list(result) if isinstance(result, (list, tuple)) else [str(result)]
-            payload = _payload_for_paths(
-                [Path(p_str) for p_str in paths], self.OPEN_DIALOG_MAX_BYTES
-            )
-            if not payload.get("files") and "error" not in payload:
+            files = register_local_files([Path(p_str) for p_str in paths])
+            if not files:
                 return {"cancelled": True}
-            return payload
+            return {"files": files}
         except Exception as exc:
             return {"cancelled": True, "error": str(exc)}
 
@@ -215,15 +268,16 @@ class DesktopApi:
             # and os.execv/os._exit reclaims device memory on its own.
             MANAGER.request_cancel()
             os.environ["OPENBGR_RESTARTING"] = "1"
-            try:
-                if self.window is not None:
-                    self.window.destroy()
-            except Exception:
-                pass
-            time.sleep(0.4)
             if platform.system() == "Windows":
+                # Spawn the replacement first (it inherits OPENBGR_RESTARTING
+                # and waits for our port), then exit before webview.start()
+                # can return and os._exit(0) on the main thread.
                 subprocess.Popen([sys.executable, *sys.argv], close_fds=True)
                 os._exit(0)
+            # No window.destroy() or delay: destroy() makes webview.start()
+            # return on the main thread, whose os._exit(0) kills us before
+            # execv runs. execv alone replaces this process, the window dies
+            # with it, and the O_CLOEXEC server sockets free the port.
             os.execv(sys.executable, [sys.executable, *sys.argv])
 
         logger.info("[Desktop] Restart requested.")
@@ -260,23 +314,72 @@ class DesktopApi:
         """
         Probes whether the native OS clipboard currently holds an image or an
         image file path, without triggering browser clipboard permission prompts.
+        On macOS the pasteboard's change counter and UTI list answer in
+        microseconds, while PIL's ImageGrab would spawn an osascript subprocess
+        and decode the data on every call (this runs on every window focus);
+        on Windows the clipboard sequence number gates the same PIL probe so
+        an unchanged clipboard costs nothing.
         """
+        sys_name = platform.system()
+
+        if sys_name == "Darwin":
+            try:
+                import AppKit
+
+                pb = AppKit.NSPasteboard.generalPasteboard()
+                seq: Any = pb.changeCount()
+                if seq == self._clip_seq:
+                    return {"has_image": self._clip_has_image}
+                types = set(pb.types() or [])
+                if types & _PASTEBOARD_IMAGE_UTIS:
+                    has_image: bool | None = True
+                elif types & _PASTEBOARD_FILE_TYPES:
+                    has_image = any(
+                        Path(str(p)).is_file() and Path(str(p)).suffix.lower() in _IMAGE_EXTENSIONS
+                        for p in self._macos_clipboard_paths()
+                    )
+                else:
+                    # Fringe image UTIs (Photoshop, camera RAW, ...) that
+                    # NSImage/PNGf translation can still serve.
+                    has_image = bool(AppKit.NSImage.canInitWithPasteboard_(pb))
+                self._clip_seq, self._clip_has_image = seq, has_image
+                return {"has_image": has_image}
+            except Exception:
+                pass
+
+        seq = None
+        if sys_name == "Windows":
+            try:
+                import ctypes
+
+                windll = getattr(ctypes, "windll", None)
+                seq = windll.user32.GetClipboardSequenceNumber() if windll is not None else None
+                if seq is not None and seq == self._clip_seq:
+                    return {"has_image": self._clip_has_image}
+            except Exception:
+                seq = None
+
         try:
             from PIL import ImageGrab
 
             grabbed = ImageGrab.grabclipboard()
             if isinstance(grabbed, Image.Image):
                 grabbed.close()
-                return {"has_image": True}
-            if isinstance(grabbed, (list, tuple)):
-                has_file = any(
+                has_result: bool | None = True
+            elif isinstance(grabbed, (list, tuple)):
+                has_result = any(
                     Path(str(item)).is_file()
                     and Path(str(item)).suffix.lower() in _IMAGE_EXTENSIONS
                     for item in grabbed
                 )
-                return {"has_image": has_file}
-            if platform.system() in ("Darwin", "Windows"):
-                return {"has_image": False}
+            elif sys_name in ("Darwin", "Windows"):
+                has_result = False
+            else:
+                has_result = None
+            if has_result is not None:
+                if seq is not None:
+                    self._clip_seq, self._clip_has_image = seq, has_result
+                return {"has_image": has_result}
         except Exception:
             pass
 
@@ -336,6 +439,20 @@ class DesktopApi:
                             }
         except Exception:
             pass
+
+        # PIL's macOS grabclipboard only yields PNG data; a file copied in
+        # Finder shows up as NSFilenamesPboardType paths on the pasteboard.
+        if platform.system() == "Darwin":
+            for item in self._macos_clipboard_paths():
+                p = Path(str(item))
+                if p.is_file() and p.suffix.lower() in _IMAGE_EXTENSIONS:
+                    data = p.read_bytes()
+                    if len(data) <= self.OPEN_DIALOG_MAX_BYTES:
+                        return {
+                            "has_image": True,
+                            "name": p.name,
+                            "data_b64": base64.b64encode(data).decode("ascii"),
+                        }
 
         # Linux fallback via wl-paste or xclip
         if platform.system() == "Linux":

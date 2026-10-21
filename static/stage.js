@@ -48,6 +48,37 @@ export function setZoom(newZoom) {
   applyZoomTransform();
 }
 
+let loupeCheckerPattern = null;
+let loupeCheckerIsLight = null;
+
+/**
+ * Builds (and caches) the checkerboard tile pattern painted under the loupe.
+ * Rebuilt only when the theme flips, so mousemove does not pay for
+ * `getComputedStyle` plus hundreds of `fillRect`s on every event.
+ */
+function getLoupeCheckerPattern(ctx) {
+  const isLight = document.documentElement.classList.contains("theme-light");
+  if (loupeCheckerPattern && loupeCheckerIsLight === isLight) {
+    return loupeCheckerPattern;
+  }
+  const cs = getComputedStyle(document.documentElement);
+  const a = cs.getPropertyValue("--checker-a").trim() || "#16161a";
+  const b = cs.getPropertyValue("--checker-b").trim() || "#0e0e11";
+  const tile = document.createElement("canvas");
+  tile.width = 20;
+  tile.height = 20;
+  const tctx = tile.getContext("2d");
+  tctx.fillStyle = a;
+  tctx.fillRect(0, 0, 10, 10);
+  tctx.fillRect(10, 10, 10, 10);
+  tctx.fillStyle = b;
+  tctx.fillRect(10, 0, 10, 10);
+  tctx.fillRect(0, 10, 10, 10);
+  loupeCheckerIsLight = isLight;
+  loupeCheckerPattern = ctx.createPattern(tile, "repeat");
+  return loupeCheckerPattern;
+}
+
 /** Draws the 4x circular magnifier at the pointer, sampling the correct stage layer. */
 export function renderLoupeAtPointer(clientX, clientY) {
   if (!state.loupeEnabled || !state.sourceFile || !dom.loupeCanvas) {
@@ -81,20 +112,11 @@ export function renderLoupeAtPointer(clientX, clientY) {
   ctx.clearRect(0, 0, size, size);
 
   if (state.activeBackdrop === "checker") {
-    const cs = getComputedStyle(document.documentElement);
-    const checkerA = cs.getPropertyValue("--checker-a").trim() || "#16161a";
-    const checkerB = cs.getPropertyValue("--checker-b").trim() || "#0e0e11";
-    const tile = 10;
-    for (let y = 0; y < size; y += tile) {
-      for (let x = 0; x < size; x += tile) {
-        ctx.fillStyle = ((x / tile + y / tile) & 1) === 0 ? checkerA : checkerB;
-        ctx.fillRect(x, y, tile, tile);
-      }
-    }
+    ctx.fillStyle = getLoupeCheckerPattern(ctx);
   } else {
     ctx.fillStyle = state.activeBackdrop;
-    ctx.fillRect(0, 0, size, size);
   }
+  ctx.fillRect(0, 0, size, size);
 
   const drawMagnifiedSource = (imgEl) => {
     const imgW = imgEl.naturalWidth;
@@ -106,8 +128,9 @@ export function renderLoupeAtPointer(clientX, clientY) {
     const sx = normX * imgW - sampleW / 2;
     const sy = normY * imgH - sampleH / 2;
 
+    // "low" keeps a full-res 4x sample cheap enough to run per mousemove.
     ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = "high";
+    ctx.imageSmoothingQuality = "low";
     ctx.drawImage(imgEl, sx, sy, sampleW, sampleH, 0, 0, size, size);
   };
 

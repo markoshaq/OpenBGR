@@ -7,6 +7,7 @@ import {
   state,
   dom,
   prefs,
+  apiFetch,
   masterCutoutImg,
   getActiveTab,
   defaultTierForNewTab,
@@ -26,6 +27,7 @@ import {
   formatDiskBytes,
   formatElapsed,
   clearResultState,
+  isImageFile,
 } from "./state.js";
 import { renderStageGeometry, applyZoomTransform } from "./stage.js";
 import {
@@ -42,6 +44,7 @@ import {
 } from "./preferences.js";
 import {
   renderBatchPanel,
+  syncBatchPanelChrome,
   mergeTabsIntoBatch,
   extractBatchItemToTab,
   moveBatchItemToBatch,
@@ -295,9 +298,11 @@ export function closeTabImmediate(tabId) {
       state.abortController.abort();
       state.abortController = null;
     }
-    fetch("/api/cancel", { method: "POST" }).catch(() => {});
+    apiFetch("/api/cancel", { method: "POST" }).catch(() => {});
     state.isProcessing = false;
     dom.busyOverlay.classList.remove("active");
+    stopJobProgressPolling();
+    stopElapsedTicker();
   }
 
   revokeTabUrls(tab);
@@ -308,9 +313,10 @@ export function closeTabImmediate(tabId) {
       state.abortController.abort();
       state.abortController = null;
     }
-    fetch("/api/cancel", { method: "POST" }).catch(() => {});
+    apiFetch("/api/cancel", { method: "POST" }).catch(() => {});
     state.isProcessing = false;
     dom.busyOverlay.classList.remove("active");
+    stopJobProgressPolling();
   }
 
   state.tabs.splice(idx, 1);
@@ -370,6 +376,9 @@ export async function switchToTab(tabId) {
   if (state.activeTabId && state.activeTabId !== tabId) {
     saveStateToActiveTab();
   }
+  // Invalidate any debounced preview render still queued for the old tab so a
+  // late canvas encode can't paint over the incoming tab's image.
+  state.previewRenderToken++;
 
   const tab = state.tabs.find((t) => t.id === tabId);
   if (!tab) return;
@@ -490,6 +499,9 @@ export async function switchToTab(tabId) {
     updateExportTelemetry();
   } else {
     dom.afterImg.src = state.originalObjectUrl;
+    // Release the previous tab's decoded cutout bitmap while this tab has
+    // no result; it is re-decoded from resultObjectUrl on switch-back.
+    masterCutoutImg.src = "about:blank";
     dom.appShell?.classList.remove("no-image");
     dom.appShell?.classList.add("no-result");
     dom.btnDownload.classList.add("disabled");
@@ -501,6 +513,10 @@ export async function switchToTab(tabId) {
 
 /** Loads a File/Blob into the current (or a new) tab and shows the loaded state. */
 export function ingestImageFile(file) {
+  if (!isImageFile(file)) {
+    setError("Only image files can be processed.");
+    return;
+  }
   saveStateToActiveTab();
 
   const rawName = file.name || nextClipboardName();
@@ -660,7 +676,8 @@ export function syncMenuBarState() {
         : "PROCESS IMAGE";
   }
 
-  if (activeTabNow?.kind === "batch") renderBatchPanel(activeTabNow);
+  // Chrome only: counters/disabled flags, not a rebuild of every queue row.
+  if (activeTabNow?.kind === "batch") syncBatchPanelChrome(activeTabNow);
 }
 
 /** Aborts the in-flight segmentation fetch and tells the server to drop the job. */
@@ -672,9 +689,10 @@ export function cancelProcessing() {
     state.abortController.abort();
     state.abortController = null;
   }
-  fetch("/api/cancel", { method: "POST" }).catch(() => {});
+  apiFetch("/api/cancel", { method: "POST" }).catch(() => {});
   state.isProcessing = false;
   dom.busyOverlay.classList.remove("active");
+  stopJobProgressPolling();
   closeConfirmModal();
   const elapsedMs = stopElapsedTicker();
   dom.statTime.textContent =
@@ -740,7 +758,7 @@ function setBusyProgress(pct) {
 /** Polls `/api/progress` so the busy overlay tracks download/load/inference stages. */
 async function pollJobProgress() {
   try {
-    const res = await fetch("/api/progress");
+    const res = await apiFetch("/api/progress");
     if (!res.ok) return;
     const p = await res.json();
     if (!state.isProcessing) return;
@@ -832,7 +850,7 @@ export async function runSegmentation() {
 
   if (state.abortController) {
     state.abortController.abort();
-    fetch("/api/cancel", { method: "POST" }).catch(() => {});
+    apiFetch("/api/cancel", { method: "POST" }).catch(() => {});
   }
   const controller = new AbortController();
   state.abortController = controller;
@@ -860,7 +878,7 @@ export async function runSegmentation() {
   formData.append("despill", state.despill ? "true" : "false");
 
   try {
-    const response = await fetch("/api/remove-bg", {
+    const response = await apiFetch("/api/remove-bg", {
       method: "POST",
       body: formData,
       signal: controller.signal,
@@ -942,11 +960,18 @@ export async function runSegmentation() {
       state.abortController = null;
       dom.busyOverlay.classList.remove("active");
       stopJobProgressPolling();
+      stopElapsedTicker();
       closeConfirmModal();
       if (state.resultBlob) {
         dom.appShell?.classList.remove("no-result");
       }
       syncMenuBarState();
+    } else if (!state.abortController) {
+      // The job was cancelled or its tab closed without a replacement run
+      // taking over: kill the orphaned poller and ticker instead of letting
+      // them fire every 250 ms forever.
+      stopJobProgressPolling();
+      stopElapsedTicker();
     }
   }
 }
@@ -969,46 +994,72 @@ export async function applyEdgeRefinement() {
     return;
   }
 
-  const token = ++state.refineToken;
-  const fd = new FormData();
-  fd.append("job_id", String(state.refineJobId));
-  fd.append("defringe", state.defringe ? "true" : "false");
-  fd.append("despill", state.despill ? "true" : "false");
-
+  // Coalesce rapid toggle clicks: while a request is in flight, only the
+  // latest flag state is rendered (one extra request) instead of queueing
+  // one server-side compose per click.
+  if (state.refineInFlight) {
+    state.refinePending = true;
+    return;
+  }
+  state.refineInFlight = true;
   try {
-    const response = await fetch("/api/refine", { method: "POST", body: fd });
-    if (!response.ok) {
-      if (response.status === 409 && token === state.refineToken) {
-        dom.statTime.textContent = "REPROCESS TO APPLY";
+    do {
+      state.refinePending = false;
+      if (
+        !state.refineJobId ||
+        !state.resultBlob ||
+        state.isProcessing ||
+        getActiveTab()?.kind === "batch"
+      ) {
+        break;
       }
-      return;
-    }
+      const token = ++state.refineToken;
+      const fd = new FormData();
+      fd.append("job_id", String(state.refineJobId));
+      fd.append("defringe", state.defringe ? "true" : "false");
+      fd.append("despill", state.despill ? "true" : "false");
 
-    const blob = await response.blob();
-    if (token !== state.refineToken) return;
+      try {
+        const response = await apiFetch("/api/refine", {
+          method: "POST",
+          body: fd,
+        });
+        if (!response.ok) {
+          if (response.status === 409 && token === state.refineToken) {
+            dom.statTime.textContent = "REPROCESS TO APPLY";
+          }
+          continue;
+        }
 
-    state.resultBlob = blob;
-    state.previewBlob = null;
-    if (
-      state.previewObjectUrl &&
-      state.previewObjectUrl !== state.resultObjectUrl
-    ) {
-      URL.revokeObjectURL(state.previewObjectUrl);
-    }
-    state.previewObjectUrl = null;
-    if (state.resultObjectUrl) {
-      URL.revokeObjectURL(state.resultObjectUrl);
-    }
-    state.resultObjectUrl = URL.createObjectURL(blob);
+        const blob = await response.blob();
+        if (token !== state.refineToken) continue;
 
-    await new Promise((resolve) => {
-      masterCutoutImg.onload = resolve;
-      masterCutoutImg.onerror = resolve;
-      masterCutoutImg.src = state.resultObjectUrl;
-    });
-    if (token !== state.refineToken) return;
+        state.resultBlob = blob;
+        state.previewBlob = null;
+        if (
+          state.previewObjectUrl &&
+          state.previewObjectUrl !== state.resultObjectUrl
+        ) {
+          URL.revokeObjectURL(state.previewObjectUrl);
+        }
+        state.previewObjectUrl = null;
+        if (state.resultObjectUrl) {
+          URL.revokeObjectURL(state.resultObjectUrl);
+        }
+        state.resultObjectUrl = URL.createObjectURL(blob);
 
-    updateLiveStagePreview();
-    saveStateToActiveTab();
-  } catch (_) {}
+        await new Promise((resolve) => {
+          masterCutoutImg.onload = resolve;
+          masterCutoutImg.onerror = resolve;
+          masterCutoutImg.src = state.resultObjectUrl;
+        });
+        if (token !== state.refineToken) continue;
+
+        updateLiveStagePreview();
+        saveStateToActiveTab();
+      } catch (_) {}
+    } while (state.refinePending);
+  } finally {
+    state.refineInFlight = false;
+  }
 }

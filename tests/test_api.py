@@ -114,7 +114,7 @@ class TestApiContracts(unittest.TestCase):
         self.assertEqual(ctx2.exception.status_code, 400)
 
     def test_desktop_api_pending_files_and_bridge(self) -> None:
-        """`DesktopApi` queues and drains pending files and enforces the 48 MB dialog cap."""
+        """`DesktopApi` queues and drains pending files as one-shot file_id grants."""
         bridge = bridge_mod.DesktopApi()
         with tempfile.TemporaryDirectory() as tmp:
             img_path = Path(tmp) / "test.png"
@@ -124,6 +124,7 @@ class TestApiContracts(unittest.TestCase):
             drained = bridge.take_pending_files()
             self.assertEqual(len(drained["files"]), 1)
             self.assertEqual(drained["files"][0]["name"], "test.png")
+            self.assertTrue(drained["files"][0]["file_id"])
             # Subsequent drain is empty
             self.assertEqual(bridge.take_pending_files(), {"files": []})
 
@@ -136,16 +137,21 @@ class TestApiContracts(unittest.TestCase):
             self.assertEqual(http_drained["files"][0]["name"], "test.png")
             self.assertEqual(api_mod.api_take_pending_files(), {"files": []})
 
-            # Clipboard probe handles PIL Image, file list, and empty clipboard
+            # Clipboard probe handles PIL Image, file list, and empty clipboard.
+            # Pin the platform to Windows so the PIL path runs: on macOS the
+            # fast pasteboard check answers before PIL is ever consulted.
             from PIL import ImageGrab
 
             fake_clip = Image.new("RGBA", (8, 8), (255, 0, 0, 255))
-            with patch.object(ImageGrab, "grabclipboard", return_value=fake_clip):
-                self.assertEqual(bridge.has_clipboard_image(), {"has_image": True})
-            with patch.object(ImageGrab, "grabclipboard", return_value=[str(img_path)]):
-                self.assertEqual(bridge.has_clipboard_image(), {"has_image": True})
-            with patch.object(ImageGrab, "grabclipboard", return_value=[str(Path(tmp) / "a.txt")]):
-                self.assertEqual(bridge.has_clipboard_image(), {"has_image": False})
+            with patch.object(bridge_mod.platform, "system", return_value="Windows"):
+                with patch.object(ImageGrab, "grabclipboard", return_value=fake_clip):
+                    self.assertEqual(bridge.has_clipboard_image(), {"has_image": True})
+                with patch.object(ImageGrab, "grabclipboard", return_value=[str(img_path)]):
+                    self.assertEqual(bridge.has_clipboard_image(), {"has_image": True})
+                with patch.object(
+                    ImageGrab, "grabclipboard", return_value=[str(Path(tmp) / "a.txt")]
+                ):
+                    self.assertEqual(bridge.has_clipboard_image(), {"has_image": False})
 
     def test_queue_open_files_rejects_non_images(self) -> None:
         """Launch-time 'odoc' events for the script itself (app.py) are filtered out."""
@@ -200,10 +206,43 @@ class TestApiEndpoints(unittest.TestCase):
         from fastapi.testclient import TestClient
 
         cls.client = TestClient(api_mod.app)
+        # Mutating endpoints require the per-session token header.
+        cls.client.headers.update({config_mod.API_TOKEN_HEADER: config_mod.API_TOKEN})
 
     def setUp(self) -> None:
         with bridge_mod._PENDING_OPEN_LOCK:
             bridge_mod._PENDING_OPEN_FILES.clear()
+
+    def test_mutating_endpoints_require_session_token(self) -> None:
+        """Mutating `/api/*` calls without a valid token or cross-site are rejected."""
+        from fastapi.testclient import TestClient
+
+        bare = TestClient(api_mod.app)
+        self.assertEqual(bare.post("/api/cancel").status_code, 403)
+        self.assertEqual(
+            bare.post(
+                "/api/cancel",
+                headers={config_mod.API_TOKEN_HEADER: "wrong-token"},
+            ).status_code,
+            403,
+        )
+        # Even a valid token is refused when fetch metadata says cross-site.
+        self.assertEqual(
+            bare.post(
+                "/api/cancel",
+                headers={
+                    config_mod.API_TOKEN_HEADER: config_mod.API_TOKEN,
+                    "sec-fetch-site": "cross-site",
+                },
+            ).status_code,
+            403,
+        )
+        # Read-only endpoints stay open, and the page carries the token.
+        self.assertEqual(bare.get("/api/progress").status_code, 200)
+        home = bare.get("/")
+        self.assertEqual(home.status_code, 200)
+        self.assertIn('name="openbgr-api-token"', home.text)
+        self.assertIn(config_mod.API_TOKEN, home.text)
 
     def test_status_and_progress_over_http(self) -> None:
         """`GET /api/status` and `/api/progress` return 200 with their contract fields."""
@@ -269,6 +308,25 @@ class TestApiEndpoints(unittest.TestCase):
 
             res = self.client.post("/api/pending-files")
             self.assertEqual(res.json()["files"], [])
+
+    def test_local_file_grant_streams_once_over_http(self) -> None:
+        """`GET /api/local-file` serves a granted path exactly once, then 404s."""
+        with tempfile.TemporaryDirectory() as tmp:
+            img = Path(tmp) / "picked.png"
+            img.write_bytes(b"img-bytes")
+            grants = bridge_mod.register_local_files([img])
+            self.assertEqual(len(grants), 1)
+            file_id = grants[0]["file_id"]
+
+            res = self.client.get(f"/api/local-file?file_id={file_id}")
+            self.assertEqual(res.status_code, 200)
+            self.assertEqual(res.content, b"img-bytes")
+
+            # One-shot grant: a second fetch is refused, as are unknown ids.
+            res = self.client.get(f"/api/local-file?file_id={file_id}")
+            self.assertEqual(res.status_code, 404)
+            res = self.client.get("/api/local-file?file_id=nope")
+            self.assertEqual(res.status_code, 404)
 
     def test_remove_bg_http_validation(self) -> None:
         """`POST /api/remove-bg` maps bad tier/empty/undecodable uploads to HTTP 400."""

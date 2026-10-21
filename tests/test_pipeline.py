@@ -49,10 +49,7 @@ class TestPipeline(unittest.TestCase):
         self.assertEqual(defringed.shape, (32, 32, 3))
         self.assertEqual(defringed.dtype, np.uint8)
 
-        mask_pil = Image.fromarray(alpha)
-        despilled = pipeline_mod.suppress_color_spill(
-            defringed, mask_pil, alpha.astype(np.float32) / 255.0
-        )
+        despilled = pipeline_mod.suppress_color_spill(defringed, alpha.astype(np.float32) / 255.0)
         self.assertEqual(despilled.shape, (32, 32, 3))
         self.assertEqual(despilled.dtype, np.uint8)
 

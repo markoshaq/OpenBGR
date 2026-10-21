@@ -7,6 +7,7 @@ import {
   state,
   dom,
   prefs,
+  apiFetch,
   DOT_TOOLTIPS,
   TIER_KEYS,
   ACCENTS,
@@ -178,7 +179,7 @@ export async function openCacheFolder() {
       const res = await window.pywebview.api.open_cache_dir();
       if (res?.opened) return;
     }
-    const response = await fetch("/api/open-cache-dir", { method: "POST" });
+    const response = await apiFetch("/api/open-cache-dir", { method: "POST" });
     if (!response.ok) {
       throw new Error("Could not open cache folder.");
     }
@@ -194,7 +195,7 @@ export async function openLogsFolder() {
       const res = await window.pywebview.api.open_logs_dir();
       if (res?.opened) return;
     }
-    const response = await fetch("/api/open-logs-dir", { method: "POST" });
+    const response = await apiFetch("/api/open-logs-dir", { method: "POST" });
     if (!response.ok) {
       throw new Error("Could not open logs folder.");
     }
@@ -234,7 +235,7 @@ export async function uninstallModel(target) {
   try {
     const fd = new FormData();
     fd.append("target", target);
-    const response = await fetch("/api/models/uninstall", {
+    const response = await apiFetch("/api/models/uninstall", {
       method: "POST",
       body: fd,
     });
@@ -281,7 +282,7 @@ async function installModel(target) {
   const smooth = createByteSmoother();
   let dlPeak = 0;
   const installPoll = setInterval(() => {
-    fetch("/api/progress")
+    apiFetch("/api/progress")
       .then((r) => (r.ok ? r.json() : null))
       .then((p) => {
         if (!p || p.phase !== "download") return;
@@ -306,7 +307,7 @@ async function installModel(target) {
   try {
     const fd = new FormData();
     fd.append("target", norm);
-    const response = await fetch("/api/models/install", {
+    const response = await apiFetch("/api/models/install", {
       method: "POST",
       body: fd,
     });
@@ -416,7 +417,7 @@ export async function syncQuickActionConfigToServer() {
     fd.append("edge_refine", String(Boolean(prefs.qaEdgeRefine)));
     fd.append("copy_clipboard", String(Boolean(prefs.qaCopyClipboard)));
     fd.append("notify", String(Boolean(prefs.qaNotify)));
-    const res = await fetch("/api/quick-action-config", {
+    const res = await apiFetch("/api/quick-action-config", {
       method: "POST",
       body: fd,
     });
@@ -460,7 +461,7 @@ export async function toggleQuickActionInstall() {
   try {
     const fd = new FormData();
     fd.append("action", action);
-    const res = await fetch("/api/quick-action-install", {
+    const res = await apiFetch("/api/quick-action-install", {
       method: "POST",
       body: fd,
     });
@@ -482,7 +483,7 @@ export async function toggleQuickActionInstall() {
 /** Fetches `/api/status`, populates hardware/model/cache/system readouts, and syncs default model. */
 export async function syncServerStatus(isInitialLoad = false, onSelectTier = null) {
   try {
-    const response = await fetch("/api/status");
+    const response = await apiFetch("/api/status");
     state.serverStatus = await response.json();
 
     const { device_label, precision, ram_label, ram_gb, recommended_tier, version } =

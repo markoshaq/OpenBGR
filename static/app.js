@@ -8,6 +8,7 @@ import {
   state,
   dom,
   prefs,
+  apiFetch,
   TIER_KEYS,
   savePrefs,
   getDefaultPrefs,
@@ -20,6 +21,7 @@ import {
   triggerOpenFileDialog,
   base64ToBlob,
   filesFromDialogResult,
+  isImageFile,
   openExternalUrl,
 } from "./state.js";
 import {
@@ -501,6 +503,13 @@ dom.stage.addEventListener("mousedown", (e) => {
 });
 
 window.addEventListener("mousemove", (e) => {
+  // Releasing the button outside the window never delivers mouseup, so a
+  // latched drag flag would keep panning/splitting with no button held.
+  if (e.buttons === 0 && (state.isPanning || state.isDraggingSplit)) {
+    state.isPanning = false;
+    state.isDraggingSplit = false;
+    dom.stage.classList.remove("panning");
+  }
   if (state.isPanning) {
     state.panX = e.clientX - state.panStartX;
     state.panY = e.clientY - state.panStartY;
@@ -559,7 +568,7 @@ async function openImageDialog() {
         setError(res.error);
         return;
       }
-      const files = filesFromDialogResult(res);
+      const files = await filesFromDialogResult(res);
       if (files.length > 1) {
         openMultiFileChooser(files, "SELECTED");
       } else if (files.length === 1) {
@@ -596,9 +605,17 @@ dom.btnBatchAdd?.addEventListener("click", () => {
 });
 
 dom.fileInput.addEventListener("change", (e) => {
-  const files = Array.from(e.target.files || []);
+  const picked = Array.from(e.target.files || []);
+  const files = picked.filter(isImageFile);
   const expecting = state.expectingBatch;
   state.expectingBatch = false;
+  if (picked.length && files.length === 0) {
+    setError("Only image files can be processed.");
+    return;
+  }
+  if (files.length < picked.length) {
+    setError("Non-image files skipped.");
+  }
   if (files.length === 0) return;
   if (expecting) {
     requestBatchDispatch(files);
@@ -645,8 +662,16 @@ window.addEventListener("drop", (e) => {
     return;
   }
 
-  const files = Array.from(e.dataTransfer?.files || []);
-  if (files.length === 0) return;
+  const dropped = Array.from(e.dataTransfer?.files || []);
+  if (dropped.length === 0) return;
+  const files = dropped.filter(isImageFile);
+  if (files.length === 0) {
+    setError("Only image files can be processed.");
+    return;
+  }
+  if (files.length < dropped.length) {
+    setError("Non-image files skipped.");
+  }
 
   const activeTab = getActiveTab();
   if (activeTab?.kind === "batch" && !state.batch.running) {
@@ -764,17 +789,18 @@ async function pullPendingFiles() {
   try {
     let res = null;
     if (window.pywebview?.api?.take_pending_files) {
+      // The bridge drains the same Python queue as the HTTP endpoint, so an
+      // empty bridge answer is definitive; no redundant POST needed.
       res = await window.pywebview.api.take_pending_files();
-    }
-    if (!res?.files?.length && !res?.error) {
-      const httpRes = await fetch("/api/pending-files", { method: "POST" });
+    } else {
+      const httpRes = await apiFetch("/api/pending-files", { method: "POST" });
       if (httpRes.ok) res = await httpRes.json();
     }
     if (res?.error) {
       setError(res.error);
       return;
     }
-    const files = filesFromDialogResult(res);
+    const files = await filesFromDialogResult(res);
     if (!files.length) return;
     if (state.isProcessing) cancelProcessing();
     if (files.length > 1) {
@@ -1139,6 +1165,12 @@ applyBackdrop(state.activeBackdrop);
 syncServerStatus(true, selectTier);
 
 // Ingest OS-delivered files (Open With / argv / Dock drops) once the bridge is
-// up, then keep polling so files sent to an already-running instance arrive too.
+// up, then keep polling so files sent to an already-running instance arrive
+// too. In desktop mode the backend pushes new arrivals over evaluate_js, so
+// the poll is only a safety net and can run slowly; in browser mode the poll
+// is the only channel, so it stays quick.
 pullPendingFiles();
-setInterval(pullPendingFiles, 2000);
+setInterval(
+  pullPendingFiles,
+  window.pywebview?.api?.take_pending_files ? 10000 : 2000
+);

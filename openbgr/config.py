@@ -9,6 +9,7 @@ import logging
 import os
 import platform
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -62,6 +63,35 @@ QUICK_ACTION_CONFIG_PATH = APP_CONFIG_DIR / "quick_action.json"
 NOTIFIER_APP_PATH = APP_CONFIG_DIR / "OpenBGRNotifier.app"
 NOTIFIER_ICNS_PATH = APP_CONFIG_DIR / "OpenBGR.icns"
 LOG_FILE_PATH = APP_CONFIG_DIR / "openbgr.log"
+
+# Per-session token guarding mutating `/api/*` endpoints against cross-origin
+# (drive-by) requests from arbitrary web pages. It is generated fresh per
+# process and injected into the served `index.html`, so only a page loaded
+# from the real server can read it. The token is persisted to
+# `~/.openbgr/session_token` (0600) by the process that actually serves HTTP,
+# letting trusted local clients (Quick Action delegation, open-files
+# forwarding) authenticate without ever exposing it to other origins.
+API_TOKEN_HEADER = "x-openbgr-token"
+API_TOKEN_PATH = APP_CONFIG_DIR / "session_token"
+API_TOKEN = secrets.token_urlsafe(32)
+
+
+def persist_api_token() -> None:
+    """Writes the session token to `~/.openbgr/` (0600) for trusted local clients."""
+    try:
+        APP_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        API_TOKEN_PATH.write_text(API_TOKEN, encoding="utf-8")
+        os.chmod(API_TOKEN_PATH, 0o600)
+    except OSError:
+        pass
+
+
+def read_api_token() -> str:
+    """Reads the running server's session token; empty when none is available."""
+    try:
+        return API_TOKEN_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
 def _stderr_is_log_file() -> bool:
@@ -392,6 +422,10 @@ RECOMMENDED_TIER: str = select_recommended_tier(DEVICE)
 
 _APP_DISK_CACHE: tuple[float, int] = (0.0, 0)
 _APP_DISK_LOCK = threading.Lock()
+# Heavyweight runtime trees (`.venv`, `node_modules`) hold tens of thousands of
+# files; they are sized once on a background thread and merged into the total.
+_APP_VENV_BYTES: int | None = None
+_APP_VENV_STARTED = False
 
 
 def _dir_tree_bytes(root: Path, skip_top_dirs: set[str] | None = None) -> int:
@@ -419,20 +453,39 @@ def _dir_tree_bytes(root: Path, skip_top_dirs: set[str] | None = None) -> int:
     return total
 
 
+def _refresh_app_venv_bytes() -> None:
+    """Sizes `.venv` and `node_modules` off the request path for `get_app_disk_bytes`."""
+    global _APP_VENV_BYTES
+    total = 0
+    for name in (".venv", "node_modules"):
+        sub = BASE_DIR / name
+        if sub.is_dir():
+            total += _dir_tree_bytes(sub)
+    _APP_VENV_BYTES = total
+
+
 def get_app_disk_bytes() -> int:
     """
     Returns total disk usage of the OpenBGR application and its Python runtime
-    environment (`BASE_DIR` including `.venv`, plus `~/.openbgr`). Cached for
-    60 seconds so `/api/status` remains sub-millisecond.
+    environment (`BASE_DIR` plus `~/.openbgr`). Cached for 60 seconds so
+    `/api/status` remains sub-millisecond. `.venv` and `node_modules` are
+    summed once on a background thread and merged in when ready.
     """
-    global _APP_DISK_CACHE
+    global _APP_DISK_CACHE, _APP_VENV_STARTED
     now = time.monotonic()
     with _APP_DISK_LOCK:
         cached_at, cached_val = _APP_DISK_CACHE
         if cached_val > 0 and (now - cached_at) < 60.0:
             return cached_val
 
-    total = _dir_tree_bytes(BASE_DIR, skip_top_dirs={".git", "dist"})
+    total = _dir_tree_bytes(BASE_DIR, skip_top_dirs={".git", "dist", ".venv", "node_modules"})
+    if _APP_VENV_BYTES is not None:
+        total += _APP_VENV_BYTES
+    else:
+        with _APP_DISK_LOCK:
+            if not _APP_VENV_STARTED:
+                _APP_VENV_STARTED = True
+                threading.Thread(target=_refresh_app_venv_bytes, daemon=True).start()
     cfg_dir = APP_CONFIG_DIR
     if cfg_dir.exists():
         total += _dir_tree_bytes(cfg_dir)

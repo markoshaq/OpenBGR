@@ -10,6 +10,8 @@ import socket
 import time
 from pathlib import Path
 
+from .config import API_TOKEN_HEADER, read_api_token
+
 
 def wait_for_server(host: str, port: int, timeout_s: float = 15.0) -> bool:
     """Polls until the local Uvicorn TCP socket is accepting connections."""
@@ -50,6 +52,9 @@ def forward_open_files_to_server(url: str, paths: list[str]) -> bool:
     try:
         data = urllib.parse.urlencode([("files", p) for p in resolved]).encode("utf-8")
         req = urllib.request.Request(f"{url}/api/open-files", data=data, method="POST")
+        token = read_api_token()
+        if token:
+            req.add_header(API_TOKEN_HEADER, token)
         with urllib.request.urlopen(req, timeout=5) as res:
             payload = json.loads(res.read().decode("utf-8"))
             return bool(isinstance(payload, dict) and payload.get("ok"))

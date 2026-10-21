@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import io
 import platform
+import secrets
 import shutil
 import threading
 from contextlib import asynccontextmanager
@@ -14,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from huggingface_hub import snapshot_download
 from huggingface_hub.constants import HF_HUB_CACHE
@@ -22,6 +23,8 @@ from PIL import Image
 
 from . import desktop_bridge as desktop
 from .config import (
+    API_TOKEN,
+    API_TOKEN_HEADER,
     APP_CONFIG_DIR,
     APP_VERSION,
     DEVICE,
@@ -38,6 +41,7 @@ from .config import (
     logger,
     normalize_tier_key,
     open_folder_in_file_manager,
+    persist_api_token,
 )
 from .models import (
     JOB_PROGRESS,
@@ -75,6 +79,7 @@ async def lifespan(_app: FastAPI):
     on disk, and ensures all device memory is flushed on server shutdown.
     """
     timer: threading.Timer | None = None
+    persist_api_token()
     default_model_key = TIERS[RECOMMENDED_TIER]["model_key"]
     if is_model_cached_locally(MODELS[default_model_key]):
         timer = threading.Timer(0.5, lambda: MANAGER.get_or_load(default_model_key))
@@ -247,6 +252,20 @@ def api_open_files(files: list[str] = Form(...)) -> dict[str, Any]:
 def api_take_pending_files() -> dict[str, Any]:
     """Drains OS-delivered open-file requests over HTTP (for browser/reused-server mode)."""
     return desktop.take_pending_files()
+
+
+@app.get("/api/local-file")
+def api_local_file(file_id: str) -> Response:
+    """
+    Streams the bytes of a local file the user explicitly granted to the app
+    (native dialog pick or OS 'open with' event). The unguessable one-shot
+    `file_id` is the capability; no arbitrary path is accepted, so a web page
+    cannot use this endpoint to read the filesystem.
+    """
+    path = desktop.pop_local_file(file_id)
+    if path is None or not path.is_file():
+        raise HTTPException(status_code=404, detail="File grant is unknown or expired.")
+    return FileResponse(path)
 
 
 @app.post("/api/open-cache-dir")
@@ -452,7 +471,9 @@ async def api_save(
         target = dest_dir / f"{stem}-{counter}{suffix}"
 
     data = await file.read()
-    target.write_bytes(data)
+    # Keep large writes off the event loop so batch saves don't stall the
+    # 250ms progress polls.
+    await asyncio.to_thread(target.write_bytes, data)
     return {"ok": True, "path": str(target), "name": target.name}
 
 
@@ -611,10 +632,40 @@ async def no_cache_static(request, call_next):
     return response
 
 
+_MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+# Fetch-metadata values a same-origin page never sends on its own API calls.
+# The token check alone already blocks drive-by POSTs; rejecting explicitly
+# cross-site fetch metadata is a second layer in case the token ever leaks.
+_CROSS_SITE_FETCH = {"cross-site", "same-site"}
+
+
+@app.middleware("http")
+async def api_token_guard(request, call_next):
+    """
+    Requires the per-session token on mutating `/api/*` calls so arbitrary
+    websites cannot trigger file writes, model deletions, or job control via
+    cross-origin form posts (drive-by localhost CSRF). Read-only GETs stay
+    open since cross-origin pages cannot read their responses anyway.
+    """
+    if request.method in _MUTATING_METHODS and request.url.path.startswith("/api/"):
+        if request.headers.get("sec-fetch-site") in _CROSS_SITE_FETCH:
+            return JSONResponse({"detail": "Forbidden"}, status_code=403)
+        token = request.headers.get(API_TOKEN_HEADER, "")
+        if not secrets.compare_digest(token, API_TOKEN):
+            return JSONResponse({"detail": "Forbidden"}, status_code=403)
+    return await call_next(request)
+
+
 @app.get("/")
-def serve_index() -> FileResponse:
-    """Serves the single-page studio interface."""
-    return FileResponse(STATIC_DIR / "index.html")
+def serve_index() -> Response:
+    """Serves the studio interface with the per-session API token injected."""
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    token_meta = f'<meta name="openbgr-api-token" content="{API_TOKEN}" />'
+    if "</head>" in html:
+        html = html.replace("</head>", f"  {token_meta}\n</head>", 1)
+    else:
+        html = token_meta + html
+    return HTMLResponse(html)
 
 
 @app.get("/favicon.ico")

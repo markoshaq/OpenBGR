@@ -5,6 +5,7 @@ FP16 weight compaction, and preprocessing transforms.
 
 from __future__ import annotations
 
+import functools
 import gc
 import importlib
 import os
@@ -33,8 +34,20 @@ from .config import (
     logger,
 )
 
-# Cache compiled torchvision transform pipelines keyed by target (height, width).
-_TRANSFORM_CACHE: dict[tuple[int, int], transforms.Compose] = {}
+
+@functools.lru_cache(maxsize=64)
+def _build_preprocess_transform(size_hw: tuple[int, int]) -> transforms.Compose:
+    """Builds the cached preprocessing pipeline for one (height, width) pair."""
+    return transforms.Compose(
+        [
+            transforms.Resize(
+                size_hw,
+                interpolation=transforms.InterpolationMode.BILINEAR,
+            ),
+            transforms.ToTensor(),
+            transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD),
+        ]
+    )
 
 
 def get_preprocess_transform(
@@ -42,25 +55,15 @@ def get_preprocess_transform(
 ) -> transforms.Compose:
     """
     Returns a cached torchvision preprocessing pipeline that resizes an RGB PIL
-    image to `(height, width)` and applies ImageNet normalization.
+    image to `(height, width)` and applies ImageNet normalization. Bounded so
+    the dynamic tier's per-image (h, w) pairs can't grow the cache forever.
     """
     size_hw = (
         (resolution, resolution)
         if isinstance(resolution, int)
         else (int(resolution[0]), int(resolution[1]))
     )
-    if size_hw not in _TRANSFORM_CACHE:
-        _TRANSFORM_CACHE[size_hw] = transforms.Compose(
-            [
-                transforms.Resize(
-                    size_hw,
-                    interpolation=transforms.InterpolationMode.BILINEAR,
-                ),
-                transforms.ToTensor(),
-                transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD),
-            ]
-        )
-    return _TRANSFORM_CACHE[size_hw]
+    return _build_preprocess_transform(size_hw)
 
 
 def compute_dynamic_size(orig_w: int, orig_h: int, max_side: int) -> tuple[int, int]:
@@ -302,7 +305,7 @@ def compact_model_cache_fp16(repo_id: str) -> int:
     """
     try:
         from safetensors import safe_open
-        from safetensors.torch import load_file, save_file
+        from safetensors.torch import save_file
 
         cached_path = try_to_load_from_cache(repo_id, "model.safetensors")
         if not isinstance(cached_path, str) or not os.path.exists(cached_path):
@@ -322,12 +325,16 @@ def compact_model_cache_fp16(repo_id: str) -> int:
             return 0
 
         old_size = blob_path.stat().st_size
-        tensors = load_file(str(blob_path), device="cpu")
-        fp16_tensors = {
-            k: (v.half() if v.is_floating_point() and v.dtype == torch.float32 else v)
-            for k, v in tensors.items()
-        }
-        del tensors
+        # Convert per-tensor through safe_open so peak RAM stays near the FP16
+        # output size (~424 MB) instead of holding the full FP32 checkpoint
+        # plus its FP16 copy (~1.3 GB) at once.
+        fp16_tensors: dict[str, torch.Tensor] = {}
+        with safe_open(str(blob_path), framework="pt", device="cpu") as f:
+            for k in f.keys():
+                t = f.get_tensor(k)
+                if t.is_floating_point() and t.dtype == torch.float32:
+                    t = t.half()
+                fp16_tensors[k] = t
         tmp_path = blob_path.with_suffix(".fp16.tmp")
         save_file(fp16_tensors, str(tmp_path), metadata=metadata or {"format": "pt"})
         del fp16_tensors
