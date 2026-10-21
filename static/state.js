@@ -184,6 +184,17 @@ export function createByteSmoother() {
   };
 }
 
+/** Formats a duration for the elapsed readouts: "34.2s", "2m 05s", "1h 23m". */
+export function formatElapsed(ms) {
+  const s = ms / 1000;
+  if (s < 60) return `${s.toFixed(1)}s`;
+  const totalSec = Math.floor(s);
+  const m = Math.floor(totalSec / 60);
+  if (m < 60) return `${m}m ${String(totalSec % 60).padStart(2, "0")}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${String(m % 60).padStart(2, "0")}m`;
+}
+
 /** Formats a byte count for display (MiB/GiB units). */
 export function formatDiskBytes(bytes, compact = false) {
   const n = Number(bytes) || 0;
@@ -391,7 +402,7 @@ export const dom = {
   batchPanel: document.getElementById("batchPanel"),
   batchList: document.getElementById("batchList"),
   batchSub: document.getElementById("batchSub"),
-  batchFootText: document.getElementById("batchFootText"),
+  batchCheckAll: document.getElementById("batchCheckAll"),
   btnBatchAdd: document.getElementById("btnBatchAdd"),
   tabContextMenu: document.getElementById("tabContextMenu"),
   btnCopy: document.getElementById("btnCopy"),
@@ -413,9 +424,8 @@ export const dom = {
   hwCompute: document.getElementById("hwCompute"),
   hwPrecision: document.getElementById("hwPrecision"),
   hwMemory: document.getElementById("hwMemory"),
-  prefsVersion: document.getElementById("prefsVersion"),
-  sysVersion: document.getElementById("sysVersion"),
   aboutVersion: document.getElementById("aboutVersion"),
+  statusVersion: document.getElementById("statusVersion"),
   btnPrefsCloseX: document.getElementById("btnPrefsCloseX"),
   statFile: document.getElementById("statFile"),
   statDim: document.getElementById("statDim"),

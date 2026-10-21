@@ -41,3 +41,5 @@ node --test "tests/*.test.mjs"          # frontend unit tests
 ## Releases
 
 Maintainer-only: pushing a `v*` tag triggers `.github/workflows/release.yml` to build the Windows installer/portable ZIP, macOS DMG, Linux archive, and `SHA256SUMS.txt`, then attach them to a GitHub Release.
+
+To bump the version, run `python3 scripts/bump_version.py X.Y.Z` — it updates `pyproject.toml`, `package.json`, and `package-lock.json` together. `pyproject.toml` is the canonical source; `test_version_single_sourced_from_pyproject` fails CI if any file drifts.

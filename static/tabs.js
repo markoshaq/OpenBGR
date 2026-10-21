@@ -24,6 +24,7 @@ import {
   updateTierDownloadUI,
   clearTierDownloadProgress,
   formatDiskBytes,
+  formatElapsed,
   clearResultState,
 } from "./state.js";
 import { renderStageGeometry, applyZoomTransform } from "./stage.js";
@@ -87,7 +88,7 @@ function buildTabElement(tab) {
   const titleSpan = document.createElement("span");
   titleSpan.className = "tab-title";
   titleSpan.textContent =
-    tab.kind === "batch" ? `BATCH (${tab.batchFiles.length})` : tab.name;
+    tab.kind === "batch" ? `${tab.name} (${tab.batchFiles.length})` : tab.name;
 
   const closeBtn = document.createElement("button");
   closeBtn.type = "button";
@@ -429,6 +430,10 @@ export async function switchToTab(tabId) {
     dom.statFile.textContent = `BATCH - ${tab.batchFiles.length} FILE${tab.batchFiles.length === 1 ? "" : "S"}`;
     dom.statDim.textContent = "--";
     dom.statTime.textContent = tab.elapsedText || "--";
+    dom.appShell?.classList.toggle(
+      "batch-elapsed",
+      Boolean(tab.elapsedText && tab.elapsedText !== "--")
+    );
     syncMenuBarState();
     return;
   }
@@ -671,7 +676,9 @@ export function cancelProcessing() {
   state.isProcessing = false;
   dom.busyOverlay.classList.remove("active");
   closeConfirmModal();
-  dom.statTime.textContent = "CANCELLED";
+  const elapsedMs = stopElapsedTicker();
+  dom.statTime.textContent =
+    elapsedMs != null ? `CANCELLED - ${formatElapsed(elapsedMs)}` : "CANCELLED";
 
   if (!state.resultBlob && state.sourceFile) {
     setViewMode("original");
@@ -682,10 +689,39 @@ export function cancelProcessing() {
 
 let jobProgressTimer = null;
 let inferPhaseStartedAt = 0;
+let elapsedTimer = null;
+let elapsedStartedAt = 0;
+
+/** Starts the live elapsed timer on the busy-overlay sub-line. */
+function startElapsedTicker() {
+  stopElapsedTicker();
+  elapsedStartedAt = performance.now();
+  dom.busySub.textContent = formatElapsed(0);
+  elapsedTimer = setInterval(() => {
+    // The download-phase progress text owns busySub; don't fight it.
+    if (downloadKey == null) {
+      dom.busySub.textContent = formatElapsed(
+        performance.now() - elapsedStartedAt
+      );
+    }
+  }, 250);
+}
+
+/** Stops the ELAPSED ticker; returns ms elapsed, or null if it wasn't running. */
+function stopElapsedTicker() {
+  if (!elapsedTimer) return null;
+  clearInterval(elapsedTimer);
+  elapsedTimer = null;
+  return performance.now() - elapsedStartedAt;
+}
+
+/** True while the job poller reports the model-weights download phase. */
+export function isModelDownloadActive() {
+  return downloadKey != null;
+}
 let byteSmoother = createByteSmoother();
 let downloadPeak = 0;
 let downloadKey = null;
-let busyBaseSub = "";
 
 /** Sets the busy-overlay bar to a determinate percent, or back to indeterminate. */
 function setBusyProgress(pct) {
@@ -741,7 +777,6 @@ async function pollJobProgress() {
       inferPhaseStartedAt = 0;
       if (!state.batch.running) {
         dom.busyTitle.textContent = "PROCESSING IMAGE";
-        if (busyBaseSub) dom.busySub.textContent = busyBaseSub;
       }
       setBusyProgress(null);
     } else if (p.phase === "inference") {
@@ -809,19 +844,14 @@ export async function runSegmentation() {
   setError(null);
   dom.busyOverlay.classList.add("active");
   startJobProgressPolling();
-  dom.statTime.textContent = "PROCESSING...";
+  startElapsedTicker();
   syncMenuBarState();
 
   const isCached = tierInfo ? tierInfo.cached : true;
-  const presetName = PRESET_NAMES[state.tier] || state.tier.toUpperCase();
 
   dom.busyTitle.textContent = isCached
     ? "PROCESSING IMAGE"
     : "PROCESSING IMAGE - FETCHING MODEL WEIGHTS";
-  busyBaseSub =
-    `Processing using ${presetName}...` +
-    (isCached ? "" : " Downloading model weights...");
-  dom.busySub.textContent = busyBaseSub;
 
   const formData = new FormData();
   formData.append("file", state.sourceFile);
@@ -894,15 +924,16 @@ export async function runSegmentation() {
     dom.btnCopy.classList.remove("disabled");
 
     updateExportTelemetry();
-    dom.statTime.textContent = inferenceMs
-      ? `${(inferenceMs / 1000).toFixed(2)}S`
-      : "DONE";
+    const finishedMs = stopElapsedTicker();
+    dom.statTime.textContent =
+      finishedMs != null ? formatElapsed(finishedMs) : "DONE";
 
     setViewMode("split");
     saveStateToActiveTab();
     syncServerStatus(false);
   } catch (err) {
     if (err.name === "AbortError") return;
+    stopElapsedTicker();
     setError(err.message || "Failed to process image.");
     dom.statTime.textContent = "ERROR";
   } finally {

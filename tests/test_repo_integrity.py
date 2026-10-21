@@ -40,6 +40,9 @@ class TestRepoIntegrity(unittest.TestCase):
         self.assertEqual(build_release.APP_VERSION, canonical)
         pkg = json.loads((ROOT_DIR / "package.json").read_text(encoding="utf-8"))
         self.assertEqual(pkg["version"], canonical)
+        pkg_lock = json.loads((ROOT_DIR / "package-lock.json").read_text(encoding="utf-8"))
+        self.assertEqual(pkg_lock["version"], canonical)
+        self.assertEqual(pkg_lock["packages"][""]["version"], canonical)
 
     def test_dependency_lists_stay_in_sync(self) -> None:
         """`requirements.txt` and `pyproject.toml` declare identical dependencies."""

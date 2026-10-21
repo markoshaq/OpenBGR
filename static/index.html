@@ -483,18 +483,18 @@
           <!-- Batch Queue Panel (shown when a batch tab is active) -->
           <div class="batch-panel" id="batchPanel">
             <div class="batch-panel-head">
-              <div>
-                <div class="batch-panel-title">BATCH QUEUE</div>
-                <div class="batch-panel-sub" id="batchSub">0 images</div>
+              <div class="batch-panel-head-left">
+                <button type="button" class="batch-check" id="batchCheckAll" title="Toggle all images" aria-label="Toggle all batch images"></button>
+                <div>
+                  <div class="batch-panel-title">BATCH QUEUE</div>
+                  <div class="batch-panel-sub" id="batchSub">0 images</div>
+                </div>
               </div>
               <div class="batch-panel-actions">
                 <button type="button" class="action-btn" id="btnBatchAdd">ADD IMAGE</button>
               </div>
             </div>
             <div class="batch-list" id="batchList"></div>
-            <div class="batch-panel-foot" id="batchFoot">
-              <span id="batchFootText">Drop more images onto this window to add them.</span>
-            </div>
           </div>
 
           <!-- 4x Circular Magnifier Loupe Canvas -->
@@ -620,7 +620,7 @@
 
     <!-- 3. Bottom Telemetry Bar -->
     <footer class="statusbar">
-      <div class="status-spacer"></div>
+      <div class="status-spacer"><span class="status-version" id="statusVersion">V--</span></div>
       <div class="status-group status-center">
         <div class="status-kv status-kv-file">FILE: <span id="statFile">NONE</span></div>
         <div class="status-kv status-kv-dim">DIMENSIONS: <span id="statDim">--</span></div>
@@ -657,25 +657,24 @@
         <div class="prefs-header">
           <div class="prefs-title-group">
             <span class="modal-title" id="infoModalTitle">PREFERENCES</span>
-            <span class="prefs-subtitle">OPENBGR <span id="prefsVersion">V--</span></span>
+            <span class="prefs-subtitle">OPENBGR</span>
           </div>
           <button type="button" class="prefs-close" id="btnPrefsCloseX" aria-label="Close preferences">X</button>
         </div>
 
         <div class="prefs-body">
           <nav class="prefs-nav" aria-label="Preference sections">
-            <button type="button" class="prefs-nav-item active" data-pane="settings-preferences">APPEARANCE</button>
-            <button type="button" class="prefs-nav-item" data-pane="settings-general">GENERAL</button>
+            <button type="button" class="prefs-nav-item active" data-pane="settings-general">GENERAL</button>
+            <button type="button" class="prefs-nav-item" data-pane="settings-preferences">APPEARANCE</button>
             <button type="button" class="prefs-nav-item" data-pane="settings-quick-action">QUICK ACTION</button>
             <button type="button" class="prefs-nav-item" data-pane="settings-models">MODELS</button>
-            <button type="button" class="prefs-nav-item" data-pane="settings-system">SYSTEM</button>
             <button type="button" class="prefs-nav-item" data-pane="settings-shortcuts">SHORTCUTS</button>
             <button type="button" class="prefs-nav-item" data-pane="settings-about">ABOUT</button>
           </nav>
 
           <div class="prefs-content">
             <!-- APPEARANCE PANE -->
-            <section class="prefs-pane active" id="settings-preferences">
+            <section class="prefs-pane" id="settings-preferences">
               <div class="pane-heading">APPEARANCE</div>
               <div class="pref-card">
                 <div class="pref-row">
@@ -706,7 +705,7 @@
             </section>
 
             <!-- GENERAL PANE -->
-            <section class="prefs-pane" id="settings-general">
+            <section class="prefs-pane active" id="settings-general">
               <div class="pane-heading">GENERAL</div>
               <div class="pref-card">
                 <button type="button" class="pref-switch-row" id="btnToggleConfirmClose">
@@ -926,40 +925,6 @@
               </div>
             </section>
 
-            <!-- SYSTEM PANE -->
-            <section class="prefs-pane" id="settings-system">
-              <div class="pane-heading">SYSTEM</div>
-              <div class="pref-card">
-                <div class="spec-row">
-                  <span class="spec-key">COMPUTE ENGINE</span>
-                  <span class="spec-val" id="hwCompute">DETECTING…</span>
-                </div>
-                <div class="spec-row">
-                  <span class="spec-key">PRECISION</span>
-                  <span class="spec-val" id="hwPrecision">--</span>
-                </div>
-                <div class="spec-row">
-                  <span class="spec-key">RAM</span>
-                  <span class="spec-val" id="hwMemory">--</span>
-                </div>
-                <div class="spec-row">
-                  <span class="spec-key">VERSION</span>
-                  <span class="spec-val" id="sysVersion">--</span>
-                </div>
-                <div class="spec-row">
-                  <span class="spec-key">DIAGNOSTIC LOGS</span>
-                  <span class="spec-val spec-val-action">
-                    <span>~/.openbgr/openbgr.log</span>
-                    <button type="button" class="cache-folder-btn" id="btnOpenLogsDir" title="Open logs folder" aria-label="Open logs folder">
-                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                        <path d="M1.5 3.5h4.2l1.6 1.8h7.2v7.2h-13z"></path>
-                      </svg>
-                    </button>
-                  </span>
-                </div>
-              </div>
-            </section>
-
             <!-- SHORTCUTS PANE -->
             <section class="prefs-pane" id="settings-shortcuts">
               <div class="pane-heading">KEYBOARD SHORTCUTS</div>
@@ -1069,6 +1034,33 @@
                 <div class="spec-row">
                   <span class="spec-key">GITHUB</span>
                   <a href="https://github.com/markoshaq/OpenBGR" target="_blank" rel="noopener noreferrer" class="spec-val spec-link">github.com/markoshaq/OpenBGR ↗</a>
+                </div>
+              </div>
+
+              <div class="pane-subheading">SYSTEM</div>
+              <div class="pref-card">
+                <div class="spec-row">
+                  <span class="spec-key">COMPUTE ENGINE</span>
+                  <span class="spec-val" id="hwCompute">DETECTING…</span>
+                </div>
+                <div class="spec-row">
+                  <span class="spec-key">PRECISION</span>
+                  <span class="spec-val" id="hwPrecision">--</span>
+                </div>
+                <div class="spec-row">
+                  <span class="spec-key">RAM</span>
+                  <span class="spec-val" id="hwMemory">--</span>
+                </div>
+                <div class="spec-row">
+                  <span class="spec-key">DIAGNOSTIC LOGS</span>
+                  <span class="spec-val spec-val-action">
+                    <span>~/.openbgr/openbgr.log</span>
+                    <button type="button" class="cache-folder-btn" id="btnOpenLogsDir" title="Open logs folder" aria-label="Open logs folder">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M1.5 3.5h4.2l1.6 1.8h7.2v7.2h-13z"></path>
+                      </svg>
+                    </button>
+                  </span>
                 </div>
               </div>
             </section>

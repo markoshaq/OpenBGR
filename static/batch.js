@@ -18,8 +18,8 @@ import {
   triggerOpenFileDialog,
   filesFromDialogResult,
   downloadBlob,
-  PRESET_NAMES,
   FORMAT_EXT,
+  formatElapsed,
 } from "./state.js";
 import {
   updateDestUI,
@@ -37,6 +37,7 @@ import {
   syncMenuBarState,
   startJobProgressPolling,
   stopJobProgressPolling,
+  isModelDownloadActive,
 } from "./tabs.js";
 import { isModelInstallInProgress } from "./preferences.js";
 
@@ -140,13 +141,31 @@ export function renderBatchPanel(tab) {
   dom.emptyState.style.display = "none";
 
   const n = tab.batchFiles.length;
+  const selCount = tab.batchFiles.filter((e) => e.selected !== false).length;
   const runningThis = state.batch.running && state.batch.tabId === tab.id;
-  dom.batchSub.textContent = `${n} IMAGE${n === 1 ? "" : "S"} - ONE SETTING FOR ALL`;
+  dom.batchSub.textContent =
+    selCount === n
+      ? `${n} IMAGE${n === 1 ? "" : "S"}`
+      : `${selCount}/${n} SELECTED`;
+
+  if (dom.batchCheckAll) {
+    dom.batchCheckAll.textContent =
+      selCount === 0 ? "" : selCount === n ? "x" : "–";
+    dom.batchCheckAll.classList.toggle("on", selCount > 0);
+    dom.batchCheckAll.disabled = state.batch.running;
+    dom.batchCheckAll.onclick = () => {
+      if (state.batch.running) return;
+      const turnOn = selCount !== n;
+      tab.batchFiles.forEach((e) => {
+        e.selected = turnOn;
+        if (!turnOn && e.status === "queued") e.status = "skipped";
+        if (turnOn && e.status === "skipped") e.status = "queued";
+      });
+      renderBatchPanel(tab);
+    };
+  }
 
   updateDestUI();
-  dom.batchFootText.textContent = tab.outputDir
-    ? `OUTPUT → ${tab.outputDir}`
-    : "Drop more images onto this window to add them.";
 
   dom.batchList.replaceChildren();
   if (n === 0) {
@@ -157,8 +176,9 @@ export function renderBatchPanel(tab) {
   }
 
   tab.batchFiles.forEach((entry, i) => {
+    const on = entry.selected !== false;
     const row = document.createElement("div");
-    row.className = "batch-row";
+    row.className = `batch-row${on ? "" : " off"}`;
     row.setAttribute("data-idx", String(i));
     row.draggable = true;
     row.addEventListener("dragstart", (e) => {
@@ -182,8 +202,23 @@ export function renderBatchPanel(tab) {
         .forEach((el) => el.classList.remove("drop-target"));
     });
 
-    const dot = document.createElement("span");
-    dot.className = `batch-dot st-${entry.status}`;
+    const chk = document.createElement("button");
+    chk.type = "button";
+    chk.className = `batch-check${on ? " on" : ""}`;
+    chk.setAttribute("role", "checkbox");
+    chk.setAttribute("aria-checked", String(on));
+    chk.title = "Include in batch run";
+    chk.textContent = on ? "x" : "";
+    chk.disabled = state.batch.running;
+    chk.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (state.batch.running) return;
+      entry.selected = !on;
+      if (!entry.selected && entry.status === "queued") entry.status = "skipped";
+      if (entry.selected && entry.status === "skipped") entry.status = "queued";
+      renderBatchPanel(tab);
+    });
+
     const name = document.createElement("span");
     name.className = "batch-row-name";
     name.textContent = entry.name;
@@ -210,14 +245,14 @@ export function renderBatchPanel(tab) {
         renderTabBar();
       }
     });
-    row.append(dot, name, size, st, rm);
+    row.append(chk, name, size, st, rm);
     dom.batchList.appendChild(row);
   });
 
   if (dom.btnDownload) {
     dom.btnDownload.classList.toggle(
       "disabled",
-      n === 0 || (state.isProcessing && !runningThis)
+      n === 0 || selCount === 0 || (state.isProcessing && !runningThis)
     );
     dom.btnDownload.textContent = runningThis ? "BATCH RUNNING…" : "RUN BATCH";
   }
@@ -229,9 +264,7 @@ function updateBatchRowStatus(tab, i) {
   const row = dom.batchList.querySelector(`.batch-row[data-idx="${i}"]`);
   if (!row) return;
   const entry = tab.batchFiles[i];
-  const dot = row.querySelector(".batch-dot");
   const st = row.querySelector(".batch-row-status");
-  if (dot) dot.className = `batch-dot st-${entry.status}`;
   if (st) {
     st.className = `batch-row-status st-${entry.status}`;
     st.textContent = entry.status.toUpperCase();
@@ -340,6 +373,57 @@ export function moveBatchItemToBatch(item, targetTab) {
   renderTabBar();
 }
 
+/**
+ * Replaces a tab's title with an inline rename input: Enter or blur commits,
+ * Escape cancels. Batch tabs keep their "(N)" queue-count suffix since only
+ * `tab.name` is edited.
+ */
+function startTabRename(tab) {
+  const tabEl = dom.tabBar?.querySelector(`[data-tab-id="${tab.id}"]`);
+  const titleEl = tabEl?.querySelector(".tab-title");
+  if (!titleEl) return;
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "tab-rename-input";
+  input.value = tab.name;
+  input.maxLength = 64;
+  input.spellcheck = false;
+  titleEl.replaceChildren(input);
+  tabEl.draggable = false;
+  input.focus();
+  input.select();
+
+  let settled = false;
+  const finish = (commit) => {
+    if (settled) return;
+    settled = true;
+    const name = input.value.trim();
+    if (commit && name) tab.name = name;
+    renderTabBar();
+    if (
+      commit &&
+      tab.kind !== "batch" &&
+      tab.id === state.activeTabId &&
+      name
+    ) {
+      dom.statFile.textContent = tab.name.toUpperCase();
+    }
+  };
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      finish(true);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      finish(false);
+    }
+  });
+  input.addEventListener("click", (e) => e.stopPropagation());
+  input.addEventListener("blur", () => finish(true));
+}
+
 /** Shows the right-click menu on a tab (batch ops, close). */
 export function showTabContextMenu(tab, x, y, onRequestCloseTab) {
   const menu = dom.tabContextMenu;
@@ -404,6 +488,7 @@ export function showTabContextMenu(tab, x, y, onRequestCloseTab) {
     );
   }
   if (menu.children.length) addSep();
+  addItem("RENAME TAB", () => startTabRename(tab));
   addItem("CLOSE TAB", () => onRequestCloseTab(tab.id));
 
   menu.style.display = "block";
@@ -481,6 +566,10 @@ export async function runBatch(tab) {
   if (!tab || tab.kind !== "batch" || batch.running || !tab.batchFiles.length) {
     return;
   }
+  if (!tab.batchFiles.some((e) => e.selected !== false)) {
+    setError("Select at least one image to process.");
+    return;
+  }
 
   const snap = {
     tier: tab.tier ?? state.tier,
@@ -523,24 +612,20 @@ export async function runBatch(tab) {
 
   batch.running = true;
   batch.tabId = tab.id;
-  batch.total = tab.batchFiles.length;
+  batch.total = tab.batchFiles.filter((e) => e.selected !== false).length;
   batch.index = 0;
   batch.failed = 0;
   batch.cancelled = false;
   batch.results = [];
 
-  tab.batchFiles.forEach((e) => (e.status = "queued"));
+  tab.batchFiles.forEach((e) => {
+    e.status = e.selected === false ? "skipped" : "queued";
+  });
 
   state.isProcessing = true;
   setError(null);
   dom.busyOverlay.classList.add("active");
   startJobProgressPolling();
-  const isCached = tierInfo ? tierInfo.cached !== false : true;
-
-  const presetName = PRESET_NAMES[snap.tier] || snap.tier.toUpperCase();
-  const batchDesc =
-    `Processing using ${presetName}...` +
-    (isCached ? "" : " Fetching model weights...");
 
   if (tab.id === state.activeTabId) renderBatchPanel(tab);
   syncMenuBarState();
@@ -549,16 +634,26 @@ export async function runBatch(tab) {
   state.abortController = controller;
   let completed = 0;
 
-  for (let i = 0; i < batch.total; i++) {
+  const startedAt = performance.now();
+  dom.busySub.textContent = formatElapsed(0);
+  const elapsedTimer = setInterval(() => {
+    // The download-phase progress text owns busySub; don't fight it.
+    if (!isModelDownloadActive()) {
+      dom.busySub.textContent = formatElapsed(performance.now() - startedAt);
+    }
+  }, 250);
+
+  let seen = 0;
+  for (let i = 0; i < tab.batchFiles.length; i++) {
     if (batch.cancelled) break;
-    batch.index = i;
     const entry = tab.batchFiles[i];
-    const label = `${i + 1}/${batch.total}`;
+    if (entry.selected === false) continue;
+    batch.index = i;
+    seen++;
+    const label = `${seen}/${batch.total}`;
     entry.status = "processing";
     updateBatchRowStatus(tab, i);
     dom.busyTitle.textContent = `PROCESSING BATCH (${label})`;
-    dom.busySub.textContent = batchDesc;
-    if (tab.id === state.activeTabId) dom.statTime.textContent = label;
 
     try {
       const outcome = await processBatchEntry(
@@ -609,11 +704,14 @@ export async function runBatch(tab) {
   }
   batch.results = [];
 
+  clearInterval(elapsedTimer);
+  const totalElapsed = formatElapsed(performance.now() - startedAt);
   tab.elapsedText = wasCancelled
-    ? `CANCELLED ${completed}/${batch.total}`
-    : `${completed}/${batch.total} DONE`;
+    ? `CANCELLED - ${totalElapsed}`
+    : totalElapsed;
   if (tab.id === state.activeTabId) {
     dom.statTime.textContent = tab.elapsedText;
+    dom.appShell?.classList.add("batch-elapsed");
     renderBatchPanel(tab);
   }
   syncMenuBarState();

@@ -21,7 +21,7 @@ import {
 } from "./state.js";
 
 const PREFS_SECTION_MAP = {
-  preferences: "settings-preferences",
+  preferences: "settings-general",
   appearance: "settings-preferences",
   general: "settings-general",
   behavior: "settings-general",
@@ -29,7 +29,7 @@ const PREFS_SECTION_MAP = {
   "quick-action": "settings-quick-action",
   models: "settings-models",
   storage: "settings-models",
-  system: "settings-system",
+  system: "settings-about",
   shortcuts: "settings-shortcuts",
   hotkeys: "settings-shortcuts",
   keyboard: "settings-shortcuts",
@@ -494,9 +494,8 @@ export async function syncServerStatus(isInitialLoad = false, onSelectTier = nul
       dom.hwMemory.textContent = String(memText).toUpperCase();
     }
     const verLabel = version ? `V${version}` : "V--";
-    if (dom.prefsVersion) dom.prefsVersion.textContent = verLabel;
-    if (dom.sysVersion) dom.sysVersion.textContent = verLabel;
     if (dom.aboutVersion) dom.aboutVersion.textContent = verLabel;
+    if (dom.statusVersion) dom.statusVersion.textContent = verLabel;
 
     if (isInitialLoad && onSelectTier) {
       const targetTier =
@@ -534,7 +533,7 @@ export function openPrefsDialog(section) {
       ? document.activeElement
       : null;
   dom.infoModal.classList.add("active");
-  const paneId = PREFS_SECTION_MAP[section] || "settings-preferences";
+  const paneId = PREFS_SECTION_MAP[section] || "settings-general";
   selectPrefsPane(paneId);
   dom.btnPrefsCloseX?.focus?.();
 }
