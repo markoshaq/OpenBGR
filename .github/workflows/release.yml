@@ -135,6 +135,9 @@ jobs:
     needs: [test, build-macos, build-windows, build-linux]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
           path: release-assets
@@ -142,6 +145,18 @@ jobs:
       - name: Generate SHA256 checksums
         working-directory: release-assets
         run: sha256sum OpenBGR-* > SHA256SUMS.txt
+      - name: Build release notes from CHANGELOG.md
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          PREV_TAG="$(git tag --sort=-v:refname | grep -vx "$TAG" | head -n1)"
+          {
+            echo "## What's new in ${TAG}"
+            echo
+            awk '/^## \[/{if (found) exit; found=1; next} found' CHANGELOG.md | sed -e '/./,$!d' -e :a -e '/^\n*$/{$d;N;ba' -e '}'
+            echo
+            echo "**Full Changelog**: [${PREV_TAG}...${TAG}](https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${TAG})"
+          } > release-notes.md
+          cat release-notes.md
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -151,4 +166,4 @@ jobs:
             release-assets/OpenBGR-Windows.zip
             release-assets/OpenBGR-Linux.tar.gz
             release-assets/SHA256SUMS.txt
-          generate_release_notes: true
+          body_path: release-notes.md
