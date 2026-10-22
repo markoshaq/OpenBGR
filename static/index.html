@@ -10,6 +10,9 @@
     // Apply persisted appearance preferences before first paint to avoid a theme flash.
     (function () {
       try {
+        if (new URLSearchParams(location.search).get("native_menus") === "1") {
+          document.documentElement.classList.add("native-menus");
+        }
         var p = JSON.parse(localStorage.getItem("openbgr_prefs") || "{}");
         if (p.theme === "light") document.documentElement.classList.add("theme-light");
         var ACCENTS = {
@@ -45,6 +48,11 @@
                 <span class="menu-label">Open Image…</span>
                 <span class="menu-kbd" data-shortcut="Mod+O">⌘O</span>
               </button>
+              <button type="button" class="menu-item" data-cmd="openRecent" data-requires="native">
+                <span class="menu-check"></span>
+                <span class="menu-label">Open Recent…</span>
+                <span class="menu-kbd"></span>
+              </button>
               <button type="button" class="menu-item" data-cmd="batchProcess">
                 <span class="menu-check"></span>
                 <span class="menu-label">Batch Process Images…</span>
@@ -61,6 +69,11 @@
                 <span class="menu-check"></span>
                 <span class="menu-label">Close Tab</span>
                 <span class="menu-kbd" data-shortcut="Mod+W">⌘W</span>
+              </button>
+              <button type="button" class="menu-item" data-cmd="reopenClosedTab" data-requires="closed-tab">
+                <span class="menu-check"></span>
+                <span class="menu-label">Reopen Closed Tab</span>
+                <span class="menu-kbd" data-shortcut="Shift+Mod+T">⇧⌘T</span>
               </button>
               <div class="menu-sep"></div>
               <button type="button" class="menu-item" data-cmd="preferences">
@@ -90,6 +103,11 @@
                 <span class="menu-check"></span>
                 <span class="menu-label">Copy Cutout to Clipboard</span>
                 <span class="menu-kbd" data-shortcut="Shift+Mod+C">⇧⌘C</span>
+              </button>
+              <button type="button" class="menu-item" data-cmd="copyOriginal" data-requires="image">
+                <span class="menu-check"></span>
+                <span class="menu-label">Copy Original Image</span>
+                <span class="menu-kbd"></span>
               </button>
               <button type="button" class="menu-item" data-cmd="pasteImage" data-requires="paste-image">
                 <span class="menu-check"></span>
@@ -766,6 +784,19 @@
       </div>
     </div>
 
+    <!-- Open Recent modal (desktop mode: persisted file paths) -->
+    <div class="modal-backdrop" id="recentModal">
+      <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="recentTitle">
+        <div class="modal-title" id="recentTitle">OPEN RECENT</div>
+        <div class="modal-desc">Recently opened images on this machine.</div>
+        <div class="recent-list" id="recentList"></div>
+        <div class="modal-actions">
+          <button type="button" class="action-btn" id="recentClear">CLEAR LIST</button>
+          <button type="button" class="action-btn primary" id="recentClose">DONE</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Tab Bar Context Menu (right-click / merge gestures) -->
     <div class="tab-context-menu" id="tabContextMenu" style="display:none"></div>
 
@@ -830,6 +861,13 @@
                   <span class="pref-switch-text">
                     <span class="pref-label">CONFIRM BEFORE CLOSING TAB</span>
                     <span class="pref-desc">Ask for confirmation when closing an open image tab.</span>
+                  </span>
+                  <span class="toggle-switch" aria-hidden="true"><span class="toggle-knob"></span></span>
+                </button>
+                <button type="button" class="pref-switch-row" id="btnToggleOfflineMode">
+                  <span class="pref-switch-text">
+                    <span class="pref-label">BLOCK INTERNET ACCESS</span>
+                    <span class="pref-desc" id="offlineModeDesc">Never connect to Hugging Face. Checkpoints must be imported manually under Models.</span>
                   </span>
                   <span class="toggle-switch" aria-hidden="true"><span class="toggle-knob"></span></span>
                 </button>
@@ -1041,6 +1079,29 @@
                   </div>
                 </div>
               </div>
+
+              <div class="pane-subheading">MANUAL INSTALL</div>
+              <div class="pref-card">
+                <div class="pref-row">
+                  <div class="pref-text">
+                    <span class="pref-label">IMPORT MODEL FOLDER</span>
+                    <span class="pref-desc">Point OpenBGR at a checkpoint folder you downloaded yourself, for example from huggingface.co or with `hf download ZhengPeng7/BiRefNet`. Files are copied into the cache shown above.</span>
+                  </div>
+                </div>
+                <div class="pref-row import-row">
+                  <select class="studio-select pref-select" id="prefImportTier">
+                    <option value="lite">Lite (BiRefNet_lite)</option>
+                    <option value="general" selected>General (BiRefNet)</option>
+                    <option value="hr">Ultra HR (BiRefNet_HR)</option>
+                    <option value="portrait">Portrait (BiRefNet-portrait)</option>
+                    <option value="matting">Matting (BiRefNet_HR-matting)</option>
+                    <option value="dynamic">Dynamic (BiRefNet_dynamic)</option>
+                  </select>
+                  <input class="import-path-input" id="importFolderPath" type="text" placeholder="Model folder path" spellcheck="false" autocomplete="off" />
+                  <button type="button" class="action-btn" id="btnChooseImportFolder">BROWSE</button>
+                  <button type="button" class="action-btn model-uninstall-btn" id="btnImportModel">IMPORT</button>
+                </div>
+              </div>
             </section>
 
             <!-- SHORTCUTS PANE -->
@@ -1062,6 +1123,10 @@
                 <div class="spec-row">
                   <span class="spec-key">CLOSE TAB</span>
                   <span class="spec-val"><span class="kbd" data-shortcut-chip="Mod+W">⌘W</span></span>
+                </div>
+                <div class="spec-row">
+                  <span class="spec-key">REOPEN CLOSED TAB</span>
+                  <span class="spec-val"><span class="kbd" data-shortcut-chip="Shift+Mod+T">⇧⌘T</span></span>
                 </div>
                 <div class="spec-row">
                   <span class="spec-key">OPEN IMAGE</span>

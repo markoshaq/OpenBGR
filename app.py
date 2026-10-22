@@ -322,9 +322,22 @@ def _run_desktop_window(url: str, server_thread: threading.Thread | None) -> Non
             window_kwargs["width"] = 1380
             window_kwargs["height"] = 860
 
+        # On macOS and Linux, attach the native OS menu bar; on Windows,
+        # WinForms MenuStrip clashes with WebView2 DockStyle.Fill, so Windows
+        # uses the themed in-app Studio Menu Bar in the top header.
+        native_menus = None
+        if platform.system() != "Windows":
+            try:
+                native_menus = build_native_menus(api_bridge)
+            except Exception as menu_exc:
+                logger.warning("[Desktop] Native menu bar unavailable (%s).", menu_exc)
+                native_menus = None
+        api_bridge.native_menus = bool(native_menus)
+        window_url = f"{url}/?native_menus=1" if native_menus else url
+
         window = webview.create_window(
             title="OpenBGR",
-            url=url,
+            url=window_url,
             min_size=(980, 640),
             background_color="#09090b",
             js_api=api_bridge,
@@ -334,17 +347,6 @@ def _run_desktop_window(url: str, server_thread: threading.Thread | None) -> Non
         attach_window_state_persistence(window)
         ensure_window_on_screen(window)
         configure_macos_native_window_and_menus(window)
-
-        # On macOS and Linux, attach the native OS menu bar; on Windows,
-        # WinForms MenuStrip clashes with WebView2 DockStyle.Fill, so Windows
-        # uses the themed in-app Studio Menu Bar in the top header.
-        native_menus = None
-        if platform.system() != "Windows":
-            try:
-                native_menus = build_native_menus(window)
-            except Exception as menu_exc:
-                logger.warning("[Desktop] Native menu bar unavailable (%s).", menu_exc)
-                native_menus = None
 
         start_kwargs: dict[str, Any] = {}
         if native_menus:

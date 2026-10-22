@@ -13,7 +13,7 @@ import io
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 from fastapi import HTTPException, UploadFile
@@ -24,6 +24,7 @@ import openbgr.config as config_mod
 import openbgr.desktop_bridge as bridge_mod
 import openbgr.models as models_mod
 import openbgr.pipeline as pipeline_mod
+import openbgr.settings as settings_mod
 
 
 class TestApiContracts(unittest.TestCase):
@@ -134,10 +135,19 @@ class TestApiContracts(unittest.TestCase):
     def test_desktop_api_pending_files_and_bridge(self) -> None:
         """`DesktopApi` queues and drains pending files as one-shot file_id grants."""
         bridge = bridge_mod.DesktopApi()
+        self.assertEqual(bridge.native_menus_enabled(), {"enabled": False})
+        bridge.native_menus = True
+        self.assertEqual(bridge.native_menus_enabled(), {"enabled": True})
         with tempfile.TemporaryDirectory() as tmp:
             img_path = Path(tmp) / "test.png"
             img_path.write_bytes(b"fake-png-content")
 
+            # Recent-files persistence is redirected so tests never touch the
+            # real ~/.openbgr/recent_files.json.
+            recents_patch = patch.object(
+                bridge_mod, "_recent_files_path", return_value=Path(tmp) / "recent_files.json"
+            )
+            recents_patch.start()
             bridge_mod.queue_open_files([str(img_path)])
             drained = bridge.take_pending_files()
             self.assertEqual(len(drained["files"]), 1)
@@ -170,6 +180,37 @@ class TestApiContracts(unittest.TestCase):
                     ImageGrab, "grabclipboard", return_value=[str(Path(tmp) / "a.txt")]
                 ):
                     self.assertEqual(bridge.has_clipboard_image(), {"has_image": False})
+            recents_patch.stop()
+
+    def test_native_menus_resolve_window_lazily_and_add_window_menu(self) -> None:
+        """`build_native_menus` actions reach the window attached later; Window menu is macOS-only."""
+        import openbgr.desktop_menus as menus_mod
+
+        bridge = bridge_mod.DesktopApi()
+        with patch.object(menus_mod.platform, "system", return_value="Darwin"):
+            menus = menus_mod.build_native_menus(bridge)
+        titles = [m.title for m in menus]
+        self.assertEqual(titles, ["__app__", "File", "Edit", "View", "Model", "Window", "Help"])
+
+        # Actions are safe before the window exists and reach it afterwards.
+        window_menu = menus[titles.index("Window")]
+        actions = {
+            getattr(item, "title", ""): getattr(item, "function", None)
+            for item in window_menu.items
+        }
+        actions["Minimize"]()
+        actions["Zoom"]()
+        fake_window = MagicMock()
+        bridge.window = fake_window
+        actions["Minimize"]()
+        actions["Zoom"]()
+        fake_window.minimize.assert_called_once_with()
+        fake_window.maximize.assert_called_once_with()
+
+        # On Linux there is no Window menu; the file menu gains Preferences/Quit.
+        with patch.object(menus_mod.platform, "system", return_value="Linux"):
+            linux_titles = [m.title for m in menus_mod.build_native_menus(bridge)]
+        self.assertNotIn("Window", linux_titles)
 
     def test_queue_open_files_rejects_non_images(self) -> None:
         """Launch-time 'odoc' events for the script itself (app.py) are filtered out."""
@@ -179,8 +220,54 @@ class TestApiContracts(unittest.TestCase):
             script_path.write_text("print('not an image')")
             missing_img = Path(tmp) / "ghost.png"
 
-            bridge_mod.queue_open_files([str(script_path), str(missing_img)])
+            with patch.object(
+                bridge_mod, "_recent_files_path", return_value=Path(tmp) / "recent_files.json"
+            ):
+                bridge_mod.queue_open_files([str(script_path), str(missing_img)])
             self.assertEqual(bridge.take_pending_files(), {"files": []})
+
+    def test_recent_files_round_trip_and_grants(self) -> None:
+        """Open Recent records paths, prunes missing files, and re-grants on demand."""
+        bridge = bridge_mod.DesktopApi()
+        with tempfile.TemporaryDirectory() as tmp:
+            recents = Path(tmp) / "recent_files.json"
+            img_a = Path(tmp) / "a.png"
+            img_a.write_bytes(b"a")
+            img_b = Path(tmp) / "b.jpg"
+            img_b.write_bytes(b"b")
+            stray = Path(tmp) / "c.txt"
+            stray.write_text("not an image")
+            ghost = Path(tmp) / "ghost.png"
+
+            with patch.object(bridge_mod, "_recent_files_path", return_value=recents):
+                bridge_mod.add_recent_files([str(img_a), str(stray), str(ghost)])
+                bridge_mod.add_recent_files([str(img_b)])
+                entries = bridge_mod.list_recent_files()
+                self.assertEqual([e["name"] for e in entries], ["b.jpg", "a.png"])
+
+                granted = bridge.open_recent_file(entries[1]["path"])
+                self.assertEqual(len(granted["files"]), 1)
+                self.assertEqual(granted["files"][0]["name"], "a.png")
+
+                # Paths outside the persisted recents list are refused.
+                refused = bridge.open_recent_file(str(Path(tmp) / "x.png"))
+                self.assertEqual(refused["files"], [])
+                self.assertIn("error", refused)
+
+                # Deleted files are pruned from the list.
+                img_a.unlink()
+                entries = bridge_mod.list_recent_files()
+                self.assertEqual([e["name"] for e in entries], ["b.jpg"])
+
+                self.assertEqual(bridge.clear_recent_files(), {"cleared": True})
+                self.assertEqual(bridge.get_recent_files(), {"files": []})
+
+                # reveal_path delegates to the platform file-manager opener.
+                with patch.object(
+                    bridge_mod, "reveal_in_file_manager", return_value=True
+                ) as mock_reveal:
+                    self.assertEqual(bridge.reveal_path(str(img_b)), {"revealed": True})
+                    mock_reveal.assert_called_once()
 
     def test_api_open_logs_dir(self) -> None:
         """`/api/open-logs-dir` opens `APP_CONFIG_DIR` and returns HTTP 500 on failure."""
@@ -195,6 +282,69 @@ class TestApiContracts(unittest.TestCase):
         ):
             api_mod.api_open_logs_dir()
         self.assertEqual(ctx.exception.status_code, 500)
+
+    def test_settings_round_trip_and_offline_env(self) -> None:
+        """`settings` persists the offline switch and mirrors it into HF env vars."""
+        import os
+
+        import huggingface_hub.constants as hf_constants
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(settings_mod, "SETTINGS_PATH", Path(tmp) / "settings.json"):
+                try:
+                    self.assertFalse(settings_mod.offline_mode_enabled())
+                    self.assertTrue(settings_mod.set_offline_mode(True))
+                    self.assertTrue(settings_mod.offline_mode_enabled())
+                    self.assertEqual(os.environ.get("HF_HUB_OFFLINE"), "1")
+                    self.assertTrue(hf_constants.HF_HUB_OFFLINE)
+                    self.assertFalse(settings_mod.set_offline_mode(False))
+                    self.assertNotIn("HF_HUB_OFFLINE", os.environ)
+                    self.assertFalse(hf_constants.HF_HUB_OFFLINE)
+                finally:
+                    settings_mod.apply_offline_mode(False)
+
+    def test_offline_mode_blocks_model_install(self) -> None:
+        """`/api/models/install` rejects downloads while offline mode is on."""
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(settings_mod, "SETTINGS_PATH", Path(tmp) / "settings.json"):
+                try:
+                    settings_mod.set_offline_mode(True)
+                    with self.assertRaises(HTTPException) as ctx:
+                        asyncio.run(api_mod.api_install_model(target="general"))
+                    self.assertEqual(ctx.exception.status_code, 409)
+                finally:
+                    settings_mod.set_offline_mode(False)
+
+    def test_import_model_from_dir_layout(self) -> None:
+        """`import_model_from_dir` builds a refs/main-resolvable synthetic snapshot."""
+        from huggingface_hub import try_to_load_from_cache
+
+        repo_id = "ZhengPeng7/BiRefNet"
+        with tempfile.TemporaryDirectory() as src, tempfile.TemporaryDirectory() as cache:
+            src_dir = Path(src)
+            (src_dir / "model.safetensors").write_bytes(b"weights")
+            (src_dir / "config.json").write_text("{}", encoding="utf-8")
+            (src_dir / "custom.py").write_text("# remote code", encoding="utf-8")
+            nested = src_dir / ".git" / "objects"
+            nested.mkdir(parents=True)
+            (nested / "pack").write_bytes(b"git")
+
+            with patch.object(models_mod, "HF_HUB_CACHE", cache):
+                copied = models_mod.import_model_from_dir(repo_id, src_dir)
+                self.assertGreater(copied, 0)
+                hit = try_to_load_from_cache(repo_id, "model.safetensors", cache_dir=cache)
+                self.assertIsInstance(hit, str)
+                self.assertEqual(Path(hit).read_bytes(), b"weights")
+                snapshot_dir = Path(hit).parent
+                self.assertTrue((snapshot_dir / "custom.py").is_file())
+                self.assertFalse((snapshot_dir / "pack").exists())
+
+            with self.assertRaises(ValueError):
+                empty = src_dir / "empty"
+                empty.mkdir()
+                models_mod.import_model_from_dir(repo_id, empty)
+            with self.assertRaises(FileNotFoundError):
+                models_mod.import_model_from_dir(repo_id, src_dir / "missing")
 
     def test_job_progress_phase_transitions(self) -> None:
         """`/api/progress` exposes a valid phase and resets byte counters off-download."""
@@ -230,6 +380,16 @@ class TestApiEndpoints(unittest.TestCase):
     def setUp(self) -> None:
         with bridge_mod._PENDING_OPEN_LOCK:
             bridge_mod._PENDING_OPEN_FILES.clear()
+        # Recent-files persistence goes to a temp file, never the real config dir.
+        self._recents_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._recents_tmp.cleanup)
+        recents_patch = patch.object(
+            bridge_mod,
+            "_recent_files_path",
+            return_value=Path(self._recents_tmp.name) / "recent_files.json",
+        )
+        recents_patch.start()
+        self.addCleanup(recents_patch.stop)
 
     def test_mutating_endpoints_require_session_token(self) -> None:
         """Mutating `/api/*` calls without a valid token or cross-site are rejected."""
@@ -400,6 +560,54 @@ class TestApiEndpoints(unittest.TestCase):
         """`POST /api/models/uninstall` rejects unknown targets with HTTP 400."""
         res = self.client.post("/api/models/uninstall", data={"target": "bogus-model"})
         self.assertEqual(res.status_code, 400)
+
+    def test_settings_endpoints_over_http(self) -> None:
+        """`GET|POST /api/settings` expose and persist the offline-mode switch."""
+        res = self.client.get("/api/settings")
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("offline_mode", res.json())
+        self.assertIn("offline_forced", res.json())
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(settings_mod, "SETTINGS_PATH", Path(tmp) / "settings.json"):
+                try:
+                    res = self.client.post("/api/settings", data={"offline_mode": "true"})
+                    self.assertEqual(res.status_code, 200)
+                    self.assertTrue(res.json()["offline_mode"])
+                    res = self.client.post("/api/settings", data={"offline_mode": "false"})
+                    self.assertFalse(res.json()["offline_mode"])
+                finally:
+                    settings_mod.apply_offline_mode(False)
+
+    def test_models_import_over_http(self) -> None:
+        """`POST /api/models/import` copies a checkpoint folder into the cache."""
+        with tempfile.TemporaryDirectory() as src, tempfile.TemporaryDirectory() as cache:
+            src_dir = Path(src)
+            (src_dir / "model.safetensors").write_bytes(b"weights")
+            (src_dir / "config.json").write_text("{}", encoding="utf-8")
+
+            with (
+                patch.object(models_mod, "HF_HUB_CACHE", cache),
+                patch.object(api_mod, "compact_model_cache_fp16", return_value=0),
+            ):
+                res = self.client.post(
+                    "/api/models/import",
+                    data={"target": "general", "path": src},
+                )
+                self.assertEqual(res.status_code, 200)
+                self.assertTrue(res.json()["ok"])
+                self.assertIn("tiers", res.json()["status"])
+
+            res = self.client.post(
+                "/api/models/import",
+                data={"target": "bogus-model", "path": src},
+            )
+            self.assertEqual(res.status_code, 400)
+            res = self.client.post(
+                "/api/models/import",
+                data={"target": "general", "path": str(src_dir / "missing")},
+            )
+            self.assertEqual(res.status_code, 400)
 
     def test_quick_action_config_over_http(self) -> None:
         """`GET /api/quick-action-config` returns the persisted config and install status."""

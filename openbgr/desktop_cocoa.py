@@ -45,9 +45,12 @@ def configure_macos_native_window_and_menus(window: Any) -> None:
     """
     Enhances the macOS Cocoa NSMenu and NSWindow once the window is shown:
     1. Attaches native Cocoa keyboard shortcuts (`keyEquivalent`) to menu items
-       so macOS displays `⌘T`, `⌘O`, `⌘B`, `⌘E`, `⌘W`, `⌘,`, `⌘+`/`⌘-`/`⌘0`,
-       `⌘R`, and `⌃⌘F` in the menu bar, and intercepts `⌘W` to close the active
-       tab instead of closing the entire window.
+       so macOS displays `⌘T`, `⌘O`, `⌘B`, `⌘E`, `⌘W`, `⌘,`, `⇧⌘C`, `⌘+`/`⌘-`/`⌘0`,
+       `⌘R`, `⌘M`, and `⌃⌘F` in the menu bar, and intercepts `⌘W` to close the
+       active tab instead of closing the entire window. `⌘V` is deliberately
+       left unbound: the DOM `paste` event already routes image pastes to the
+       workspace, and a menu keyEquivalent would swallow text paste inside
+       focused form fields.
     2. Wires the top "About OpenBGR" item in the macOS application menu to open
        the in-app About / System Info dialog.
     3. Sets the NSWindow appearance to DarkAqua by default.
@@ -111,12 +114,13 @@ def configure_macos_native_window_and_menus(window: Any) -> None:
                         "Batch Process Images…": ("b", cmd_mask),
                         "Export Image…": ("e", cmd_mask),
                         "Close Tab": ("w", cmd_mask),
+                        "Reopen Closed Tab": ("t", shift_cmd),
                         "Copy Cutout": ("c", shift_cmd),
-                        "Paste Image": ("v", cmd_mask),
                         "Zoom In": ("+", cmd_mask),
                         "Zoom Out": ("-", cmd_mask),
                         "Actual Size": ("0", cmd_mask),
                         "Re-Run Segmentation": ("r", cmd_mask),
+                        "Minimize": ("m", cmd_mask),
                         "Toggle Full Screen": ("f", ctrl_cmd),
                     }
 

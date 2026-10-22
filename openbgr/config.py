@@ -521,6 +521,29 @@ def open_folder_in_file_manager(folder: Path) -> bool:
     return False
 
 
+def reveal_in_file_manager(path: Path) -> bool:
+    """
+    Opens the OS file manager with `path` selected where the platform supports
+    it (Finder `open -R`, Explorer `/select,`); otherwise opens the parent
+    folder (Linux has no reliable select-a-file API).
+    """
+    try:
+        target = path.expanduser().resolve()
+        if target.is_dir():
+            return open_folder_in_file_manager(target)
+        sys_name = platform.system()
+        if sys_name == "Darwin" and target.is_file():
+            subprocess.Popen(["open", "-R", str(target)])
+            return True
+        if sys_name == "Windows" and target.is_file():
+            subprocess.Popen(["explorer", "/select,", str(target)])
+            return True
+        return open_folder_in_file_manager(target.parent)
+    except Exception as exc:
+        logger.warning("[Config] Failed to reveal %s: %s", path, exc)
+        return False
+
+
 def ensure_app_icon() -> str | None:
     """
     Generates the macOS-squircle OpenBGR icon in `~/.openbgr/icon.png`

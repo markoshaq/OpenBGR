@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 import os
 import platform
 import secrets
@@ -22,7 +23,12 @@ from typing import Any
 from huggingface_hub.constants import HF_HUB_CACHE
 from PIL import Image
 
-from .config import APP_CONFIG_DIR, logger, open_folder_in_file_manager
+from .config import (
+    APP_CONFIG_DIR,
+    logger,
+    open_folder_in_file_manager,
+    reveal_in_file_manager,
+)
 from .models import MANAGER
 from .quick_action_native import copy_png_bytes_to_clipboard
 
@@ -77,6 +83,67 @@ def get_pending_open_files_count() -> int:
 _LOCAL_FILE_LOCK = threading.Lock()
 _LOCAL_FILES: dict[str, tuple[Path, float]] = {}
 _LOCAL_FILE_TTL_S = 600.0
+
+# Recently opened image paths, persisted across restarts for File > Open Recent.
+_RECENT_FILES_LOCK = threading.Lock()
+_MAX_RECENT_FILES = 12
+
+
+def _recent_files_path() -> Path:
+    """Location of the persisted Open Recent list."""
+    return APP_CONFIG_DIR / "recent_files.json"
+
+
+def _load_recent_files() -> list[str]:
+    """Reads the persisted path list; malformed or missing files yield []."""
+    try:
+        data = json.loads(_recent_files_path().read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return [str(p) for p in data if isinstance(p, str)]
+    except Exception:
+        pass
+    return []
+
+
+def _save_recent_files(paths: list[str]) -> None:
+    """Writes the recent-files list; persistence failures are non-fatal."""
+    try:
+        APP_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        _recent_files_path().write_text(json.dumps(paths, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def add_recent_files(paths: Any) -> None:
+    """Prepends image paths to the persisted Open Recent list (newest first)."""
+    files = [
+        str(Path(str(p)).resolve())
+        for p in paths
+        if Path(str(p)).is_file() and Path(str(p)).suffix.lower() in _IMAGE_EXTENSIONS
+    ]
+    if not files:
+        return
+    with _RECENT_FILES_LOCK:
+        merged = files + [p for p in _load_recent_files() if p not in files]
+        _save_recent_files(merged[:_MAX_RECENT_FILES])
+
+
+def list_recent_files() -> list[dict[str, str]]:
+    """Returns the persisted Open Recent list, pruned to files that still exist."""
+    with _RECENT_FILES_LOCK:
+        recent = _load_recent_files()
+        existing = [p for p in recent if Path(p).is_file()]
+        if existing != recent:
+            _save_recent_files(existing)
+    entries = []
+    for p in existing:
+        path = Path(p)
+        try:
+            display = f"~/{path.relative_to(Path.home()).as_posix()}"
+        except ValueError:
+            display = p
+        entries.append({"name": path.name, "path": p, "display": display})
+    return entries
 
 
 def _purge_expired_local_files() -> None:
@@ -138,6 +205,7 @@ def queue_open_files(paths: Any) -> None:
     ]
     if not file_list:
         return
+    add_recent_files(file_list)
     with _PENDING_OPEN_LOCK:
         _PENDING_OPEN_FILES.extend(file_list)
         _OPEN_FILES_RECEIVED += len(file_list)
@@ -174,15 +242,45 @@ class DesktopApi:
     def __init__(self) -> None:
         """The pywebview window handle is attached after `create_window`."""
         self.window: Any = None
+        self.native_menus: bool = False
         # (sequence, has_image) of the last clipboard probe. Each OS exposes a
         # cheap change counter so per-focus probes can skip the expensive
         # content decode while the clipboard is unchanged.
         self._clip_seq: Any = None
         self._clip_has_image: bool | None = None
 
+    def native_menus_enabled(self) -> dict[str, Any]:
+        """Reports whether a native OS menu bar is attached to the desktop window."""
+        return {"enabled": bool(self.native_menus)}
+
     def take_pending_files(self) -> dict[str, Any]:
         """Drains OS-delivered open-file requests (argv / macOS 'odoc') for ingestion."""
         return take_pending_files()
+
+    def get_recent_files(self) -> dict[str, Any]:
+        """Returns the persisted Open Recent list (files that still exist)."""
+        return {"files": list_recent_files()}
+
+    def open_recent_file(self, path: str) -> dict[str, Any]:
+        """Grants one-shot read access to an entry of the Open Recent list."""
+        resolved = str(Path(str(path)).resolve()) if path else ""
+        known = {entry["path"] for entry in list_recent_files()}
+        if resolved and resolved in known:
+            return {"files": register_local_files([Path(resolved)])}
+        return {"files": [], "error": "File is no longer available."}
+
+    def clear_recent_files(self) -> dict[str, Any]:
+        """Empties the persisted Open Recent list."""
+        with _RECENT_FILES_LOCK:
+            _save_recent_files([])
+        return {"cleared": True}
+
+    def reveal_path(self, path: str) -> dict[str, Any]:
+        """Opens the OS file manager with a saved file selected (or its folder)."""
+        try:
+            return {"revealed": reveal_in_file_manager(Path(str(path)))}
+        except Exception as exc:
+            return {"revealed": False, "error": str(exc)}
 
     @staticmethod
     def _macos_clipboard_paths() -> list[str]:
@@ -229,6 +327,7 @@ class DesktopApi:
                 return {"cancelled": True}
 
             paths = list(result) if isinstance(result, (list, tuple)) else [str(result)]
+            add_recent_files(paths)
             files = register_local_files([Path(p_str) for p_str in paths])
             if not files:
                 return {"cancelled": True}

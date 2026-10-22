@@ -263,6 +263,9 @@ export function createBlankTab() {
   switchToTab(blankTab.id);
 }
 
+/** How many recently closed tabs File > Reopen Closed Tab can restore. */
+const MAX_CLOSED_TABS = 8;
+
 /** Closes a tab, prompting first when it holds an image or a non-empty batch. */
 export function requestCloseTab(tabId) {
   const tab = state.tabs.find((t) => t.id === tabId);
@@ -308,7 +311,17 @@ export function closeTabImmediate(tabId) {
     stopElapsedTicker();
   }
 
-  revokeTabUrls(tab);
+  // Content-bearing tabs join the closed-tab stack intact so File > Reopen
+  // Closed Tab restores them fully; empty stubs are revoked and forgotten.
+  if (tab.sourceFile || (tab.kind === "batch" && tab.batchFiles.length)) {
+    state.closedTabs.push({ tab, index: idx });
+    while (state.closedTabs.length > MAX_CLOSED_TABS) {
+      const evicted = state.closedTabs.shift();
+      if (evicted?.tab) revokeTabUrls(evicted.tab);
+    }
+  } else {
+    revokeTabUrls(tab);
+  }
 
   if (tab.kind === "batch" && state.batch.running && state.batch.tabId === tabId) {
     state.batch.cancelled = true;
@@ -341,6 +354,17 @@ export function closeTabImmediate(tabId) {
   } else {
     renderTabBar();
   }
+}
+
+/** Restores the most recently closed tab at its original position (Shift+Cmd/Ctrl+T). */
+export function reopenClosedTab() {
+  const entry = state.closedTabs.pop();
+  if (!entry) return;
+  const idx = Math.min(entry.index ?? state.tabs.length, state.tabs.length);
+  state.tabs.splice(idx, 0, entry.tab);
+  renderTabBar();
+  syncMenuBarState();
+  requestSwitchToTab(entry.tab.id);
 }
 
 /** Tears all tabs down and returns to the splash/dropzone state. */
@@ -707,6 +731,7 @@ export function syncMenuBarState() {
     else if (req === "processing") enabled = isBusy;
     else if (req === "image-idle") enabled = hasImage && !isBusy;
     else if (req === "native") enabled = Boolean(window.pywebview?.api);
+    else if (req === "closed-tab") enabled = state.closedTabs.length > 0;
     else if (req === "paste-image") {
       enabled = state.clipboardHasImage !== false;
     } else if (req === "model-controls") {
@@ -945,6 +970,13 @@ function segmentationBlocked() {
     return true;
   }
   const tierInfo = state.serverStatus?.tiers?.[state.tier];
+  if (tierInfo && !tierInfo.cached && state.serverStatus?.offline_mode) {
+    setError(
+      "Selected model is not cached and internet access is blocked. " +
+        "Import the checkpoint folder under Settings > Models."
+    );
+    return true;
+  }
   if (tierInfo && !tierInfo.cached && !navigator.onLine) {
     setError("Selected model is not cached on disk and device is currently offline.");
     return true;

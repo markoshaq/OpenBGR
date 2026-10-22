@@ -1278,6 +1278,19 @@ export async function saveBatchFile(dir, filename, blob) {
   }
 }
 
+/** Opens the OS file manager at a saved file or folder (desktop mode only). */
+export function revealSavedPath(path) {
+  if (!path || !window.pywebview?.api?.reveal_path) return;
+  window.pywebview.api
+    .reveal_path(path)
+    .then((res) => {
+      if (res && res.revealed === false) {
+        setError("Could not reveal the saved file.");
+      }
+    })
+    .catch(() => setError("Could not reveal the saved file."));
+}
+
 /** Exports the active cutout to its output folder or a Save-As dialog. */
 export async function exportActiveImage() {
   if (!state.resultBlob) return;
@@ -1305,7 +1318,13 @@ export async function exportActiveImage() {
         throw new Error(await apiErrorDetail(res));
       }
       const payload = await res.json().catch(() => ({}));
-      setSuccess(`SAVED: ${payload.name || fileName} IN ${state.outputDir}`);
+      const savedPath =
+        payload.path || `${state.outputDir}/${payload.name || fileName}`;
+      setSuccess(
+        `SAVED: ${payload.name || fileName} IN ${state.outputDir}`,
+        8000,
+        { label: "REVEAL", fn: () => revealSavedPath(savedPath) }
+      );
       return;
     }
 
@@ -1317,7 +1336,10 @@ export async function exportActiveImage() {
         const parts = res.path.replace(/\\/g, "/").split("/");
         const savedName = parts.pop();
         const savedDir = parts.join("/") || ".";
-        setSuccess(`SAVED: ${savedName} IN ${savedDir}`);
+        setSuccess(`SAVED: ${savedName} IN ${savedDir}`, 8000, {
+          label: "REVEAL",
+          fn: () => revealSavedPath(res.path),
+        });
       }
       return;
     }
@@ -1377,6 +1399,38 @@ export async function copyActiveCutout() {
     markCopied();
   } catch (_) {
     setError("Clipboard PNG write is not supported in this browser context.");
+  }
+}
+
+/** Copies the unprocessed source image as PNG to the system clipboard. */
+export async function copyOriginalImage() {
+  if (!state.sourceFile) return;
+  try {
+    const bmp = await createImageBitmap(state.sourceFile);
+    const canvas = document.createElement("canvas");
+    canvas.width = bmp.width;
+    canvas.height = bmp.height;
+    canvas.getContext("2d").drawImage(bmp, 0, 0);
+    bmp.close?.();
+    const pngBlob = await new Promise((resolve) =>
+      canvas.toBlob(resolve, "image/png")
+    );
+    if (!pngBlob) throw new Error("PNG encode failed");
+
+    if (window.pywebview?.api?.copy_image) {
+      const b64 = await blobToBase64(pngBlob);
+      const res = await window.pywebview.api.copy_image(b64);
+      if (res?.copied) {
+        setSuccess("COPIED: ORIGINAL IMAGE");
+        return;
+      }
+    }
+    await navigator.clipboard.write([
+      new ClipboardItem({ "image/png": pngBlob }),
+    ]);
+    setSuccess("COPIED: ORIGINAL IMAGE");
+  } catch (_) {
+    setError("Could not copy the original image.");
   }
 }
 

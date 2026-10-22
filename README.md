@@ -19,6 +19,7 @@
 ## Features
 
 - Download models once from Hugging Face, then run **fully offline** from cache.
+- Optional **Block Internet Access** mode cuts all Hugging Face traffic; import checkpoints manually to go fully offline ([guide](#install-a-model-without-internet)).
 - Switch, reorder, and **merge tabs into batches** with familiar browser hotkeys; zoom, pan, and export settings are per-tab.
 - **Batch-process** any number of images under one settings snapshot; export to a folder or a single ZIP.
 - Pick a model **per machine and image**: weak hardware, everyday photos, 4K detail, portraits, glass and smoke, odd aspect ratios ([model table](#models)).
@@ -88,6 +89,12 @@ python app.py photo.png                        # open app (or tab in running win
 | **Dynamic** (`dynamic`) | up to 2K, native ratio | ~424 MB | Panoramas, tall banners |
 
 Each model downloads to the Hugging Face cache on first use only; FP32 checkpoints auto-compact to FP16 on disk. Masks always upscale back to the source's exact resolution, and 2K models run at 1.5K on machines under ~14 GB of memory.
+
+### Install a model without internet
+
+1. Download a model folder, e.g. `hf download ZhengPeng7/BiRefNet` or the repo from huggingface.co, and copy it to the machine.
+2. In OpenBGR, open **Settings > Models > IMPORT MODEL FOLDER**, pick the model, choose the folder.
+3. Optionally enable **Settings > Block Internet Access** (or launch with `OPENBGR_OFFLINE=1`).
 
 ## API
 

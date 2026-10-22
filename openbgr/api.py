@@ -51,6 +51,7 @@ from .models import (
     expected_model_bytes,
     get_model_cache_dir,
     get_model_disk_bytes,
+    import_model_from_dir,
     is_model_cached_locally,
     model_download_active,
     model_download_guard,
@@ -70,6 +71,7 @@ from .quick_action_config import (
     save_quick_action_config,
     set_quick_action_installed,
 )
+from .settings import env_forces_offline, offline_mode_enabled, set_offline_mode
 
 
 @asynccontextmanager
@@ -85,7 +87,8 @@ async def lifespan(_app: FastAPI):
         timer = threading.Timer(0.5, lambda: MANAGER.get_or_load(default_model_key))
         timer.daemon = True
         timer.start()
-    threading.Thread(target=refresh_expected_sizes, daemon=True).start()
+    if not offline_mode_enabled():
+        threading.Thread(target=refresh_expected_sizes, daemon=True).start()
     try:
         yield
     finally:
@@ -165,9 +168,28 @@ def api_status() -> dict[str, Any]:
         "app_size_bytes": app_size_bytes,
         "total_disk_bytes": total_disk_bytes,
         "cache_dir": cache_display,
+        "offline_mode": offline_mode_enabled(),
+        "offline_forced": env_forces_offline(),
         "tiers": tiers_status,
         "quick_action": _quick_action_status(),
     }
+
+
+@app.get("/api/settings")
+def api_get_settings() -> dict[str, Any]:
+    """Returns persisted app settings: the offline-mode switch and env-forced state."""
+    return {
+        "offline_mode": offline_mode_enabled(),
+        "offline_forced": env_forces_offline(),
+    }
+
+
+@app.post("/api/settings")
+def api_save_settings(offline_mode: bool | None = Form(None)) -> dict[str, Any]:
+    """Updates persisted app settings; currently only the offline-mode switch."""
+    if offline_mode is not None:
+        set_offline_mode(offline_mode)
+    return api_get_settings()
 
 
 @app.get("/api/quick-action-config")
@@ -398,6 +420,15 @@ async def api_install_model(target: str = Form(...)) -> dict[str, Any]:
         )
 
     repo_id = MODELS[norm]
+    if offline_mode_enabled():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Internet access is blocked (offline mode). Download "
+                f"{repo_id} yourself and import the folder under "
+                "Settings > Models, or disable offline mode."
+            ),
+        )
 
     def _download() -> None:
         """Blocking download + FP16 compaction, run in a worker thread."""
@@ -418,6 +449,49 @@ async def api_install_model(target: str = Form(...)) -> dict[str, Any]:
 
     logger.info("[API] Model installed: %s.", repo_id)
     set_job_phase("idle")
+    return {
+        "ok": True,
+        "status": api_status(),
+    }
+
+
+@app.post("/api/models/import")
+async def api_import_model(target: str = Form(...), path: str = Form(...)) -> dict[str, Any]:
+    """
+    Copies a user-provided checkpoint folder into the Hugging Face cache as a
+    synthetic snapshot, so a model can be provisioned with zero network
+    access (files fetched through a browser, another machine, or `hf download`).
+    """
+    norm = normalize_tier_key(target)
+    if norm not in MODELS:
+        raise HTTPException(status_code=400, detail=f"Unknown model target '{target}'.")
+    repo_id = MODELS[norm]
+
+    def _import() -> int:
+        # Serializes the cache write against in-flight downloads/uninstalls.
+        with model_download_guard(blocking=False):
+            return import_model_from_dir(repo_id, Path(path))
+
+    try:
+        copied_bytes = await asyncio.to_thread(_import)
+    except BlockingIOError:
+        raise HTTPException(
+            status_code=409,
+            detail="A model is still downloading or loading. Wait for it to finish before importing.",
+        ) from None
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("[API] Failed to import %s from %s.", repo_id, path)
+        raise HTTPException(status_code=500, detail=f"Failed to import {repo_id}: {exc}") from exc
+
+    compact_model_cache_fp16(repo_id)
+    logger.info(
+        "[API] Imported %s from %s (%.1f MB).",
+        repo_id,
+        path,
+        copied_bytes / 1024**2,
+    )
     return {
         "ok": True,
         "status": api_status(),

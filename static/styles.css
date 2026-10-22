@@ -155,6 +155,11 @@ body {
   user-select: none;
 }
 
+/* Hide the in-app menu bar when the native OS menu bar (macOS / Linux GTK) is active. */
+.native-menus .menubar {
+  display: none;
+}
+
 .menu-root {
   position: relative;
 }
@@ -1715,6 +1720,56 @@ body {
   margin-top: 8px;
 }
 
+/* Open Recent modal: scrollable list of persisted file paths */
+.recent-list {
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.recent-item {
+  display: block;
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11px;
+  text-align: left;
+  padding: 8px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.recent-item:last-child {
+  border-bottom: none;
+}
+
+.recent-item:hover {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.recent-item:hover .recent-path {
+  color: var(--accent-contrast);
+}
+
+.recent-path {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.recent-empty {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 16px 10px;
+}
+
 .info-footer {
   display: flex;
   align-items: center;
@@ -1823,6 +1878,24 @@ body {
   background: #d1fae5;
   border-color: #059669;
   color: #065f46;
+}
+
+/* Inline action inside the toast (e.g. REVEAL after a successful export). */
+.error-toast .toast-action {
+  background: transparent;
+  border: 1px solid currentColor;
+  color: inherit;
+  font-family: inherit;
+  font-size: inherit;
+  letter-spacing: inherit;
+  padding: 1px 7px;
+  margin-left: 10px;
+  cursor: pointer;
+}
+
+.error-toast .toast-action:hover {
+  background: currentColor;
+  color: var(--bg);
 }
 
 /* -------------------------------------------------------------------------
@@ -2091,6 +2164,31 @@ input[type="file"] {
   padding: 6px 8px;
   font-size: 10px;
   flex-shrink: 0;
+}
+
+.import-row {
+  flex-wrap: nowrap;
+}
+
+.import-row .pref-select {
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+.import-path-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 8px;
+  font-family: var(--mono);
+  font-size: 10px;
+  outline: none;
+}
+
+.import-path-input:focus {
+  border-color: var(--border-strong);
 }
 
 /* Square studio accent swatches (matching Matte Backdrop swatches) */

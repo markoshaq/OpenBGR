@@ -6,7 +6,7 @@
 export const DOT_TOOLTIPS = {
   ready: "READY OFFLINE: Model weights are cached on disk",
   downloadable: "ON DEMAND: Model downloads on first run",
-  unavailable: "OFFLINE: Model is not cached and device is offline",
+  unavailable: "NOT CACHED: model must be downloaded or imported manually",
 };
 
 export const TIER_KEYS = [
@@ -334,6 +334,8 @@ export const state = {
   // Tabs & workspace
   tabs: [],
   activeTabId: null,
+  // Recently closed tab records for File > Reopen Closed Tab (newest last).
+  closedTabs: [],
   confirmCloseTab: prefs.confirmClose,
 
   // Per-tab mirrored settings (restored on tab switch)
@@ -465,12 +467,22 @@ export const dom = {
   btnModalCancel: document.getElementById("btnModalCancel"),
   btnModalAlt: document.getElementById("btnModalAlt"),
   btnModalConfirm: document.getElementById("btnModalConfirm"),
+  recentModal: document.getElementById("recentModal"),
+  recentList: document.getElementById("recentList"),
+  recentClear: document.getElementById("recentClear"),
+  recentClose: document.getElementById("recentClose"),
 
   infoModal: document.getElementById("infoModal"),
   btnInfo: document.getElementById("btnInfo"),
   btnInfoClose: document.getElementById("btnInfoClose"),
   btnResetPrefs: document.getElementById("btnResetPrefs"),
   btnToggleConfirmClose: document.getElementById("btnToggleConfirmClose"),
+  btnToggleOfflineMode: document.getElementById("btnToggleOfflineMode"),
+  offlineModeDesc: document.getElementById("offlineModeDesc"),
+  prefImportTier: document.getElementById("prefImportTier"),
+  importFolderPath: document.getElementById("importFolderPath"),
+  btnChooseImportFolder: document.getElementById("btnChooseImportFolder"),
+  btnImportModel: document.getElementById("btnImportModel"),
   prefThemeDark: document.getElementById("prefThemeDark"),
   prefThemeLight: document.getElementById("prefThemeLight"),
   accentSwatches: document.getElementById("accentSwatches"),
@@ -717,11 +729,24 @@ export function setError(message, ms = 10000) {
 }
 
 /** Shows a transient green success toast that auto-hides after `ms`. */
-export function setSuccess(message, ms = 5000) {
+export function setSuccess(message, ms = 5000, action = null) {
   dom.errorToast.dataset.raw = message;
   dom.errorToast.dataset.kind = "success";
   dom.errorToast.classList.add("success");
   dom.errorToast.textContent = message;
+  // Optional inline action (e.g. "REVEAL" after saving); clicking it runs the
+  // callback instead of copying the toast text.
+  if (action?.label && typeof action.fn === "function") {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "toast-action";
+    btn.textContent = action.label;
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      action.fn();
+    });
+    dom.errorToast.appendChild(btn);
+  }
   dom.errorToast.classList.add("visible");
   clearTimeout(toastHideTimer);
   toastHideTimer = setTimeout(() => {

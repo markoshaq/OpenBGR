@@ -29,6 +29,7 @@ import {
   saveBatchFile,
   buildZip,
   createZipWriter,
+  revealSavedPath,
 } from "./export.js";
 import {
   renderTabBar,
@@ -697,8 +698,16 @@ function snapshotBatchSettings(tab) {
 /** Reports why a run must not start; returns true when blocked. */
 function batchPreflightBlocked(snap) {
   const tierInfo = state.serverStatus?.tiers?.[snap.tier];
-  if (tierInfo && tierInfo.cached === false && !navigator.onLine) {
-    setError("Selected model is not cached on disk and device is currently offline.");
+  if (
+    tierInfo &&
+    tierInfo.cached === false &&
+    (state.serverStatus?.offline_mode || !navigator.onLine)
+  ) {
+    setError(
+      state.serverStatus?.offline_mode
+        ? "Selected model is not cached and internet access is blocked. Import the checkpoint folder under Settings > Models."
+        : "Selected model is not cached on disk and device is currently offline."
+    );
     return true;
   }
   if (isModelInstallInProgress()) {
@@ -919,6 +928,8 @@ async function finishBatchRun(tab, batch, run) {
             : ".\nDownloaded as openbgr-cutouts.zip."),
       confirmText: "DONE",
       hideCancel: true,
+      altText: outputDir ? "REVEAL FOLDER" : undefined,
+      altFn: outputDir ? () => revealSavedPath(outputDir) : null,
     },
     () => {}
   );

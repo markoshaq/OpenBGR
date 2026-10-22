@@ -27,13 +27,19 @@ def build_native_menus(window: Any) -> list[Any]:
     """
     from webview.menu import Menu, MenuAction, MenuSeparator
 
+    def _win() -> Any:
+        """Resolves the pywebview window handle from either a Window or DesktopApi."""
+        return getattr(window, "window", window)
+
     def call(fn: str):
         """Wraps a `window.openBGR.*` JS invocation in a native-menu-safe closure."""
 
         def _run() -> None:
             """Menu-action thunk: evaluates the JS handler, ignoring bridge failures."""
             try:
-                window.evaluate_js(f"window.openBGR && window.openBGR.{fn}")
+                w = _win()
+                if w is not None:
+                    w.evaluate_js(f"window.openBGR && window.openBGR.{fn}")
             except Exception:
                 pass
 
@@ -42,7 +48,9 @@ def build_native_menus(window: Any) -> list[Any]:
     def toggle_fs() -> None:
         """Toggles the native window between windowed and full-screen mode."""
         try:
-            window.toggle_fullscreen()
+            w = _win()
+            if w is not None:
+                w.toggle_fullscreen()
         except Exception:
             pass
 
@@ -50,7 +58,27 @@ def build_native_menus(window: Any) -> list[Any]:
         """Cancels any in-flight job before tearing the window down."""
         MANAGER.request_cancel()
         try:
-            window.destroy()
+            w = _win()
+            if w is not None:
+                w.destroy()
+        except Exception:
+            pass
+
+    def minimize_window() -> None:
+        """Minimizes the native window (macOS Window menu)."""
+        try:
+            w = _win()
+            if w is not None:
+                w.minimize()
+        except Exception:
+            pass
+
+    def zoom_window() -> None:
+        """Toggles the native window between normal and zoomed (macOS Window menu)."""
+        try:
+            w = _win()
+            if w is not None:
+                w.maximize()
         except Exception:
             pass
 
@@ -64,11 +92,13 @@ def build_native_menus(window: Any) -> list[Any]:
     file_items: list[Any] = [
         MenuAction("New Tab", call("newTab()")),
         MenuAction("Open Image…", call("openImage()")),
+        MenuAction("Open Recent…", call("openRecent()")),
         MenuAction("Batch Process Images…", call("startBatch()")),
         MenuSeparator(),
         MenuAction("Export Image…", call("exportImage()")),
         MenuSeparator(),
         MenuAction("Close Tab", call("closeActiveTab()")),
+        MenuAction("Reopen Closed Tab", call("reopenClosedTab()")),
         MenuSeparator(),
         MenuAction("Restart OpenBGR", call("restartApp()")),
     ]
@@ -87,6 +117,7 @@ def build_native_menus(window: Any) -> list[Any]:
         "Edit",
         [
             MenuAction("Copy Cutout", call("copyImage()")),
+            MenuAction("Copy Original Image", call("copyOriginalImage()")),
             MenuAction("Paste Image", call("pasteImage()")),
             MenuSeparator(),
             MenuAction("Cancel Processing", call("cancelProcessing()")),
@@ -144,4 +175,17 @@ def build_native_menus(window: Any) -> list[Any]:
         ],
     )
 
-    return [app_menu, file_menu, edit_menu, view_menu, model_menu, help_menu]
+    menus: list[Any] = [app_menu, file_menu, edit_menu, view_menu, model_menu]
+    if platform.system() == "Darwin":
+        # macOS convention: a Window menu (Minimize / Zoom) sits before Help.
+        menus.append(
+            Menu(
+                "Window",
+                [
+                    MenuAction("Minimize", minimize_window),
+                    MenuAction("Zoom", zoom_window),
+                ],
+            )
+        )
+    menus.append(help_menu)
+    return menus

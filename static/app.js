@@ -44,6 +44,7 @@ import {
   getExportBaseDims,
   exportActiveImage,
   copyActiveCutout,
+  copyOriginalImage,
 } from "./export.js";
 import {
   updateCacheIndicator,
@@ -58,6 +59,9 @@ import {
   showModelContextMenu,
   syncQuickActionConfigToServer,
   toggleQuickActionInstall,
+  toggleOfflineMode,
+  chooseImportFolder,
+  importModelFromFolder,
 } from "./preferences.js";
 import {
   openMultiFileChooser,
@@ -75,6 +79,7 @@ import {
   hideTabGhost,
   createBlankTab,
   requestCloseTab,
+  reopenClosedTab,
   requestSwitchToTab,
   ingestImageFile,
   setViewMode,
@@ -309,6 +314,15 @@ dom.btnToggleQaNotify?.addEventListener("click", () => {
 dom.btnQaInstallToggle?.addEventListener("click", () => {
   toggleQuickActionInstall();
 });
+dom.btnToggleOfflineMode?.addEventListener("click", () => {
+  toggleOfflineMode();
+});
+dom.btnChooseImportFolder?.addEventListener("click", () => {
+  chooseImportFolder();
+});
+dom.btnImportModel?.addEventListener("click", () => {
+  importModelFromFolder();
+});
 dom.btnResetPrefs?.addEventListener("click", () => {
   resetPrefs();
   state.confirmCloseTab = prefs.confirmClose;
@@ -357,7 +371,7 @@ dom.tierDropdown?.addEventListener("click", (e) => {
 document.addEventListener("click", (e) => {
   if (
     dom.tierDropdown?.classList.contains("open") &&
-    !e.target.closest("#tierDropdown")
+    !e.target.closest("#tierDropdown, #tabContextMenu, #confirmModal")
   ) {
     setTierDropdownOpen(false);
   }
@@ -1019,7 +1033,20 @@ async function readNativeClipboardImage() {
   return null;
 }
 
+/** True for editable elements that own keystrokes and paste while focused. */
+function isTextField(el) {
+  return (
+    el &&
+    (el.tagName === "INPUT" ||
+      el.tagName === "SELECT" ||
+      el.tagName === "TEXTAREA" ||
+      el.isContentEditable)
+  );
+}
+
 window.addEventListener("paste", async (e) => {
+  // A focused field owns keyboard paste; workspace image ingest stays out.
+  if (isTextField(e.target)) return;
   const items = e.clipboardData?.items || [];
   for (const item of items) {
     if (item.type.startsWith("image/")) {
@@ -1054,6 +1081,79 @@ async function pasteImageFromClipboard() {
     setError("Clipboard does not contain an image (or press Cmd/Ctrl+V).");
   }
 }
+
+// Open Recent modal (desktop mode): persisted file paths served by the bridge.
+/** Closes the Open Recent modal. */
+function closeRecentModal() {
+  dom.recentModal?.classList.remove("active");
+}
+
+/** Repaints the recent-files list; each row opens that path through the bridge. */
+function renderRecentList(files) {
+  if (!dom.recentList) return;
+  dom.recentList.replaceChildren();
+  if (!files.length) {
+    const empty = document.createElement("div");
+    empty.className = "recent-empty";
+    empty.textContent = "NO RECENT FILES";
+    dom.recentList.appendChild(empty);
+    return;
+  }
+  files.forEach((f) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "recent-item";
+    b.title = f.path;
+    const name = document.createElement("span");
+    name.textContent = f.name;
+    const path = document.createElement("span");
+    path.className = "recent-path";
+    path.textContent = ` — ${f.display || f.path}`;
+    b.append(name, path);
+    b.addEventListener("click", () => openRecentEntry(f.path));
+    dom.recentList.appendChild(b);
+  });
+}
+
+/** Opens the Open Recent modal with a freshly fetched list. */
+async function openRecentDialog() {
+  if (!window.pywebview?.api?.get_recent_files || !dom.recentModal) return;
+  try {
+    const res = await window.pywebview.api.get_recent_files();
+    renderRecentList(res?.files || []);
+    dom.recentModal.classList.add("active");
+  } catch (err) {
+    console.warn("[OpenBGR] Recent files lookup failed:", err);
+  }
+}
+
+/** Grants a recent-file path through the bridge and ingests it into a tab. */
+async function openRecentEntry(path) {
+  try {
+    const res = await window.pywebview.api.open_recent_file(path);
+    const files = await filesFromDialogResult(res);
+    if (!files.length) {
+      setError(res?.error || "File is no longer available.");
+      openRecentDialog();
+      return;
+    }
+    closeRecentModal();
+    ingestWithConfirm(files[0]);
+  } catch (_) {
+    setError("Could not open the recent file.");
+  }
+}
+
+dom.recentClose?.addEventListener("click", closeRecentModal);
+dom.recentClear?.addEventListener("click", async () => {
+  try {
+    await window.pywebview?.api?.clear_recent_files?.();
+  } catch (_) {}
+  renderRecentList([]);
+});
+dom.recentModal?.addEventListener("click", (e) => {
+  if (e.target === dom.recentModal) closeRecentModal();
+});
 
 document.querySelectorAll('a[target="_blank"]').forEach((link) => {
   link.addEventListener("click", (e) => {
@@ -1127,12 +1227,19 @@ window.openBGR = {
     createBlankTab();
   },
   openImage: () => requestOpenImage(),
+  openRecent: () => openRecentDialog(),
+  reopenClosedTab: () => {
+    if (state.closedTabs.length) reopenClosedTab();
+  },
   startBatch: () => requestBatch(),
   exportImage: () => {
     if (state.resultBlob && !state.isProcessing) exportActiveImage();
   },
   copyImage: () => {
     if (state.resultBlob && !state.isProcessing) copyActiveCutout();
+  },
+  copyOriginalImage: () => {
+    if (state.sourceFile) copyOriginalImage();
   },
   closeActiveTab: () => {
     if (state.activeTabId) requestCloseTab(state.activeTabId);
@@ -1222,6 +1329,8 @@ window.addEventListener("keydown", (e) => {
       dom.tierDropdownBtn?.focus();
     } else if (dom.infoModal.classList.contains("active")) {
       closePrefsDialog();
+    } else if (dom.recentModal?.classList.contains("active")) {
+      closeRecentModal();
     } else if (dom.confirmModal.classList.contains("active")) {
       closeConfirmModal();
     } else if (state.isProcessing) {
@@ -1238,16 +1347,8 @@ window.addEventListener("keydown", (e) => {
     return;
   }
 
-  // Plain keys are ignored inside form fields; modifier combos always work.
-  if (
-    e.target &&
-    !e.metaKey &&
-    !e.ctrlKey &&
-    (e.target.tagName === "INPUT" ||
-      e.target.tagName === "SELECT" ||
-      e.target.tagName === "TEXTAREA" ||
-      e.target.isContentEditable)
-  ) {
+  // A focused form field owns the keyboard; app shortcuts stay out of the way.
+  if (isTextField(e.target)) {
     return;
   }
 
@@ -1327,6 +1428,9 @@ window.addEventListener("focus", refreshClipboardState);
  * requires Cmd and Ctrl together (macOS fullscreen convention).
  */
 const MOD_SHORTCUTS = [
+  // The shift-pinned entries must precede their unshifted twins: find() takes
+  // the first match and a bare `shift: undefined` entry matches any Shift state.
+  { keys: ["t"], shift: true, run: () => window.openBGR.reopenClosedTab() },
   { keys: ["t"], run: () => window.openBGR.newTab() },
   { keys: ["o"], run: () => window.openBGR.openImage() },
   { keys: ["e", "s"], run: () => window.openBGR.exportImage() },
@@ -1355,6 +1459,17 @@ const MOD_SHORTCUTS = [
 ];
 
 // In-app menu bar initialization
+/** Hides the in-app menu bar when the desktop window has a native OS menu bar attached. */
+async function syncNativeMenusMode() {
+  if (!window.pywebview?.api?.native_menus_enabled) return;
+  try {
+    const res = await window.pywebview.api.native_menus_enabled();
+    document.documentElement.classList.toggle("native-menus", Boolean(res?.enabled));
+  } catch (_) {}
+}
+syncNativeMenusMode();
+window.addEventListener("pywebviewready", syncNativeMenusMode);
+
 (function initStudioMenuBar() {
   if (!dom.menuBar) return;
 
@@ -1406,6 +1521,8 @@ const MOD_SHORTCUTS = [
   const dispatch = {
     newTab: () => window.openBGR.newTab(),
     openImage: () => window.openBGR.openImage(),
+    openRecent: () => window.openBGR.openRecent(),
+    reopenClosedTab: () => window.openBGR.reopenClosedTab(),
     batchProcess: () => window.openBGR.startBatch(),
     exportImage: () => window.openBGR.exportImage(),
     closeActiveTab: () => window.openBGR.closeActiveTab(),
@@ -1413,6 +1530,7 @@ const MOD_SHORTCUTS = [
     about: () => window.openBGR.openSettings("about"),
     quitApp: () => window.openBGR.quitApp(),
     copyImage: () => window.openBGR.copyImage(),
+    copyOriginal: () => window.openBGR.copyOriginalImage(),
     pasteImage: () => window.openBGR.pasteImage(),
     cancelProcessing: () => window.openBGR.cancelProcessing(),
     restartApp: () => window.openBGR.restartApp(),

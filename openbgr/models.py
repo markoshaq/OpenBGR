@@ -9,6 +9,7 @@ import functools
 import gc
 import importlib
 import os
+import shutil
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -33,6 +34,7 @@ from .config import (
     PRECISION_LABEL,
     logger,
 )
+from .settings import offline_mode_enabled
 
 
 @functools.lru_cache(maxsize=64)
@@ -285,6 +287,8 @@ def refresh_expected_sizes() -> None:
     background so `/api/status` can report accurate figures instead of
     relying solely on the bundled `expected_bytes` constants.
     """
+    if offline_mode_enabled():
+        return
     api = HfApi()
     for repo_id in MODELS.values():
         try:
@@ -364,6 +368,53 @@ def is_model_cached_locally(repo_id: str) -> bool:
         return isinstance(cached_path, str) and os.path.exists(cached_path)
     except Exception:
         return False
+
+
+def import_model_from_dir(repo_id: str, source_dir: Path | str) -> int:
+    """
+    Copies a user-supplied checkpoint folder into the HF Hub cache as a
+    synthetic `manual` snapshot and points `refs/main` at it, so
+    `local_files_only` lookups resolve the files exactly like a
+    `snapshot_download` result. Lets users provision weights while the app
+    never touches the network. Returns the number of bytes copied.
+    """
+    src = Path(source_dir).expanduser()
+    if not src.is_dir():
+        raise FileNotFoundError(f"Model folder does not exist: {src}")
+    files = [
+        p
+        for p in src.rglob("*")
+        if p.is_file() and not p.name.startswith(".") and ".git" not in p.relative_to(src).parts
+    ]
+    names = {p.name for p in files}
+    missing = {"model.safetensors", "config.json"} - names
+    if missing:
+        raise ValueError(
+            f"{src} does not look like a {repo_id} checkpoint "
+            f"(missing {', '.join(sorted(missing))})."
+        )
+    repo_cache = get_model_cache_dir(repo_id)
+    snapshot_dir = repo_cache / "snapshots" / "manual"
+    if snapshot_dir.exists():
+        shutil.rmtree(snapshot_dir, ignore_errors=True)
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    copied_bytes = 0
+    for file_path in files:
+        # HF model repos are flat; nested sources (e.g. an unzipped repo
+        # folder) are flattened to basenames inside the snapshot.
+        dest = snapshot_dir / file_path.name
+        shutil.copy2(file_path, dest)
+        copied_bytes += dest.stat().st_size
+    refs_dir = repo_cache / "refs"
+    refs_dir.mkdir(exist_ok=True)
+    (refs_dir / "main").write_text("manual", encoding="utf-8")
+    logger.info(
+        "[Model] Imported %s from %s (%.1f MB).",
+        repo_id,
+        src,
+        copied_bytes / 1024**2,
+    )
+    return copied_bytes
 
 
 # ---------------------------------------------------------------------------
@@ -470,7 +521,15 @@ class ModelManager:
                         local_files_only=True,
                     )
                     logger.info("[Model] Loaded %s from local offline cache.", repo_id)
-                except Exception:
+                except Exception as cache_exc:
+                    if offline_mode_enabled():
+                        raise FileNotFoundError(
+                            f"{repo_id} could not be loaded from the local "
+                            "cache and internet access "
+                            "is blocked (offline mode). Import the checkpoint "
+                            "folder under Settings > Models, or disable offline "
+                            "mode and retry."
+                        ) from cache_exc
                     logger.info(
                         "[Model] %s not found in local cache. "
                         "Downloading weights from Hugging Face Hub (one-time)...",

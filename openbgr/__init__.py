@@ -14,10 +14,20 @@ Submodules:
 - `openbgr.desktop_menus`   : Native OS menu bar construction (macOS / Linux GTK).
 - `openbgr.desktop_cocoa`   : macOS-only Cocoa integration (app name, menus, 'odoc' handlers).
 - `openbgr.server_probe`    : Local-server port probes and single-instance forwarding.
+- `openbgr.settings`        : Persisted app settings + offline-mode switch.
 - `openbgr.api`             : FastAPI application and HTTP endpoints.
 """
 
 from __future__ import annotations
+
+# Applies the persisted/env-forced offline switch before any submodule can
+# import huggingface_hub or transformers: those libraries snapshot
+# HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE at their own import time, so the env
+# vars must be set here, ahead of them. `settings` is stdlib-only, which
+# keeps `import openbgr.<leaf>` cheap for the bare system interpreter.
+from . import settings as _settings
+
+_settings.sync_offline_env()
 
 
 def __getattr__(name: str) -> object:

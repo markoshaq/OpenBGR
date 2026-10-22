@@ -14,6 +14,7 @@ import {
   ACCENTS,
   normalizeTierKey,
   setError,
+  setSuccess,
   openConfirmModal,
   createByteSmoother,
   updateTierDownloadUI,
@@ -60,10 +61,15 @@ function getTierInfo(key) {
   return state.serverStatus?.tiers?.[norm] || null;
 }
 
+/** True when the server-side offline switch blocks all Hugging Face traffic. */
+export function serverOffline() {
+  return Boolean(state.serverStatus?.offline_mode);
+}
+
 /** Resolves a model's install state to `{cached, repoId, sizeBytes}` from server status. */
 function getTierAvailability(tierInfo) {
   if (tierInfo?.cached) return "ready";
-  return navigator.onLine ? "downloadable" : "unavailable";
+  return navigator.onLine && !serverOffline() ? "downloadable" : "unavailable";
 }
 
 /** Paints a cache-indicator dot green (cached) or amber (on-demand) and sets its tooltip. */
@@ -262,6 +268,12 @@ async function installModel(target) {
     setError("Another model operation is already in progress.");
     return;
   }
+  if (serverOffline()) {
+    setError(
+      "Internet access is blocked. Import the checkpoint folder under Settings > Models."
+    );
+    return;
+  }
   if (!navigator.onLine) {
     setError("Cannot install model weights while device is offline.");
     return;
@@ -375,8 +387,11 @@ export function showModelContextMenu(key, x, y) {
     addItem(
       `Install${sizeSuffix}`,
       () => installModel(norm),
-      busy || !navigator.onLine
+      busy || !navigator.onLine || serverOffline()
     );
+    if (serverOffline()) {
+      addItem("Import Model Folder…", () => openPrefsDialog("models"));
+    }
   }
 
   const sep = document.createElement("div");
@@ -466,6 +481,104 @@ export async function toggleQuickActionInstall() {
   }
 }
 
+/** Reflects the server-side offline switch onto the Settings toggle. */
+export function updateOfflineModeUI() {
+  const offline = serverOffline();
+  const forced = Boolean(state.serverStatus?.offline_forced);
+  if (dom.btnToggleOfflineMode) {
+    dom.btnToggleOfflineMode.classList.toggle("active", offline);
+    dom.btnToggleOfflineMode.disabled = forced;
+  }
+  if (dom.offlineModeDesc) {
+    dom.offlineModeDesc.textContent = forced
+      ? "Forced on by OPENBGR_OFFLINE / HF_HUB_OFFLINE environment variable. Restart without it to change."
+      : "Never connect to Hugging Face. Checkpoints must be imported manually under Models.";
+  }
+}
+
+/** Persists the offline-mode switch via `/api/settings` and refreshes model indicators. */
+export async function toggleOfflineMode() {
+  const next = !serverOffline();
+  try {
+    const fd = new FormData();
+    fd.append("offline_mode", String(next));
+    const res = await apiFetch("/api/settings", { method: "POST", body: fd });
+    if (!res.ok) {
+      throw new Error(await apiErrorDetail(res));
+    }
+    const payload = await res.json();
+    if (state.serverStatus) {
+      state.serverStatus.offline_mode = payload.offline_mode;
+      state.serverStatus.offline_forced = payload.offline_forced;
+    }
+    updateOfflineModeUI();
+    updateCacheIndicator();
+  } catch (err) {
+    setError(err?.message || "Failed to update offline mode.");
+    updateOfflineModeUI();
+  }
+}
+
+/** Opens the native folder picker (desktop only) and fills the import path field. */
+export async function chooseImportFolder() {
+  try {
+    if (window.pywebview?.api?.choose_output_dir) {
+      const res = await window.pywebview.api.choose_output_dir();
+      if (res?.path && dom.importFolderPath) {
+        dom.importFolderPath.value = res.path;
+      } else if (res?.error) {
+        setError(res.error);
+      }
+      return;
+    }
+    dom.importFolderPath?.focus();
+    setError("Paste the model folder path into the field, then click IMPORT.");
+  } catch {
+    setError("Could not open the folder picker.");
+  }
+}
+
+/** Copies a user-downloaded checkpoint folder into the HF cache via `/api/models/import`. */
+export async function importModelFromFolder() {
+  const target = dom.prefImportTier?.value || "general";
+  const path = (dom.importFolderPath?.value || "").trim();
+  if (!path) {
+    setError("Choose the folder containing the downloaded checkpoint first.");
+    return;
+  }
+  if (dom.btnImportModel) {
+    dom.btnImportModel.disabled = true;
+    dom.btnImportModel.textContent = "IMPORTING…";
+  }
+  try {
+    const fd = new FormData();
+    fd.append("target", target);
+    fd.append("path", path);
+    const res = await apiFetch("/api/models/import", {
+      method: "POST",
+      body: fd,
+    });
+    if (!res.ok) {
+      throw new Error(await apiErrorDetail(res));
+    }
+    const payload = await res.json();
+    if (payload?.status) {
+      state.serverStatus = payload.status;
+    }
+    if (dom.importFolderPath) dom.importFolderPath.value = "";
+    updateCacheIndicator();
+    const name = MODEL_TECH_NAMES[target] || target;
+    setSuccess(`${name} imported and ready to use.`);
+  } catch (err) {
+    setError(err?.message || "Failed to import model folder.");
+  } finally {
+    if (dom.btnImportModel) {
+      dom.btnImportModel.disabled = false;
+      dom.btnImportModel.textContent = "IMPORT";
+    }
+  }
+}
+
 /** Fetches `/api/status`, populates hardware/model/cache/system readouts, and syncs default model. */
 export async function syncServerStatus(isInitialLoad = false, onSelectTier = null) {
   try {
@@ -495,6 +608,7 @@ export async function syncServerStatus(isInitialLoad = false, onSelectTier = nul
       syncQuickActionConfigToServer();
     }
     updateQuickActionInstallStatus();
+    updateOfflineModeUI();
     updateCacheIndicator();
   } catch (err) {
     console.warn("[OpenBGR] /api/status request failed:", err);
