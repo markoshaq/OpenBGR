@@ -23,8 +23,10 @@
 - **Batch-process** any number of images under one settings snapshot; export to a folder or a single ZIP.
 - Pick a model **per machine and image**: weak hardware, everyday photos, 4K detail, portraits, glass and smoke, odd aspect ratios ([model table](#models)).
 - Zoom, pan, and inspect edges with gestures, view hotkeys, and a **4x loupe**.
-- **Preview exports live** at any scale or exact pixel size, with aspect lock and matte backdrops.
-- Defringe, suppress color spill, and cut shadow/reflection alpha, all **in real time**.
+- **Preview exports live** at any scale, exact pixel size, or aspect preset, with Fit / Stretch canvas fill and a byte-exact size readout.
+- **Auto-crop to the subject** with adjustable padding and a live crop guide.
+- Pick a backdrop: transparency grid, flat color, the original photo **blurred** behind the cutout, or a second photo.
+- Defringe, suppress color spill, **shift and feather the matte edge**, and cut shadow/reflection alpha, all **in real time** with no re-inference.
 - Run it as a **desktop app** with native menus and themes, or fall back to a plain browser tab.
 - **Right-click** to install or uninstall models, with live progress and per-model disk usage. GPU-accelerated on NVIDIA and Apple Silicon.
 
@@ -89,10 +91,11 @@ Each model downloads to the Hugging Face cache on first use only; FP32 checkpoin
 
 ## API
 
-The local FastAPI server that drives the UI is callable directly, so scripts and other apps can use the same pipeline:
+The local FastAPI server that drives the UI is callable directly, so scripts and other apps can use the same pipeline. Mutating calls require the per-session token the server writes to `~/.openbgr/session_token` at launch:
 
 ```bash
 curl -X POST "http://127.0.0.1:7860/api/remove-bg" \
+  -H "x-openbgr-token: $(cat ~/.openbgr/session_token)" \
   -F "file=@photo.jpg" \
   -F "tier=general" \
   -F "defringe=true" \
@@ -102,7 +105,7 @@ curl -X POST "http://127.0.0.1:7860/api/remove-bg" \
 | Endpoint | Purpose |
 | :--- | :--- |
 | `POST /api/remove-bg` | Run a cutout (the call above) |
-| `POST /api/refine` | Re-apply edge filters to the cached job, no re-inference |
+| `POST /api/refine` | Re-apply edge filters and shift/feather geometry to the cached job, no re-inference |
 | `GET /api/status` | Version, device, RAM, per-model cache state |
 | `GET /api/progress` | Pipeline phase + live download bytes |
 | `POST /api/cancel` | Abort the active job |

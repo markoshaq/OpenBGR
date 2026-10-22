@@ -12,6 +12,7 @@ import asyncio
 import io
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
 from unittest.mock import patch
 
@@ -62,6 +63,16 @@ class TestPipeline(unittest.TestCase):
         self.assertEqual(composed.getpixel((0, 0))[3], 0)
         self.assertEqual(composed.getpixel((16, 16))[3], 255)
         composed.close()
+
+    def test_suppress_color_spill_off_grid_background(self) -> None:
+        """A lone background pixel off the stride-8 subsample grid must not NaN the pass."""
+        rgb = np.full((16, 16, 3), (100, 100, 100), dtype=np.uint8)
+        alpha_norm = np.full((16, 16), 200 / 255.0, dtype=np.float32)
+        alpha_norm[3, 3] = 10 / 255.0  # sole background pixel, misses the [::8, ::8] grid
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            despilled = pipeline_mod.suppress_color_spill(rgb, alpha_norm)
+        np.testing.assert_array_equal(despilled, rgb)
 
     def test_adjust_alpha_geometry(self) -> None:
         """`adjust_alpha_geometry` contracts, expands, and feathers the matte edge."""

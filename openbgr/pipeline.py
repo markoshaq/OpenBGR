@@ -180,7 +180,13 @@ def suppress_color_spill(rgb_np: np.ndarray, alpha_norm: np.ndarray) -> np.ndarr
     # Fall back to global median background color where local background weight
     # is zero. A strided spatial subsample keeps the median robust without
     # copying ~70MB of masked pixels on 24MP inputs.
-    global_bg = np.median(rgb_np[::8, ::8][bg_mask[::8, ::8] > 0.5], axis=0).astype(np.float32)
+    bg_sub = rgb_np[::8, ::8][bg_mask[::8, ::8] > 0.5]
+    if not bg_sub.size:
+        # Stray background pixels can miss the stride-8 grid entirely; fall back
+        # to the exact masked median so `global_bg` stays finite. Non-empty is
+        # guaranteed by the `np.any(bg_mask > 0)` early-out above.
+        bg_sub = rgb_np[bg_mask > 0.5]
+    global_bg = np.median(bg_sub, axis=0).astype(np.float32)
 
     # The chromatic projection only runs on receiver pixels (the rim plus
     # semi-transparent areas): extracting that (n_recv, 3) subset avoids
