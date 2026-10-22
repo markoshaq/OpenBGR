@@ -293,11 +293,26 @@
           <div class="section-header">SOURCE IMAGE</div>
           <button type="button" class="action-btn full-width" id="btnOpen">ADD IMAGE</button>
           <input type="file" id="fileInput" accept="image/*" multiple />
+          <input type="file" id="backdropInput" accept="image/*" />
         </div>
 
         <div class="sidebar-section">
           <div class="section-header">MODEL</div>
-          <div class="model-list" id="tierSelector">
+          <div class="tier-dropdown" id="tierDropdown">
+            <button
+              type="button"
+              class="tier-btn tier-dropdown-trigger"
+              id="tierDropdownBtn"
+              aria-expanded="false"
+              aria-label="Select model"
+            >
+              <div class="tier-head">
+                <span class="tier-label" id="tierDropdownLabel">GENERAL</span>
+                <span class="tier-tech" id="tierDropdownTech">BiRefNet</span>
+              </div>
+              <span class="tier-caret" aria-hidden="true"></span>
+            </button>
+            <div class="model-list" id="tierSelector">
             <button
               type="button"
               class="tier-btn"
@@ -375,6 +390,7 @@
               <div class="tier-desc">Used for panoramas &amp; tall banners.</div>
               <span class="tier-dot" id="dot-dynamic"></span>
             </button>
+            </div>
           </div>
         </div>
 
@@ -422,15 +438,73 @@
         </div>
 
         <div class="sidebar-section requires-image">
-          <div class="section-header">MATTE BACKDROP</div>
-          <div class="swatches-grid" id="matteSwatches" role="group" aria-label="Matte backdrop color">
-            <button type="button" class="swatch swatch-checker active" data-bg="checker" title="Transparency Grid" aria-label="Transparency grid"></button>
-            <button type="button" class="swatch" data-bg="#ffffff" style="background:#ffffff" title="Pure White" aria-label="Pure white"></button>
-            <button type="button" class="swatch" data-bg="#000000" style="background:#000000" title="Pure Black" aria-label="Pure black"></button>
-            <button type="button" class="swatch" data-bg="#18181b" style="background:#18181b" title="Studio Dark Gray" aria-label="Studio dark gray"></button>
-            <input type="color" id="colorPicker" value="#00ff66" class="swatch" style="padding:0; background:none;" title="Custom Matte Color" aria-label="Custom matte color" />
+          <div class="section-header-row has-tooltip" data-tooltip="Contracts (-) or expands (+) the matte edge in pixels to cut fringe halos.">
+            <span class="section-header">EDGE SHIFT</span>
+            <span class="scale-pct" id="edgeShiftLabel">0px</span>
           </div>
-          <div class="field-hint">Solid colors are composited into exports.</div>
+          <input
+            type="range"
+            class="studio-slider full-width"
+            id="edgeShiftSlider"
+            min="-10"
+            max="10"
+            step="1"
+            value="0"
+          />
+        </div>
+
+        <div class="sidebar-section requires-image">
+          <div class="section-header-row has-tooltip" data-tooltip="Softens the matte edge with a Gaussian blur to hide hard cut lines.">
+            <span class="section-header">EDGE FEATHER</span>
+            <span class="scale-pct" id="edgeFeatherLabel">0px</span>
+          </div>
+          <input
+            type="range"
+            class="studio-slider full-width"
+            id="edgeFeatherSlider"
+            min="0"
+            max="15"
+            step="1"
+            value="0"
+          />
+        </div>
+
+        <div class="sidebar-section requires-image">
+          <div class="section-header">BACKDROP</div>
+          <div class="preset-chips mode-chips">
+            <button type="button" class="preset-chip mode-chip has-tooltip active" data-mode="checker" data-tooltip="Transparency is kept; the checkerboard only previews it.">GRID</button>
+            <button type="button" class="preset-chip mode-chip has-tooltip" data-mode="color" data-tooltip="A flat color fills the canvas behind the subject.">COLOR</button>
+            <button type="button" class="preset-chip mode-chip has-tooltip" data-mode="blur" data-tooltip="The original photo, blurred behind the sharp cutout for a portrait bokeh look.">BLUR</button>
+            <button type="button" class="preset-chip mode-chip has-tooltip" data-mode="image" data-tooltip="Composite the cutout onto a second photo.">PHOTO</button>
+          </div>
+          <div class="swatches-grid" id="matteSwatches" role="group" aria-label="Backdrop color" style="display:none">
+            <button type="button" class="swatch has-tooltip" data-bg="#ffffff" style="background:#ffffff" data-tooltip="Pure White" aria-label="Pure white"></button>
+            <button type="button" class="swatch has-tooltip" data-bg="#000000" style="background:#000000" data-tooltip="Pure Black" aria-label="Pure black"></button>
+            <button type="button" class="swatch has-tooltip" data-bg="#18181b" style="background:#18181b" data-tooltip="Studio Dark Gray" aria-label="Studio dark gray"></button>
+            <input type="color" id="colorPicker" value="#00ff66" class="swatch" style="padding:0; background:none;" data-tooltip="Custom Backdrop Color" aria-label="Custom backdrop color" />
+          </div>
+          <div class="backdrop-photo-wrap" id="backdropPhotoWrap" style="display:none">
+            <div class="backdrop-photo-thumb" id="backdropPhotoThumb" data-tooltip="Click to choose, right-click to remove"></div>
+            <div class="backdrop-photo-actions">
+              <button type="button" class="action-btn" id="btnBackdropPhoto">CHOOSE PHOTO…</button>
+              <button type="button" class="action-btn" id="btnBackdropPhotoRemove" style="display:none">REMOVE PHOTO</button>
+            </div>
+          </div>
+          <div class="backdrop-blur-wrap" id="backdropBlurWrap" style="display:none">
+            <div class="section-header-row has-tooltip" data-tooltip="Blurs the backdrop image behind the sharp subject.">
+              <span class="section-header">BACKDROP BLUR</span>
+              <span class="scale-pct" id="backdropBlurLabel">50%</span>
+            </div>
+            <input
+              type="range"
+              class="studio-slider full-width"
+              id="backdropBlurSlider"
+              min="0"
+              max="100"
+              step="1"
+              value="50"
+            />
+          </div>
         </div>
 
         <div class="sidebar-section batch-hide">
@@ -473,6 +547,7 @@
             <div class="before-clip" id="beforeClip">
               <img id="beforeImg" class="stage-layer" alt="Original Source" />
             </div>
+            <div class="crop-guide" id="cropGuide" aria-hidden="true"></div>
             <div class="stage-label left" id="lblLeft">ORIGINAL</div>
             <div class="stage-label right" id="lblRight">PNG (100%)</div>
             <div class="split-line" id="splitLine" style="left: 50%;">
@@ -491,6 +566,7 @@
                 </div>
               </div>
               <div class="batch-panel-actions">
+                <button type="button" class="action-btn" id="btnBatchRetry" style="display:none" data-tooltip="Re-process only failed entries">RETRY FAILED</button>
                 <button type="button" class="action-btn" id="btnBatchAdd">ADD IMAGE</button>
               </div>
             </div>
@@ -527,12 +603,41 @@
             <button type="button" class="tier-btn fmt-btn has-tooltip" data-format="webp" data-tooltip="Compressed with full transparency. ~40% smaller than PNG.">
               <span class="tier-label">WEBP</span>
             </button>
-            <button type="button" class="tier-btn fmt-btn has-tooltip" data-format="jpg" data-tooltip="No transparency. The cutout is flattened onto the active matte backdrop color.">
+            <button type="button" class="tier-btn fmt-btn has-tooltip" data-format="jpg" data-tooltip="No transparency. The cutout is flattened onto the active backdrop color.">
               <span class="tier-label">JPG</span>
             </button>
             <button type="button" class="tier-btn fmt-btn has-tooltip" data-format="mask" data-tooltip="8-bit grayscale matte saved as a .png file (white = foreground, black = background).">
               <span class="tier-label">MASK</span>
             </button>
+          </div>
+        </div>
+
+        <div class="sidebar-section">
+          <div class="section-header-row has-tooltip" data-tooltip="Trims transparent borders to the subject's tight alpha bounding box before scaling.">
+            <span class="section-header">AUTO-CROP TO SUBJECT</span>
+            <button
+              type="button"
+              class="switch"
+              id="btnAutoCrop"
+              role="switch"
+              aria-checked="false"
+              aria-label="Auto-crop to subject"
+            ><span class="switch-knob"></span></button>
+          </div>
+          <div class="crop-padding-wrap disabled" id="cropPaddingWrap">
+            <div class="section-header-row has-tooltip" data-tooltip="Adds symmetric margin around the cropped subject as a percentage of its longest side.">
+              <span class="section-header">CROP PADDING</span>
+              <span class="scale-pct" id="cropPaddingLabel">5%</span>
+            </div>
+            <input
+              type="range"
+              class="studio-slider full-width"
+              id="cropPaddingSlider"
+              min="0"
+              max="50"
+              step="1"
+              value="5"
+            />
           </div>
         </div>
 
@@ -604,6 +709,19 @@
                 placeholder="--"
               />
             </div>
+          </div>
+          <div class="section-header preset-head">ASPECT RATIO</div>
+          <div class="preset-chips">
+            <button type="button" class="preset-chip has-tooltip active" id="presetReset" data-tooltip="Back to the scaled source aspect ratio">ORIGINAL</button>
+            <button type="button" class="preset-chip has-tooltip" data-w="1024" data-h="1024" data-tooltip="1024 x 1024 marketplace square">1:1</button>
+            <button type="button" class="preset-chip has-tooltip" data-w="1080" data-h="1350" data-tooltip="1080 x 1350 portrait post">4:5</button>
+            <button type="button" class="preset-chip has-tooltip" data-w="1080" data-h="1920" data-tooltip="1080 x 1920 story">9:16</button>
+            <button type="button" class="preset-chip has-tooltip" data-w="1920" data-h="1080" data-tooltip="1920 x 1080 landscape">16:9</button>
+          </div>
+          <div class="section-header preset-head">CANVAS FIT</div>
+          <div class="preset-chips fit-chips" id="canvasFitChips">
+            <button type="button" class="preset-chip fit-chip has-tooltip active" data-fit="fit" data-tooltip="Keep aspect, centered with margins">FIT</button>
+            <button type="button" class="preset-chip fit-chip has-tooltip" data-fit="stretch" data-tooltip="Stretch the subject to fill the canvas">STRETCH</button>
           </div>
         </div>
 
@@ -744,7 +862,7 @@
                 </div>
                 <div class="pref-row">
                   <div class="pref-text">
-                    <span class="pref-label">DEFAULT MATTE BACKDROP</span>
+                    <span class="pref-label">DEFAULT BACKDROP</span>
                     <span class="pref-desc">Preview background behind transparent pixels.</span>
                   </div>
                   <select class="studio-select pref-select" id="prefDefaultBackdrop">

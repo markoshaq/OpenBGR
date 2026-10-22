@@ -46,6 +46,8 @@ function resetWorkspace() {
   state.abortController = null;
   state.serverStatus = { tiers: {}, recommended_tier: "general" };
   state.tier = "general";
+  state.edgeShift = 0;
+  state.edgeFeather = 0;
   state.confirmCloseTab = true;
   Object.assign(state.batch, {
     running: false,
@@ -183,6 +185,8 @@ test("runSegmentation posts the image and applies blob, dims, and job id", async
   ingestImageFile(pngFile("dog.png"));
   assert.equal(state.sourceFile?.name, "dog.png");
 
+  state.edgeShift = -2;
+  state.edgeFeather = 4;
   let seenForm = null;
   globalThis.fetch = async (url, opts) => {
     if (String(url).includes("/api/remove-bg")) {
@@ -213,6 +217,10 @@ test("runSegmentation posts the image and applies blob, dims, and job id", async
   assert.ok(!dom.btnDownload.classList.contains("disabled"));
   assert.equal(seenForm.get("tier"), "general");
   assert.equal(seenForm.get("defringe"), "true");
+  assert.equal(seenForm.get("edge_shift"), "-2");
+  assert.equal(seenForm.get("edge_feather"), "4");
+  state.edgeShift = 0;
+  state.edgeFeather = 0;
 });
 
 test("runSegmentation surfaces the server detail on HTTP errors", async () => {

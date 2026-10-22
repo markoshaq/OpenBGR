@@ -13,7 +13,7 @@ from typing import Any
 import numpy as np
 import torch
 from PIL import Image, ImageFilter, ImageOps
-from scipy.ndimage import maximum_filter1d, minimum_filter1d
+from scipy.ndimage import gaussian_filter1d, maximum_filter1d, minimum_filter1d
 from torchvision import transforms
 
 from .config import (
@@ -59,6 +59,34 @@ def _square_max_filter(arr: np.ndarray, size: int) -> np.ndarray:
         axis=1,
         mode="nearest",
     )
+
+
+def adjust_alpha_geometry(
+    alpha_np: np.ndarray, shift_px: int = 0, feather_px: float = 0.0
+) -> np.ndarray:
+    """
+    Contracts or expands the matte edge by `shift_px` pixels (negative erodes
+    the cutout inward, positive dilates it outward), then softens it with a
+    Gaussian feather of sigma `feather_px`. Both passes reuse the separable
+    1-D filters: an `n`px shift costs O(4n) per pixel instead of O(n^2), and
+    `mode="nearest"` keeps subjects touching the frame border intact.
+    """
+    adjusted = alpha_np
+    shift = int(shift_px)
+    if shift != 0:
+        size = 2 * abs(shift) + 1
+        fn = _square_max_filter if shift > 0 else _square_min_filter
+        adjusted = fn(adjusted, size)
+    feather = float(feather_px)
+    if feather > 0:
+        blurred = gaussian_filter1d(
+            gaussian_filter1d(adjusted.astype(np.float32), feather, axis=0, mode="nearest"),
+            feather,
+            axis=1,
+            mode="nearest",
+        )
+        adjusted = np.clip(blurred + 0.5, 0, 255).astype(np.uint8)
+    return adjusted
 
 
 def decontaminate_edge_colors(rgb_np: np.ndarray, alpha_np: np.ndarray) -> np.ndarray:
@@ -207,22 +235,29 @@ def get_last_job(job_id: int) -> dict[str, Any] | None:
 
 
 def compose_rgba(
-    rgb_raw: np.ndarray, alpha_np: np.ndarray, defringe: bool, despill: bool
+    rgb_raw: np.ndarray,
+    alpha_np: np.ndarray,
+    defringe: bool,
+    despill: bool,
+    edge_shift: int = 0,
+    edge_feather: float = 0.0,
 ) -> Image.Image:
     """
     Applies the optional edge-refinement filters onto the raw RGB + alpha and
     composites the final 32-bit RGBA image. Runs in milliseconds (pure NumPy /
-    Pillow C filters); no neural network involved.
+    Pillow C filters); no neural network involved. Edge geometry is applied
+    first so the color decontamination band follows the shifted edge.
     """
     with _COMPOSE_LOCK:
+        alpha_out = adjust_alpha_geometry(alpha_np, edge_shift, edge_feather)
         if defringe:
-            rgb_np = decontaminate_edge_colors(rgb_raw, alpha_np)
+            rgb_np = decontaminate_edge_colors(rgb_raw, alpha_out)
         else:
             rgb_np = rgb_raw
         if despill:
-            alpha_norm = alpha_np.astype(np.float32) / 255.0
+            alpha_norm = alpha_out.astype(np.float32) / 255.0
             rgb_np = suppress_color_spill(rgb_np, alpha_norm)
-        return Image.fromarray(np.dstack((rgb_np, alpha_np)))
+        return Image.fromarray(np.dstack((rgb_np, alpha_out)))
 
 
 def segment_foreground(
@@ -232,6 +267,8 @@ def segment_foreground(
     despill: bool = True,
     matting: bool = False,
     job_epoch: int | None = None,
+    edge_shift: int = 0,
+    edge_feather: float = 0.0,
 ) -> tuple[Image.Image, float, dict[str, Any], int]:
     """
     Executes the full background removal pipeline on a PIL image under a thread-safe
@@ -289,8 +326,12 @@ def segment_foreground(
                 (orig_w, orig_h), resample=Image.Resampling.LANCZOS
             )
         finally:
-            # Explicitly release GPU/MPS tensors immediately after forward pass
+            # Explicitly release GPU/MPS tensors immediately after forward pass,
+            # then flush the device caching allocator: freed MPS blocks are kept
+            # for reuse otherwise, so a big-tier pass would pin its activation
+            # peak (~1-2 GB unified RAM at 1536px) for the rest of the session.
             del input_tensor, outputs, pred_logits, alpha_tensor
+            MANAGER.flush_device_memory()
 
         job_id = next(_JOB_ID_SEQ)
         try:
@@ -306,7 +347,9 @@ def segment_foreground(
                 _LAST_JOB["alpha"] = alpha_np
 
             MANAGER.check_cancelled(job_epoch)
-            result_image = compose_rgba(rgb_np_raw, alpha_np, defringe, despill)
+            result_image = compose_rgba(
+                rgb_np_raw, alpha_np, defringe, despill, edge_shift, edge_feather
+            )
         finally:
             mask_pil.close()
             rgb_image.close()

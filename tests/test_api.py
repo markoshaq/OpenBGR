@@ -73,7 +73,9 @@ class TestApiContracts(unittest.TestCase):
             pipeline_mod._LAST_JOB.clear()
             pipeline_mod._LAST_JOB.update({"id": 42, "rgb": rgb, "alpha": alpha})
 
-        res = asyncio.run(api_mod.api_refine(job_id=42, defringe=True, despill=True))
+        res = asyncio.run(
+            api_mod.api_refine(job_id=42, defringe=True, despill=True, edge_shift=0, edge_feather=0)
+        )
         self.assertEqual(res.media_type, "image/png")
         self.assertEqual(res.headers["X-Refine-Job-Id"], "42")
         out = Image.open(io.BytesIO(res.body))
@@ -81,9 +83,27 @@ class TestApiContracts(unittest.TestCase):
         self.assertEqual(out.size, (24, 24))
         out.close()
 
+        # Edge geometry fields re-compose from the raw cached alpha
+        res_shift = asyncio.run(
+            api_mod.api_refine(
+                job_id=42, defringe=False, despill=False, edge_shift=-3, edge_feather=1
+            )
+        )
+        out_shift = Image.open(io.BytesIO(res_shift.body))
+        alpha_shift = out_shift.getchannel("A")
+        self.assertEqual(alpha_shift.getpixel((0, 0)), 0)
+        self.assertGreater(alpha_shift.getpixel((11, 11)), 200)
+        self.assertLess(alpha_shift.getpixel((11, 11)), 255)
+        alpha_shift.close()
+        out_shift.close()
+
         # Stale job ids are rejected so an older tab can't refine a newer job
         with self.assertRaises(HTTPException) as ctx:
-            asyncio.run(api_mod.api_refine(job_id=41, defringe=True, despill=True))
+            asyncio.run(
+                api_mod.api_refine(
+                    job_id=41, defringe=True, despill=True, edge_shift=0, edge_feather=0
+                )
+            )
         self.assertEqual(ctx.exception.status_code, 409)
 
     def test_api_save_sanitizes_and_renames_collisions(self) -> None:
@@ -355,7 +375,9 @@ class TestApiEndpoints(unittest.TestCase):
         Image.new("RGB", (24, 16), (10, 20, 30)).save(buf, format="PNG")
         result_img = Image.new("RGBA", (24, 16), (10, 20, 30, 255))
 
-        def _fake_seg(img, tier, defringe, despill, matting, job_epoch):  # noqa: ANN001
+        def _fake_seg(  # noqa: ANN001
+            img, tier, defringe, despill, matting, job_epoch, edge_shift=0, edge_feather=0
+        ):
             img.close()
             return result_img, 12.5, config_mod.TIERS["general"], 3
 

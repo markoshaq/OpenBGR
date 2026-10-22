@@ -19,9 +19,26 @@ globalThis.createImageBitmap = async () => ({
   close() {},
 });
 
-const { buildZip, createZipWriter, buildBatchExportBlob } = await import(
-  "../static/export.js"
+const { state, dom, masterCutoutImg, DEFAULT_CROP_PADDING } = await import(
+  "../static/state.js"
 );
+const {
+  buildZip,
+  createZipWriter,
+  buildBatchExportBlob,
+  scanAlphaBBoxFromPixels,
+  expandCropBox,
+  getActiveCropRect,
+  getExportBaseDims,
+  updateCropGuide,
+  updateLiveStagePreview,
+  updateExportTelemetry,
+  applyExportSizePreset,
+  resetExportSize,
+  setCanvasFit,
+  applyBackdrop,
+  applyBackdropMode,
+} = await import("../static/export.js");
 
 const enc = new TextEncoder();
 
@@ -165,4 +182,410 @@ test("buildBatchExportBlob renders an 8-bit alpha mask for mask format", async (
   const out = await buildBatchExportBlob(src, snap);
   assert.equal(out.type, "image/png");
   assert.ok(out.size > 0);
+});
+
+test("scanAlphaBBoxFromPixels finds the tight foreground box and ignores faint dust", () => {
+  const w = 10;
+  const h = 8;
+  const data = new Uint8ClampedArray(w * h * 4);
+  // Faint 2/255 alpha speck at (0, 0) is below the threshold (4) and ignored.
+  data[3] = 2;
+  // Subject pixels at (2, 1) and (6, 5).
+  data[(1 * w + 2) * 4 + 3] = 200;
+  data[(5 * w + 6) * 4 + 3] = 255;
+
+  assert.deepEqual(scanAlphaBBoxFromPixels(data, w, h, 4), {
+    x: 2,
+    y: 1,
+    w: 5,
+    h: 5,
+  });
+  assert.deepEqual(
+    scanAlphaBBoxFromPixels(new Uint8ClampedArray(w * h * 4), w, h, 4),
+    { x: 0, y: 0, w: 10, h: 8 }
+  );
+});
+
+test("expandCropBox adds symmetric padding based on the longest side", () => {
+  const tight = { x: 50, y: 40, w: 100, h: 200 };
+  assert.deepEqual(expandCropBox(tight, 0), tight);
+  // 10% of max(100, 200) = 20px added on each side.
+  assert.deepEqual(expandCropBox(tight, 10), {
+    x: 30,
+    y: 20,
+    w: 140,
+    h: 240,
+  });
+});
+
+test("expandCropBox clamps negative and NaN padding to zero", () => {
+  const box = { x: 10, y: 10, w: 50, h: 40 };
+  assert.deepEqual(expandCropBox(box, -5), box);
+  assert.deepEqual(expandCropBox(box, NaN), box);
+  assert.deepEqual(expandCropBox(box, "junk"), box);
+  assert.deepEqual(expandCropBox({ x: 0, y: 0, w: 0, h: 0 }, 0), {
+    x: 0,
+    y: 0,
+    w: 1,
+    h: 1,
+  });
+});
+
+test("getExportBaseDims, updateCropGuide, and buildBatchExportBlob handle autoCrop", async () => {
+  state.naturalWidth = 100;
+  state.naturalHeight = 80;
+  state.resultBlob = new Blob([enc.encode("png")], { type: "image/png" });
+  masterCutoutImg.src = "blob:test-cutout";
+  state.shadowCutoff = 0;
+  state.viewMode = "split";
+
+  state.autoCrop = false;
+  state.cropPadding = 0;
+  assert.deepEqual(getExportBaseDims(), { w: 100, h: 80 });
+  updateCropGuide();
+  assert.ok(!dom.cropGuide.classList.contains("visible"));
+
+  state.autoCrop = true;
+  state.cropPadding = 10;
+  assert.deepEqual(getExportBaseDims(), { w: 120, h: 100 });
+  updateCropGuide();
+  assert.ok(dom.cropGuide.classList.contains("visible"));
+  assert.equal(dom.cropGuide.dataset.inset, "0% 0% 0% 0%");
+
+  state.viewMode = "original";
+  updateCropGuide();
+  assert.ok(!dom.cropGuide.classList.contains("visible"));
+  state.viewMode = "split";
+
+  const src = new Blob([enc.encode("png-bytes")], { type: "image/png" });
+  const out = await buildBatchExportBlob(src, {
+    format: "png",
+    scale: 1,
+    exportWidth: 0,
+    exportHeight: 0,
+    autoCrop: true,
+    cropPadding: 5,
+    backdrop: "checker",
+    shadowCutoff: 0,
+  });
+  assert.notEqual(out, src, "autoCrop bypasses raw passthrough");
+  assert.equal(out.type, "image/png");
+  // Fake bitmap is 320x240 with empty alpha (full-frame box); 5% of 320 = 16px per side.
+  assert.equal(await out.text(), "352x272");
+});
+
+test("getActiveCropRect falls back to the full frame when the cutout is not decoded", () => {
+  state.naturalWidth = 100;
+  state.naturalHeight = 80;
+  state.resultBlob = new Blob([enc.encode("png")], { type: "image/png" });
+  state.autoCrop = true;
+  state.cropPadding = DEFAULT_CROP_PADDING;
+  const saved = masterCutoutImg.complete;
+  masterCutoutImg.complete = false;
+  try {
+    assert.deepEqual(getActiveCropRect(), { x: 0, y: 0, w: 100, h: 80 });
+  } finally {
+    masterCutoutImg.complete = saved;
+    state.autoCrop = false;
+  }
+});
+
+test("buildBatchExportBlob scales the padded crop box and honors custom dims", async () => {
+  const src = new Blob([enc.encode("png-bytes")], { type: "image/png" });
+  const base = {
+    format: "png",
+    backdrop: "checker",
+    shadowCutoff: 0,
+    autoCrop: true,
+    cropPadding: 5,
+    exportWidth: 0,
+    exportHeight: 0,
+    aspectLocked: true,
+  };
+  const scaled = await buildBatchExportBlob(src, { ...base, scale: 0.5 });
+  assert.equal(await scaled.text(), "176x136");
+
+  const fitWidth = await buildBatchExportBlob(src, {
+    ...base,
+    scale: 1,
+    exportWidth: 100,
+  });
+  assert.equal(await fitWidth.text(), "100x77");
+
+  const fixed = await buildBatchExportBlob(src, {
+    ...base,
+    scale: 1,
+    exportWidth: 200,
+    exportHeight: 100,
+    aspectLocked: false,
+  });
+  assert.equal(await fixed.text(), "200x100");
+});
+
+test("updateLiveStagePreview fills the byte-exact export cache under autoCrop", async () => {
+  state.naturalWidth = 100;
+  state.naturalHeight = 80;
+  state.resultBlob = new Blob([enc.encode("png")], { type: "image/png" });
+  state.resultObjectUrl = "blob:test-result";
+  state.exportFormat = "png";
+  state.exportWidth = 0;
+  state.exportHeight = 0;
+  state.exportScale = 1;
+  state.shadowCutoff = 0;
+  state.activeBackdrop = "checker";
+  state.viewMode = "split";
+  masterCutoutImg.src = "blob:test-cutout-cache";
+  state.autoCrop = true;
+  state.cropPadding = 5;
+
+  updateLiveStagePreview();
+  await new Promise((r) => setTimeout(r, 250));
+
+  assert.ok(state.exportCacheBlob instanceof Blob);
+  assert.equal(state.exportCacheSource, state.resultBlob);
+  // Empty shim alpha yields a full-frame tight box; 5% of 100 = 5px per side.
+  assert.equal(await state.exportCacheBlob.text(), "110x90");
+  assert.notEqual(dom.exportSizeLabel.textContent, "...");
+  state.autoCrop = false;
+});
+
+test("buildBatchExportBlob composites blur and image backdrops", async () => {
+  const src = new Blob([enc.encode("png-bytes")], { type: "image/png" });
+  const base = {
+    format: "png",
+    scale: 1,
+    exportWidth: 0,
+    exportHeight: 0,
+    autoCrop: false,
+    shadowCutoff: 0,
+  };
+  // Blur decodes the entry's original file as the backdrop source.
+  const blurred = await buildBatchExportBlob(
+    src,
+    { ...base, backdrop: "blur", backdropBlur: 80 },
+    new Blob([enc.encode("orig")], { type: "image/png" })
+  );
+  assert.equal(await blurred.text(), "320x240");
+
+  // Missing sources degrade to transparency instead of throwing or
+  // filling with black.
+  const noBlurSrc = await buildBatchExportBlob(src, {
+    ...base,
+    backdrop: "blur",
+  });
+  assert.equal(await noBlurSrc.text(), "320x240");
+
+  const imaged = await buildBatchExportBlob(src, {
+    ...base,
+    backdrop: "image",
+    backdropImg: { width: 640, height: 480 },
+  });
+  assert.equal(await imaged.text(), "320x240");
+
+  const noImgSrc = await buildBatchExportBlob(src, {
+    ...base,
+    backdrop: "image",
+  });
+  assert.equal(await noImgSrc.text(), "320x240");
+});
+
+test("applyExportSizePreset sets exact dims and releases aspect lock", () => {
+  state.aspectLocked = true;
+  dom.aspectLockBtn.classList.add("active");
+  state.exportWidth = 0;
+  state.exportHeight = 0;
+
+  applyExportSizePreset(1080, 1920);
+
+  assert.equal(state.exportWidth, 1080);
+  assert.equal(state.exportHeight, 1920);
+  assert.equal(state.aspectLocked, false);
+  assert.ok(!dom.aspectLockBtn.classList.contains("active"));
+  assert.equal(dom.aspectLockBtn.getAttribute("aria-pressed"), "false");
+  assert.equal(dom.exportWidthInput.value, "1080");
+  assert.equal(dom.exportHeightInput.value, "1920");
+});
+
+test("preset chips track the current dims and reset restores scaled ones", () => {
+  const chip = document.createElement("button");
+  chip.className = "preset-chip";
+  chip.setAttribute("data-w", "1024");
+  chip.setAttribute("data-h", "1024");
+  document.body.appendChild(chip);
+  try {
+    state.aspectLocked = true;
+    state.naturalWidth = 0;
+    state.naturalHeight = 0;
+
+    applyExportSizePreset(1024, 1024);
+    assert.ok(
+      chip.classList.contains("active"),
+      "matching chip is highlighted"
+    );
+
+    state.exportScale = 2;
+    resetExportSize();
+    assert.ok(
+      !chip.classList.contains("active"),
+      "reset clears the chip highlight"
+    );
+    assert.equal(state.aspectLocked, true, "reset restores aspect lock");
+    assert.equal(dom.aspectLockBtn.getAttribute("aria-pressed"), "true");
+    assert.equal(
+      state.exportWidth,
+      0,
+      "no image loaded: dims stay empty until one arrives"
+    );
+  } finally {
+    chip.remove();
+    state.exportScale = 1;
+  }
+});
+
+test("checker preview re-renders only when the export aspect differs", async () => {
+  state.naturalWidth = 100;
+  state.naturalHeight = 80;
+  state.resultBlob = new Blob([enc.encode("png")], { type: "image/png" });
+  state.resultObjectUrl = "blob:test-aspect";
+  state.exportFormat = "png";
+  state.exportScale = 1;
+  state.shadowCutoff = 0;
+  state.activeBackdrop = "checker";
+  state.viewMode = "split";
+  state.autoCrop = false;
+  masterCutoutImg.src = "blob:test-cutout-aspect";
+
+  // Native aspect: passthrough reuses the raw cutout blob.
+  state.exportWidth = 100;
+  state.exportHeight = 80;
+  updateLiveStagePreview();
+  await new Promise((r) => setTimeout(r, 250));
+  assert.equal(state.previewBlob, state.resultBlob);
+
+  // Square preset on a 100x80 source: preview renders the letterboxed box.
+  state.exportWidth = 100;
+  state.exportHeight = 100;
+  updateLiveStagePreview();
+  await new Promise((r) => setTimeout(r, 250));
+  assert.notEqual(state.previewBlob, state.resultBlob);
+  assert.equal(await state.previewBlob.text(), "100x100");
+});
+
+test("canvasFit stretch fills the canvas while fit keeps centered margins", async () => {
+  const src = new Blob([enc.encode("png-bytes")], { type: "image/png" });
+  const base = {
+    format: "png",
+    scale: 1,
+    exportWidth: 640,
+    exportHeight: 240,
+    backdrop: "checker",
+    shadowCutoff: 0,
+  };
+  // 320x240 source into 640x240: fit centers with 160px side margins.
+  await buildBatchExportBlob(src, { ...base, canvasFit: "fit" });
+  const fitDraw = document._canvases.at(-1)._drawCalls.at(-1);
+  assert.deepEqual(fitDraw.slice(5), [160, 0, 320, 240]);
+
+  await buildBatchExportBlob(src, { ...base, canvasFit: "stretch" });
+  const stretchDraw = document._canvases.at(-1)._drawCalls.at(-1);
+  assert.deepEqual(stretchDraw.slice(5), [0, 0, 640, 240]);
+});
+
+test("setCanvasFit toggles state and marks the matching chip", () => {
+  const fit = document.createElement("button");
+  fit.classList.add("fit-chip");
+  fit.setAttribute("data-fit", "fit");
+  const stretch = document.createElement("button");
+  stretch.classList.add("fit-chip");
+  stretch.setAttribute("data-fit", "stretch");
+  document.body.append(fit, stretch);
+  try {
+    setCanvasFit("stretch");
+    assert.equal(state.canvasFit, "stretch");
+    assert.ok(stretch.classList.contains("active"));
+    assert.ok(!fit.classList.contains("active"));
+    setCanvasFit("fit");
+    assert.equal(state.canvasFit, "fit");
+    assert.ok(fit.classList.contains("active"));
+  } finally {
+    fit.remove();
+    stretch.remove();
+    setCanvasFit("fit");
+  }
+});
+
+test("canvas fit row greys out only while the export aspect matches", () => {
+  state.naturalWidth = 100;
+  state.naturalHeight = 80;
+  state.autoCrop = false;
+  try {
+    state.exportWidth = 100;
+    state.exportHeight = 80;
+    updateExportTelemetry();
+    assert.ok(dom.canvasFitChips.classList.contains("disabled"));
+    state.exportHeight = 100;
+    updateExportTelemetry();
+    assert.ok(!dom.canvasFitChips.classList.contains("disabled"));
+  } finally {
+    state.exportWidth = 0;
+    state.exportHeight = 0;
+  }
+});
+
+test("applyBackdropMode resolves modes and toggles the conditional wraps", () => {
+  try {
+    applyBackdropMode("blur");
+    assert.equal(state.activeBackdrop, "blur");
+    assert.equal(dom.backdropBlurWrap.style.display, "");
+    assert.equal(dom.matteSwatches.style.display, "none");
+
+    applyBackdropMode("image");
+    assert.equal(state.activeBackdrop, "image");
+    assert.equal(dom.backdropPhotoWrap.style.display, "");
+
+    applyBackdropMode("color");
+    assert.equal(state.activeBackdrop, "#ffffff");
+    assert.equal(state.backdropColor, "#ffffff");
+    assert.equal(dom.matteSwatches.style.display, "");
+    assert.equal(dom.backdropPhotoWrap.style.display, "none");
+    assert.equal(dom.backdropBlurWrap.style.display, "none");
+
+    applyBackdrop("#00ff00");
+    applyBackdropMode("color");
+    assert.equal(state.activeBackdrop, "#00ff00", "COLOR restores last color");
+
+    applyBackdropMode("checker");
+    assert.equal(state.activeBackdrop, "checker");
+  } finally {
+    applyBackdropMode("checker");
+    state.backdropColor = "#ffffff";
+  }
+});
+
+test("autoCrop combined with a preset aspect renders the preset box in live preview", async () => {
+  state.naturalWidth = 100;
+  state.naturalHeight = 80;
+  state.resultBlob = new Blob([enc.encode("png")], { type: "image/png" });
+  state.resultObjectUrl = "blob:test-autocrop-preset";
+  state.exportFormat = "png";
+  state.exportScale = 1;
+  state.shadowCutoff = 0;
+  state.activeBackdrop = "checker";
+  state.viewMode = "split";
+  state.autoCrop = true;
+  state.cropPadding = 5;
+  masterCutoutImg.src = "blob:test-cutout-autocrop-preset";
+
+  try {
+    applyExportSizePreset(100, 100);
+    await new Promise((r) => setTimeout(r, 250));
+    assert.equal(await state.previewBlob.text(), "100x100");
+    assert.equal(
+      state.previewSignature,
+      state.exportCacheSignature ?? state.previewSignature
+    );
+  } finally {
+    state.autoCrop = false;
+    resetExportSize();
+  }
 });

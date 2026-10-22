@@ -20,6 +20,7 @@ import {
   isImageFile,
   downloadBlob,
   FORMAT_EXT,
+  DEFAULT_CROP_PADDING,
   formatElapsed,
 } from "./state.js";
 import {
@@ -195,6 +196,14 @@ export function syncBatchPanelChrome(tab) {
       n === 0 || selCount === 0 || (state.isProcessing && !runningThis)
     );
     dom.btnDownload.textContent = runningThis ? "BATCH RUNNING…" : "RUN BATCH";
+  }
+
+  if (dom.btnBatchRetry) {
+    const hasFailed = tab.batchFiles.some(
+      (e) => e.status === "failed" && e.selected !== false
+    );
+    dom.btnBatchRetry.style.display =
+      hasFailed && !state.batch.running ? "" : "none";
   }
 }
 
@@ -607,7 +616,14 @@ export function hideTabContextMenu() {
  * "cancelled"; throws AbortError/network errors to the caller's catch.
  */
 async function processBatchEntry(batch, entry, snap, outputDir, controller) {
-  const fd = buildRemoveBgForm(entry.file, snap.tier, snap.defringe, snap.despill);
+  const fd = buildRemoveBgForm(
+    entry.file,
+    snap.tier,
+    snap.defringe,
+    snap.despill,
+    snap.edgeShift,
+    snap.edgeFeather
+  );
   const response = await apiFetch("/api/remove-bg", {
     method: "POST",
     body: fd,
@@ -622,7 +638,7 @@ async function processBatchEntry(batch, entry, snap, outputDir, controller) {
   const blob = await response.blob();
   if (batch.cancelled || controller.signal.aborted) return "cancelled";
 
-  const outBlob = await buildBatchExportBlob(blob, snap);
+  const outBlob = await buildBatchExportBlob(blob, snap, entry.file);
   const ext = FORMAT_EXT[snap.format] || "png";
   const stem = (entry.name || "image").replace(/\.[^.]+$/, "") || "image";
   const suffix = snap.format === "mask" ? "mask" : "cutout";
@@ -666,7 +682,14 @@ function snapshotBatchSettings(tab) {
     scale: tab.exportScale ?? state.exportScale,
     exportWidth: tab.exportWidth ?? 0,
     exportHeight: tab.exportHeight ?? 0,
+    canvasFit: tab.canvasFit ?? state.canvasFit ?? "fit",
+    autoCrop: Boolean(tab.autoCrop ?? state.autoCrop),
+    cropPadding: tab.cropPadding ?? state.cropPadding ?? DEFAULT_CROP_PADDING,
+    edgeShift: tab.edgeShift ?? state.edgeShift ?? 0,
+    edgeFeather: tab.edgeFeather ?? state.edgeFeather ?? 0,
     backdrop: tab.activeBackdrop ?? state.activeBackdrop,
+    backdropImg: tab.backdropImg ?? state.backdropImg,
+    backdropBlur: tab.backdropBlur ?? state.backdropBlur ?? 50,
     shadowCutoff: tab.shadowCutoff ?? state.shadowCutoff,
   };
 }
@@ -735,16 +758,29 @@ async function resolveBatchOutput(tab, batch) {
 }
 
 /** Marks the batch run started: flags, per-entry statuses, busy overlay, pollers. */
-function beginBatchRun(tab, batch) {
+function beginBatchRun(tab, batch, onlyFailed) {
   batch.running = true;
   batch.tabId = tab.id;
-  batch.total = tab.batchFiles.filter((e) => e.selected !== false).length;
+  batch.total = onlyFailed
+    ? tab.batchFiles.filter(
+        (e) => e.status === "failed" && e.selected !== false
+      ).length
+    : tab.batchFiles.filter((e) => e.selected !== false).length;
   batch.index = 0;
   batch.failed = 0;
   batch.cancelled = false;
   batch.results = [];
 
   tab.batchFiles.forEach((e) => {
+    if (onlyFailed) {
+      // Retry targets only failed, still-selected rows; done and skipped
+      // rows keep their status.
+      if (e.status === "failed" && e.selected !== false) {
+        e.status = "queued";
+        delete e.error;
+      }
+      return;
+    }
     e.status = e.selected === false ? "skipped" : "queued";
     delete e.error;
   });
@@ -776,7 +812,9 @@ async function processBatchQueue(tab, batch, snap, outputDir, controller) {
   for (let i = 0; i < tab.batchFiles.length; i++) {
     if (batch.cancelled) break;
     const entry = tab.batchFiles[i];
-    if (entry.selected === false) continue;
+    // Queued is the only runnable status: full runs mark selected entries
+    // queued, retry runs mark only previously-failed entries queued.
+    if (entry.status !== "queued") continue;
     batch.index = i;
     seen++;
     entry.status = "processing";
@@ -885,13 +923,25 @@ async function finishBatchRun(tab, batch, run) {
   );
 }
 
-/** Runs the segmentation pipeline sequentially over a batch tab's queue. */
-export async function runBatch(tab) {
+/**
+ * Runs the segmentation pipeline sequentially over a batch tab's queue.
+ * With `onlyFailed`, re-processes just the rows whose last run ended in
+ * status "failed" and which remain selected, leaving done rows untouched.
+ */
+export async function runBatch(tab, { onlyFailed = false } = {}) {
   const batch = state.batch;
   if (!tab || tab.kind !== "batch" || batch.running || !tab.batchFiles.length) {
     return;
   }
-  if (!tab.batchFiles.some((e) => e.selected !== false)) {
+  if (onlyFailed) {
+    const hasRetryable = tab.batchFiles.some(
+      (e) => e.status === "failed" && e.selected !== false
+    );
+    if (!hasRetryable) {
+      setError("No failed entries to retry.");
+      return;
+    }
+  } else if (!tab.batchFiles.some((e) => e.selected !== false)) {
     setError("Select at least one image to process.");
     return;
   }
@@ -901,7 +951,7 @@ export async function runBatch(tab) {
   const dest = await resolveBatchOutput(tab, batch);
   if (!dest) return;
 
-  beginBatchRun(tab, batch);
+  beginBatchRun(tab, batch, onlyFailed);
   const controller = new AbortController();
   state.abortController = controller;
   const startedAt = performance.now();

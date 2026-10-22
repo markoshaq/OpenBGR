@@ -55,6 +55,9 @@ export const FORMAT_LABELS = {
   mask: "MASK",
 };
 
+/** Default Auto-Crop padding: percent of the tight box's longest side. */
+export const DEFAULT_CROP_PADDING = 5;
+
 export const ACCENTS = {
   white: ["#fafafa", "#09090b"],
   green: ["#34d399", "#052e1b"],
@@ -337,16 +340,33 @@ export const state = {
   tier: prefs.defaultTier !== "auto" ? prefs.defaultTier : "general",
   defringe: true,
   despill: true,
+  edgeShift: 0,
+  edgeFeather: 0,
   shadowCutoff: 0,
   viewMode: "split",
   splitPercent: 50,
   exportFormat: prefs.defaultFormat,
   outputDir: null,
+  autoCrop: false,
+  cropPadding: DEFAULT_CROP_PADDING,
   exportScale: 1,
   exportWidth: 0,
   exportHeight: 0,
   aspectLocked: true,
+  // How the subject fills a mismatched export canvas: "fit" or "stretch".
+  canvasFit: "fit",
   activeBackdrop: prefs.defaultBackdrop,
+  // Last flat color picked in COLOR backdrop mode, so mode switches restore it.
+  backdropColor: prefs.defaultBackdrop.startsWith("#")
+    ? prefs.defaultBackdrop
+    : "#ffffff",
+  // "image" backdrop photo: decoded element, its object URL, and a change
+  // counter included in export signatures.
+  backdropImg: null,
+  backdropImgUrl: null,
+  backdropSeq: 0,
+  // Blur strength (0-100) applied to the "blur" and "image" backdrops.
+  backdropBlur: 50,
 
   // Active job lifecycle
   isProcessing: false,
@@ -360,6 +380,11 @@ export const state = {
   refineToken: 0,
   refineInFlight: false,
   refinePending: false,
+
+  // Byte-exact export encode cache (honest size label + instant re-export)
+  exportCacheBlob: null,
+  exportCacheSignature: null,
+  exportCacheSource: null,
 
   // Source image, result, and live-preview blobs/URLs
   sourceFile: null,
@@ -417,6 +442,7 @@ export const dom = {
   beforeImg: document.getElementById("beforeImg"),
   afterImg: document.getElementById("afterImg"),
   beforeClip: document.getElementById("beforeClip"),
+  cropGuide: document.getElementById("cropGuide"),
   splitLine: document.getElementById("splitLine"),
   lblLeft: document.getElementById("lblLeft"),
   lblRight: document.getElementById("lblRight"),
@@ -464,13 +490,19 @@ export const dom = {
   btnOpenLogsDir: document.getElementById("btnOpenLogsDir"),
 
   fileInput: document.getElementById("fileInput"),
+  backdropInput: document.getElementById("backdropInput"),
   btnOpen: document.getElementById("btnOpen"),
   btnProcess: document.getElementById("btnProcess"),
+  tierDropdown: document.getElementById("tierDropdown"),
+  tierDropdownBtn: document.getElementById("tierDropdownBtn"),
+  tierDropdownLabel: document.getElementById("tierDropdownLabel"),
+  tierDropdownTech: document.getElementById("tierDropdownTech"),
   batchPanel: document.getElementById("batchPanel"),
   batchList: document.getElementById("batchList"),
   batchSub: document.getElementById("batchSub"),
   batchCheckAll: document.getElementById("batchCheckAll"),
   btnBatchAdd: document.getElementById("btnBatchAdd"),
+  btnBatchRetry: document.getElementById("btnBatchRetry"),
   tabContextMenu: document.getElementById("tabContextMenu"),
   btnCopy: document.getElementById("btnCopy"),
   btnDownload: document.getElementById("btnDownload"),
@@ -478,13 +510,32 @@ export const dom = {
   btnDespill: document.getElementById("btnDespill"),
   shadowCutoffSlider: document.getElementById("shadowCutoffSlider"),
   shadowCutoffLabel: document.getElementById("shadowCutoffLabel"),
+  edgeShiftSlider: document.getElementById("edgeShiftSlider"),
+  edgeShiftLabel: document.getElementById("edgeShiftLabel"),
+  edgeFeatherSlider: document.getElementById("edgeFeatherSlider"),
+  edgeFeatherLabel: document.getElementById("edgeFeatherLabel"),
   btnFileDest: document.getElementById("btnFileDest"),
+  btnAutoCrop: document.getElementById("btnAutoCrop"),
+  cropPaddingWrap: document.getElementById("cropPaddingWrap"),
+  cropPaddingSlider: document.getElementById("cropPaddingSlider"),
+  cropPaddingLabel: document.getElementById("cropPaddingLabel"),
 
   exportScaleSlider: document.getElementById("exportScaleSlider"),
   scalePctLabel: document.getElementById("scalePctLabel"),
   exportWidthInput: document.getElementById("exportWidthInput"),
   exportHeightInput: document.getElementById("exportHeightInput"),
   aspectLockBtn: document.getElementById("aspectLockBtn"),
+  presetReset: document.getElementById("presetReset"),
+  canvasFitChips: document.getElementById("canvasFitChips"),
+  matteSwatches: document.getElementById("matteSwatches"),
+  colorPicker: document.getElementById("colorPicker"),
+  backdropPhotoWrap: document.getElementById("backdropPhotoWrap"),
+  backdropPhotoThumb: document.getElementById("backdropPhotoThumb"),
+  btnBackdropPhoto: document.getElementById("btnBackdropPhoto"),
+  btnBackdropPhotoRemove: document.getElementById("btnBackdropPhotoRemove"),
+  backdropBlurWrap: document.getElementById("backdropBlurWrap"),
+  backdropBlurSlider: document.getElementById("backdropBlurSlider"),
+  backdropBlurLabel: document.getElementById("backdropBlurLabel"),
   fileDestPath: document.getElementById("fileDestPath"),
   exportSizeLabel: document.getElementById("exportSizeLabel"),
 
@@ -531,15 +582,29 @@ export function createTabRecord(overrides = {}) {
     tier: state.tier,
     defringe: state.defringe,
     despill: state.despill,
+    edgeShift: state.edgeShift,
+    edgeFeather: state.edgeFeather,
     shadowCutoff: state.shadowCutoff,
     viewMode: "split",
     splitPercent: 50,
     exportFormat: state.exportFormat,
     outputDir: null,
+    autoCrop: state.autoCrop,
+    cropPadding: state.cropPadding,
     exportScale: state.exportScale,
     exportWidth: 0,
     exportHeight: 0,
+    aspectLocked: true,
+    canvasFit: state.canvasFit,
     activeBackdrop: state.activeBackdrop,
+    backdropColor: state.backdropColor,
+    backdropImg: state.backdropImg,
+    backdropImgUrl: state.backdropImgUrl,
+    backdropSeq: state.backdropSeq,
+    backdropBlur: state.backdropBlur,
+    exportCacheBlob: null,
+    exportCacheSignature: null,
+    exportCacheSource: null,
     zoom: 1,
     panX: 0,
     panY: 0,
@@ -565,6 +630,9 @@ export function clearResultState() {
   state.previewBlob = null;
   state.previewSignature = null;
   state.previewSource = null;
+  state.exportCacheBlob = null;
+  state.exportCacheSignature = null;
+  state.exportCacheSource = null;
   state.resultObjectUrl = null;
   state.previewObjectUrl = null;
   state.naturalWidth = 0;
@@ -590,6 +658,8 @@ export function saveStateToActiveTab() {
   tab.tier = state.tier;
   tab.defringe = state.defringe;
   tab.despill = state.despill;
+  tab.edgeShift = state.edgeShift;
+  tab.edgeFeather = state.edgeFeather;
   tab.shadowCutoff = state.shadowCutoff;
   tab.viewMode = state.viewMode;
   tab.splitPercent = state.splitPercent;
@@ -598,16 +668,28 @@ export function saveStateToActiveTab() {
   tab.previewBlob = state.previewBlob;
   tab.previewSignature = state.previewSignature;
   tab.previewSource = state.previewSource;
+  tab.exportCacheBlob = state.exportCacheBlob;
+  tab.exportCacheSignature = state.exportCacheSignature;
+  tab.exportCacheSource = state.exportCacheSource;
   tab.resultObjectUrl = state.resultObjectUrl;
   tab.previewObjectUrl = state.previewObjectUrl;
   tab.naturalWidth = state.naturalWidth;
   tab.naturalHeight = state.naturalHeight;
   tab.exportFormat = state.exportFormat;
   tab.outputDir = state.outputDir;
+  tab.autoCrop = state.autoCrop;
+  tab.cropPadding = state.cropPadding;
   tab.exportScale = state.exportScale;
   tab.exportWidth = state.exportWidth;
   tab.exportHeight = state.exportHeight;
+  tab.aspectLocked = state.aspectLocked;
+  tab.canvasFit = state.canvasFit;
   tab.activeBackdrop = state.activeBackdrop;
+  tab.backdropColor = state.backdropColor;
+  tab.backdropImg = state.backdropImg;
+  tab.backdropImgUrl = state.backdropImgUrl;
+  tab.backdropSeq = state.backdropSeq;
+  tab.backdropBlur = state.backdropBlur;
   tab.zoom = state.zoom;
   tab.panX = state.panX;
   tab.panY = state.panY;

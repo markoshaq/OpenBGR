@@ -21,13 +21,353 @@ import {
   formatDiskBytes,
 } from "./state.js";
 
+const ALPHA_BBOX_FLOOR = 4;
+let bboxCache = null;
+
 /**
- * Draws `source` at `targetW` x `targetH`, applies the `shadowCutoff` alpha
- * threshold, composites onto `backdrop` when opaque output is needed, and
- * encodes to `format` ("png" | "webp" | "jpg" | "mask").
+ * Scans an RGBA pixel buffer (`width * height * 4`) for the tight bounding box
+ * of pixels with `alpha > threshold`. Falls back to the full frame when empty.
+ */
+export function scanAlphaBBoxFromPixels(
+  data,
+  width,
+  height,
+  threshold = ALPHA_BBOX_FLOOR
+) {
+  const w = Math.max(1, width | 0);
+  const h = Math.max(1, height | 0);
+  let minX = w;
+  let minY = h;
+  let maxX = -1;
+  let maxY = -1;
+
+  for (let y = 0, idx = 3; y < h; y++) {
+    for (let x = 0; x < w; x++, idx += 4) {
+      if (data[idx] > threshold) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  return maxX < minX || maxY < minY
+    ? { x: 0, y: 0, w, h }
+    : { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 };
+}
+
+/**
+ * Returns the tight alpha bounding box `{ x, y, w, h }` of `source` at the
+ * given `shadowCutoff` percentage, cached by `(source, srcW, srcH, cutoff)`.
+ */
+export function computeAlphaBBox(source, srcW, srcH, shadowCutoff = 0) {
+  const w = Math.max(1, srcW | 0);
+  const h = Math.max(1, srcH | 0);
+  const cutoff = Number(shadowCutoff) || 0;
+  const key = source?.currentSrc || source?.src || source;
+  if (
+    bboxCache &&
+    bboxCache.key === key &&
+    bboxCache.w === w &&
+    bboxCache.h === h &&
+    bboxCache.cutoff === cutoff
+  ) {
+    return bboxCache.box;
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(source, 0, 0, w, h);
+  const { data } = ctx.getImageData(0, 0, w, h);
+  canvas.width = 0;
+  canvas.height = 0;
+
+  const threshold = Math.max(ALPHA_BBOX_FLOOR, Math.round((cutoff / 100) * 255));
+  const box = scanAlphaBBoxFromPixels(data, w, h, threshold);
+  bboxCache = { key, w, h, cutoff, box };
+  return box;
+}
+
+/** Expands `{ x, y, w, h }` symmetrically by `paddingPct`% of `max(w, h)`. */
+export function expandCropBox(box, paddingPct = 0) {
+  const pad = Math.round(
+    Math.max(box.w, box.h) * (Math.max(0, Number(paddingPct) || 0) / 100)
+  );
+  return {
+    x: box.x - pad,
+    y: box.y - pad,
+    w: Math.max(1, box.w + 2 * pad),
+    h: Math.max(1, box.h + 2 * pad),
+  };
+}
+
+/** Returns the active crop rectangle `{ x, y, w, h }` in source pixel coordinates. */
+export function getActiveCropRect() {
+  const srcW = state.naturalWidth || masterCutoutImg.naturalWidth || 0;
+  const srcH = state.naturalHeight || masterCutoutImg.naturalHeight || 0;
+  if (
+    !state.autoCrop ||
+    !state.resultBlob ||
+    srcW < 1 ||
+    srcH < 1 ||
+    !masterCutoutImg.complete ||
+    !masterCutoutImg.naturalWidth
+  ) {
+    return { x: 0, y: 0, w: srcW, h: srcH };
+  }
+  const tight = computeAlphaBBox(masterCutoutImg, srcW, srcH, state.shadowCutoff);
+  return expandCropBox(tight, state.cropPadding);
+}
+
+/** Returns the 100%-scale base `{ w, h }` of the active image (cropped when Auto-Crop is on). */
+export function getExportBaseDims() {
+  const { w, h } = getActiveCropRect();
+  return { w, h };
+}
+
+/** Updates the dashed crop-frame overlay on the stage when Auto-Crop is active. */
+export function updateCropGuide() {
+  const guide = dom.cropGuide;
+  if (!guide) return;
+  const srcW = state.naturalWidth || masterCutoutImg.naturalWidth || 0;
+  const srcH = state.naturalHeight || masterCutoutImg.naturalHeight || 0;
+  if (
+    !state.autoCrop ||
+    !state.resultBlob ||
+    state.viewMode === "original" ||
+    srcW < 1 ||
+    srcH < 1
+  ) {
+    guide.classList.remove("visible");
+    return;
+  }
+  const rect = getActiveCropRect();
+  const x0 = Math.max(0, Math.min(srcW, rect.x));
+  const y0 = Math.max(0, Math.min(srcH, rect.y));
+  const x1 = Math.max(x0, Math.min(srcW, rect.x + rect.w));
+  const y1 = Math.max(y0, Math.min(srcH, rect.y + rect.h));
+
+  const inset = `${(y0 / srcH) * 100}% ${((srcW - x1) / srcW) * 100}% ${((srcH - y1) / srcH) * 100}% ${(x0 / srcW) * 100}%`;
+  guide.style.setProperty("--crop-inset", inset);
+  guide.dataset.inset = inset;
+  guide.classList.add("visible");
+}
+
+/** Affine placement of `cropRect` inside `targetW` x `targetH` (fit or stretch). */
+function cropPlacement(cropRect, targetW, targetH, stretch) {
+  const sameRatio =
+    Math.abs(targetW * cropRect.h - targetH * cropRect.w) <=
+    Math.max(cropRect.w, cropRect.h);
+  // "uniform" is the centered aspect-fit; otherwise the rect maps to the
+  // canvas with independent X/Y scales (equal when aspects already match).
+  const uniform = !stretch && !sameRatio;
+  const fit = Math.min(targetW / cropRect.w, targetH / cropRect.h);
+  const scaleX = uniform ? fit : targetW / cropRect.w;
+  const scaleY = uniform ? fit : targetH / cropRect.h;
+  const offsetX = uniform ? (targetW - cropRect.w * fit) / 2 : 0;
+  const offsetY = uniform ? (targetH - cropRect.h * fit) / 2 : 0;
+  return { scaleX, scaleY, offsetX, offsetY };
+}
+
+/**
+ * Draws `cropRect` from `source` (`srcW` x `srcH`) onto `ctx` (`targetW` x `targetH`).
+ * Clips source sampling to `[0, 0, srcW, srcH]` so padding outside the frame stays
+ * transparent, and centers aspect-preservingly inside custom non-matching boxes.
+ */
+function drawCroppedSource(ctx, source, srcW, srcH, cropRect, targetW, targetH, stretch = false) {
+  const sx0 = Math.max(0, cropRect.x);
+  const sy0 = Math.max(0, cropRect.y);
+  const sw = Math.min(srcW, cropRect.x + cropRect.w) - sx0;
+  const sh = Math.min(srcH, cropRect.y + cropRect.h) - sy0;
+  if (sw <= 0 || sh <= 0) return;
+
+  const { scaleX, scaleY, offsetX, offsetY } = cropPlacement(
+    cropRect,
+    targetW,
+    targetH,
+    stretch
+  );
+
+  ctx.drawImage(
+    source,
+    sx0,
+    sy0,
+    sw,
+    sh,
+    offsetX + (sx0 - cropRect.x) * scaleX,
+    offsetY + (sy0 - cropRect.y) * scaleY,
+    sw * scaleX,
+    sh * scaleY
+  );
+}
+
+/**
+ * Two-pass separable box blur over RGBA pixels in place; two horizontal +
+ * vertical sweeps of a sliding-window average approximate a Gaussian
+ * closely enough for a backdrop. Border indices clamp (edge replication).
+ */
+function boxBlurRGBA(data, w, h, radius) {
+  const tmp = new Uint8ClampedArray(data.length);
+  const win = radius * 2 + 1;
+  for (let pass = 0; pass < 2; pass++) {
+    for (let y = 0; y < h; y++) {
+      const row = y * w;
+      let r = 0;
+      let g = 0;
+      let b = 0;
+      let a = 0;
+      for (let x = -radius; x <= radius; x++) {
+        const i = (row + Math.min(w - 1, Math.max(0, x))) * 4;
+        r += data[i];
+        g += data[i + 1];
+        b += data[i + 2];
+        a += data[i + 3];
+      }
+      for (let x = 0; x < w; x++) {
+        const o = (row + x) * 4;
+        tmp[o] = r / win;
+        tmp[o + 1] = g / win;
+        tmp[o + 2] = b / win;
+        tmp[o + 3] = a / win;
+        const iA = (row + Math.min(w - 1, x + radius + 1)) * 4;
+        const iS = (row + Math.max(0, x - radius)) * 4;
+        r += data[iA] - data[iS];
+        g += data[iA + 1] - data[iS + 1];
+        b += data[iA + 2] - data[iS + 2];
+        a += data[iA + 3] - data[iS + 3];
+      }
+    }
+    for (let x = 0; x < w; x++) {
+      let r = 0;
+      let g = 0;
+      let b = 0;
+      let a = 0;
+      for (let y = -radius; y <= radius; y++) {
+        const i = (Math.min(h - 1, Math.max(0, y)) * w + x) * 4;
+        r += tmp[i];
+        g += tmp[i + 1];
+        b += tmp[i + 2];
+        a += tmp[i + 3];
+      }
+      for (let y = 0; y < h; y++) {
+        const o = (y * w + x) * 4;
+        data[o] = r / win;
+        data[o + 1] = g / win;
+        data[o + 2] = b / win;
+        data[o + 3] = a / win;
+        const iA = (Math.min(h - 1, y + radius + 1) * w + x) * 4;
+        const iS = (Math.max(0, y - radius) * w + x) * 4;
+        r += tmp[iA] - tmp[iS];
+        g += tmp[iA + 1] - tmp[iS + 1];
+        b += tmp[iA + 2] - tmp[iS + 2];
+        a += tmp[iA + 3] - tmp[iS + 3];
+      }
+    }
+  }
+}
+
+/**
+ * Draws `srcRect` of `src` into `dstRect` blurred by `strength` (0-1; 0 draws
+ * sharp). Uses the canvas filter blur when the engine supports it; otherwise
+ * a real separable box blur runs on a ~12% scratch before the smoothed
+ * upscale, which stays cheap on CPU-bound canvas engines.
+ */
+function drawBlurred(ctx, src, srcRect, dstRect, strength) {
+  const s = Math.min(1, Math.max(0, strength));
+  if (s <= 0) {
+    ctx.drawImage(
+      src,
+      srcRect.x,
+      srcRect.y,
+      srcRect.w,
+      srcRect.h,
+      dstRect.x,
+      dstRect.y,
+      dstRect.w,
+      dstRect.h
+    );
+    return;
+  }
+  if (typeof ctx.filter === "string") {
+    // blur() takes a standard deviation; 3-4% of the width at full strength
+    // lands in the portrait-bokeh range.
+    const sigma = Math.max(
+      1,
+      Math.round(Math.min(40, Math.max(4, dstRect.w * 0.04)) * s)
+    );
+    ctx.filter = `blur(${sigma}px)`;
+    ctx.drawImage(
+      src,
+      srcRect.x,
+      srcRect.y,
+      srcRect.w,
+      srcRect.h,
+      dstRect.x,
+      dstRect.y,
+      dstRect.w,
+      dstRect.h
+    );
+    ctx.filter = "none";
+    return;
+  }
+  const sw = Math.max(4, Math.round(dstRect.w * 0.12));
+  const sh = Math.max(4, Math.round(dstRect.h * 0.12));
+  const mini = document.createElement("canvas");
+  mini.width = sw;
+  mini.height = sh;
+  const mctx = mini.getContext("2d");
+  mctx.imageSmoothingEnabled = true;
+  mctx.imageSmoothingQuality = "high";
+  mctx.drawImage(
+    src,
+    srcRect.x,
+    srcRect.y,
+    srcRect.w,
+    srcRect.h,
+    0,
+    0,
+    sw,
+    sh
+  );
+  const imgData = mctx.getImageData(0, 0, sw, sh);
+  boxBlurRGBA(imgData.data, sw, sh, Math.max(1, Math.round(s * sw * 0.08)));
+  mctx.putImageData(imgData, 0, 0);
+  ctx.drawImage(mini, dstRect.x, dstRect.y, dstRect.w, dstRect.h);
+  mini.width = 0;
+  mini.height = 0;
+}
+
+/**
+ * Draws `source` at `targetW` x `targetH`, optionally trimming to the subject's
+ * alpha bounding box (`autoCrop` + `cropPadding`), applies the `shadowCutoff`
+ * alpha threshold, composites onto `backdrop` (flat color, "blur", or "image"
+ * with `backdropSource`) when needed, and encodes to
+ * `format` ("png" | "webp" | "jpg" | "mask").
  */
 async function renderExportBlob(source, srcW, srcH, opts) {
-  const { format, targetW, targetH, shadowCutoff, backdrop } = opts;
+  const {
+    format,
+    targetW,
+    targetH,
+    shadowCutoff,
+    backdrop,
+    backdropSource = null,
+    backdropBlur = 0,
+    autoCrop = false,
+    cropPadding = 0,
+    cropBox = null,
+    canvasFit = "fit",
+  } = opts;
+  const stretch = canvasFit === "stretch";
+
+  const cropRect = autoCrop
+    ? expandCropBox(
+        cropBox || computeAlphaBBox(source, srcW, srcH, shadowCutoff),
+        cropPadding
+      )
+    : { x: 0, y: 0, w: srcW, h: srcH };
 
   const canvas = document.createElement("canvas");
   canvas.width = targetW;
@@ -37,11 +377,81 @@ async function renderExportBlob(source, srcW, srcH, opts) {
   ctx.imageSmoothingQuality = "high";
 
   const cutoffByte = Math.round((shadowCutoff / 100) * 255);
-  const needsMatte = format === "jpg" || backdrop !== "checker";
-  const matteColor = backdrop === "checker" ? "#ffffff" : backdrop;
+  const isImgBackdrop = backdrop === "blur" || backdrop === "image";
+  const bw = backdropSource?.naturalWidth || backdropSource?.width || 0;
+  const bh = backdropSource?.naturalHeight || backdropSource?.height || 0;
+  const hasBackdropImg = isImgBackdrop && bw > 0 && bh > 0;
+  // A loaded blur/image backdrop cover-fills the canvas itself, so flat
+  // matting only applies to color backdrops, JPG's opacity requirement, and
+  // the no-source fallback (transparent for png/webp, white for jpg).
+  const needsMatte =
+    format === "jpg" || (backdrop !== "checker" && !isImgBackdrop);
+  const matteColor = isImgBackdrop
+    ? "#ffffff"
+    : backdrop === "checker"
+      ? "#ffffff"
+      : backdrop;
+
+  const paintBackdrop = () => {
+    if (needsMatte) {
+      ctx.fillStyle = matteColor;
+      ctx.fillRect(0, 0, targetW, targetH);
+    }
+    if (!hasBackdropImg) return;
+    // Cover-fit the backdrop so it fills the canvas edge to edge.
+    const cover = Math.max(targetW / bw, targetH / bh);
+    const dw = bw * cover;
+    const dh = bh * cover;
+    const coverRect = {
+      x: (targetW - dw) / 2,
+      y: (targetH - dh) / 2,
+      w: dw,
+      h: dh,
+    };
+    const blurStrength = Math.max(0, Math.min(1, backdropBlur / 100));
+    if (backdrop !== "blur") {
+      drawBlurred(
+        ctx,
+        backdropSource,
+        { x: 0, y: 0, w: bw, h: bh },
+        coverRect,
+        blurStrength
+      );
+      return;
+    }
+    // Margin fill first, then a second pass mapped with the exact affine
+    // placement of the cutout (fit or stretch), so the subject overlays its
+    // own blurred silhouette instead of a shifted ghost. Where the aligned
+    // photo does not reach the canvas edge, the cover fill shows through.
+    drawBlurred(
+      ctx,
+      backdropSource,
+      { x: 0, y: 0, w: bw, h: bh },
+      coverRect,
+      blurStrength
+    );
+    const { scaleX, scaleY, offsetX, offsetY } = cropPlacement(
+      cropRect,
+      targetW,
+      targetH,
+      stretch
+    );
+    drawBlurred(
+      ctx,
+      backdropSource,
+      { x: 0, y: 0, w: bw, h: bh },
+      {
+        x: offsetX - cropRect.x * scaleX,
+        y: offsetY - cropRect.y * scaleY,
+        w: bw * scaleX,
+        h: bh * scaleY,
+      },
+      blurStrength
+    );
+  };
 
   if (format === "mask") {
-    ctx.drawImage(source, 0, 0, targetW, targetH);
+    drawCroppedSource(ctx, source, srcW, srcH, cropRect, targetW, targetH, stretch);
     const imgData = ctx.getImageData(0, 0, targetW, targetH);
     const data = imgData.data;
     const span = Math.max(1, 255 - cutoffByte);
@@ -70,7 +480,7 @@ async function renderExportBlob(source, srcW, srcH, opts) {
     const fgCtx = fgCanvas.getContext("2d");
     fgCtx.imageSmoothingEnabled = true;
     fgCtx.imageSmoothingQuality = "high";
-    fgCtx.drawImage(source, 0, 0, targetW, targetH);
+    drawCroppedSource(fgCtx, source, srcW, srcH, cropRect, targetW, targetH, stretch);
 
     const imgData = fgCtx.getImageData(0, 0, targetW, targetH);
     const data = imgData.data;
@@ -84,19 +494,13 @@ async function renderExportBlob(source, srcW, srcH, opts) {
     }
     fgCtx.putImageData(imgData, 0, 0);
 
-    if (needsMatte) {
-      ctx.fillStyle = matteColor;
-      ctx.fillRect(0, 0, targetW, targetH);
-    }
+    paintBackdrop();
     ctx.drawImage(fgCanvas, 0, 0);
     fgCanvas.width = 0;
     fgCanvas.height = 0;
   } else {
-    if (needsMatte) {
-      ctx.fillStyle = matteColor;
-      ctx.fillRect(0, 0, targetW, targetH);
-    }
-    ctx.drawImage(source, 0, 0, targetW, targetH);
+    paintBackdrop();
+    drawCroppedSource(ctx, source, srcW, srcH, cropRect, targetW, targetH, stretch);
   }
 
   const mimeMap = {
@@ -125,14 +529,30 @@ function canvasToBlob(canvas, mimeType, quality) {
   });
 }
 
+/**
+ * Resolves the image used to fill the canvas under "blur"/"image" backdrops:
+ * the original stage photo for "blur", the chosen photo for "image".
+ */
+function resolveBackdropSource() {
+  if (state.activeBackdrop === "blur") {
+    return dom.beforeImg?.naturalWidth ? dom.beforeImg : null;
+  }
+  if (state.activeBackdrop === "image") {
+    return state.backdropImg?.naturalWidth ? state.backdropImg : null;
+  }
+  return null;
+}
+
 /** Builds the final export blob for the active image using live export settings. */
 async function buildExportBlob(format) {
   const srcW = state.naturalWidth || masterCutoutImg.naturalWidth;
   const srcH = state.naturalHeight || masterCutoutImg.naturalHeight;
-  const targetW = Math.max(1, state.exportWidth || srcW);
-  const targetH = Math.max(1, state.exportHeight || srcH);
+  const baseDims = getExportBaseDims();
+  const targetW = Math.max(1, state.exportWidth || baseDims.w || srcW);
+  const targetH = Math.max(1, state.exportHeight || baseDims.h || srcH);
 
   if (
+    !state.autoCrop &&
     format === "png" &&
     targetW === srcW &&
     targetH === srcH &&
@@ -149,29 +569,56 @@ async function buildExportBlob(format) {
     targetH,
     shadowCutoff: state.shadowCutoff,
     backdrop: state.activeBackdrop,
+    backdropSource: resolveBackdropSource(),
+    backdropBlur: state.backdropBlur,
+    autoCrop: state.autoCrop,
+    cropPadding: state.cropPadding,
+    canvasFit: state.canvasFit,
   });
 }
 
-/** Builds the export blob for one batch item using the batch's settings snapshot. */
-export async function buildBatchExportBlob(blob, snap) {
+/**
+ * Builds the export blob for one batch item using the batch's settings
+ * snapshot. `originalFile` is the entry's source image, needed when the
+ * "blur" backdrop re-blurs it behind the cutout.
+ */
+export async function buildBatchExportBlob(blob, snap, originalFile = null) {
   const bmp = await createImageBitmap(blob);
+  let bgBmp = null;
   try {
     const srcW = bmp.width;
     const srcH = bmp.height;
-    let targetW = Math.max(1, Math.round(srcW * (snap.scale || 1)));
-    let targetH = Math.max(1, Math.round(srcH * (snap.scale || 1)));
+    const autoCrop = Boolean(snap.autoCrop);
+    const cropPadding = snap.cropPadding || 0;
+    const tightBox = autoCrop
+      ? computeAlphaBBox(bmp, srcW, srcH, snap.shadowCutoff)
+      : null;
+    const { w: baseW, h: baseH } =
+      autoCrop && tightBox
+        ? expandCropBox(tightBox, cropPadding)
+        : { w: srcW, h: srcH };
 
-    // Custom dimensions act as an aspect-preserving bounding box per image.
+    let targetW = Math.max(1, Math.round(baseW * (snap.scale || 1)));
+    let targetH = Math.max(1, Math.round(baseH * (snap.scale || 1)));
+
+    // Custom dimensions act as an exact canvas box when both are set, or an
+    // aspect-preserving bounding box when only one dimension is given.
     if (snap.exportWidth > 0 || snap.exportHeight > 0) {
-      const fit = Math.min(
-        (snap.exportWidth || Infinity) / srcW,
-        (snap.exportHeight || Infinity) / srcH
-      );
-      targetW = Math.max(1, Math.round(srcW * fit));
-      targetH = Math.max(1, Math.round(srcH * fit));
+      if (snap.exportWidth > 0 && snap.exportHeight > 0) {
+        targetW = snap.exportWidth;
+        targetH = snap.exportHeight;
+      } else {
+        const fit = Math.min(
+          (snap.exportWidth || Infinity) / baseW,
+          (snap.exportHeight || Infinity) / baseH
+        );
+        targetW = Math.max(1, Math.round(baseW * fit));
+        targetH = Math.max(1, Math.round(baseH * fit));
+      }
     }
 
     if (
+      !autoCrop &&
       snap.format === "png" &&
       snap.backdrop === "checker" &&
       snap.shadowCutoff === 0 &&
@@ -181,30 +628,138 @@ export async function buildBatchExportBlob(blob, snap) {
       return blob;
     }
 
+    let backdropSource = null;
+    if (snap.backdrop === "blur" && originalFile) {
+      bgBmp = await createImageBitmap(originalFile);
+      backdropSource = bgBmp;
+    } else if (snap.backdrop === "image") {
+      backdropSource = snap.backdropImg || null;
+    }
+
     return await renderExportBlob(bmp, srcW, srcH, {
       format: snap.format,
       targetW,
       targetH,
       shadowCutoff: snap.shadowCutoff,
       backdrop: snap.backdrop,
+      backdropSource,
+      backdropBlur: snap.backdropBlur || 0,
+      autoCrop,
+      cropPadding,
+      cropBox: tightBox,
+      canvasFit: snap.canvasFit || "fit",
     });
   } finally {
     bmp.close();
+    bgBmp?.close();
   }
 }
 
 /**
- * Settings signature identifying which export options a preview blob was
- * rendered under; used to detect stale `state.previewBlob` contents.
+ * Settings signature identifying which render settings a blob was produced
+ * under; used to detect stale preview/export-cache contents. Previews pass
+ * their own dims/format so only byte-exact matches compare equal.
  */
-function exportSignature() {
+function signatureFor({
+  format,
+  w,
+  h,
+  cutoff,
+  backdrop,
+  autoCrop,
+  cropPadding,
+}) {
   return JSON.stringify({
+    format,
+    w,
+    h,
+    cutoff,
+    backdrop,
+    bgSeq: backdrop === "image" ? state.backdropSeq : 0,
+    bgBlur: backdrop === "blur" || backdrop === "image" ? state.backdropBlur : 0,
+    autoCrop,
+    cropPadding,
+    canvasFit: state.canvasFit,
+  });
+}
+
+function exportSignature() {
+  return signatureFor({
     format: state.exportFormat,
     w: state.exportWidth,
     h: state.exportHeight,
     cutoff: state.shadowCutoff,
     backdrop: state.activeBackdrop,
+    autoCrop: state.autoCrop,
+    cropPadding: state.autoCrop ? state.cropPadding : 0,
   });
+}
+
+/** True when the cached export blob is byte-exact for the current settings. */
+function exportCacheMatches() {
+  return (
+    state.exportCacheBlob &&
+    state.exportCacheSignature === exportSignature() &&
+    state.exportCacheSource === state.resultBlob
+  );
+}
+
+/**
+ * Returns a blob that is byte-exact what an export would produce: the
+ * background export cache when fresh, else the live preview blob when it was
+ * rendered under the current export settings (raw passthrough included).
+ */
+function exactExportBlob() {
+  if (exportCacheMatches()) return state.exportCacheBlob;
+  if (
+    state.previewBlob &&
+    state.previewSignature === exportSignature() &&
+    state.previewSource === state.resultBlob
+  ) {
+    return state.previewBlob;
+  }
+  return null;
+}
+
+/**
+ * Background full-res encode of the real export settings. The stage preview
+ * is deliberately uncropped/capped, so its bytes can't back the size label:
+ * this runs once after each preview render whose signature differs from the
+ * export's, giving an honest size readout and a warm EXPORT button.
+ */
+async function renderExportCache(token) {
+  const source = state.resultBlob;
+  const srcW = state.naturalWidth || masterCutoutImg.naturalWidth;
+  const srcH = state.naturalHeight || masterCutoutImg.naturalHeight;
+  const baseDims = getExportBaseDims();
+  const targetW = Math.max(1, state.exportWidth || baseDims.w || srcW);
+  const targetH = Math.max(1, state.exportHeight || baseDims.h || srcH);
+  try {
+    const blob = await renderExportBlob(masterCutoutImg, srcW, srcH, {
+      format: state.exportFormat,
+      targetW,
+      targetH,
+      shadowCutoff: state.shadowCutoff,
+      backdrop: state.activeBackdrop,
+      backdropSource: resolveBackdropSource(),
+      backdropBlur: state.backdropBlur,
+      autoCrop: state.autoCrop,
+      cropPadding: state.cropPadding,
+      canvasFit: state.canvasFit,
+    });
+    if (token !== state.previewRenderToken || source !== state.resultBlob) {
+      return;
+    }
+    state.exportCacheBlob = blob;
+    state.exportCacheSignature = exportSignature();
+    state.exportCacheSource = source;
+    if (dom.exportSizeLabel && exportCacheMatches()) {
+      dom.exportSizeLabel.textContent = formatDiskBytes(blob.size);
+    }
+    saveStateToActiveTab();
+  } catch (err) {
+    console.warn("[OpenBGR] Export cache render failed:", err);
+  }
 }
 
 // Longest-side cap for the live stage preview in pixels. Full-res canvas
@@ -221,8 +776,9 @@ let previewLastStart = 0;
 function previewTargetSize() {
   const srcW = state.naturalWidth || masterCutoutImg.naturalWidth;
   const srcH = state.naturalHeight || masterCutoutImg.naturalHeight;
-  const targetW = Math.max(1, state.exportWidth || srcW);
-  const targetH = Math.max(1, state.exportHeight || srcH);
+  const uncroppedStage = state.autoCrop && !exportAspectMismatch();
+  const targetW = Math.max(1, uncroppedStage ? srcW : state.exportWidth || srcW);
+  const targetH = Math.max(1, uncroppedStage ? srcH : state.exportHeight || srcH);
   const k = Math.min(1, PREVIEW_MAX_SIDE / Math.max(targetW, targetH));
   return {
     w: Math.max(1, Math.round(targetW * k)),
@@ -230,14 +786,29 @@ function previewTargetSize() {
   };
 }
 
-/** True when export settings change pixels (cutoff, matte, mask); else the raw cutout is shown. */
+/** True when the export box's aspect differs meaningfully from the base frame. */
+function exportAspectMismatch() {
+  const baseDims = getExportBaseDims();
+  const w = state.exportWidth;
+  const h = state.exportHeight;
+  if (!baseDims.w || !w || !h) return false;
+  const mismatch = Math.abs(w * baseDims.h - h * baseDims.w);
+  return mismatch > Math.max(w * baseDims.h, h * baseDims.w) * 0.02;
+}
+
+/** True when export settings change pixels or framing (cutoff, matte, mask, custom aspect); else the raw cutout is shown. */
 function previewNeedsRender() {
-  return (
+  if (
     state.shadowCutoff > 0 ||
     state.activeBackdrop !== "checker" ||
     state.exportFormat === "jpg" ||
     state.exportFormat === "mask"
-  );
+  ) {
+    return true;
+  }
+  // A preset or unlocked dims change the output canvas's aspect, so the raw
+  // passthrough cutout no longer previews the real export framing.
+  return exportAspectMismatch();
 }
 
 /**
@@ -284,30 +855,40 @@ async function renderLivePreview(token) {
     let renderedSig;
     if (!previewNeedsRender()) {
       blob = source;
-      renderedSig = JSON.stringify({
+      renderedSig = signatureFor({
         format: "png",
         w: state.naturalWidth || masterCutoutImg.naturalWidth,
         h: state.naturalHeight || masterCutoutImg.naturalHeight,
         cutoff: 0,
         backdrop: "checker",
+        autoCrop: false,
+        cropPadding: 0,
       });
     } else {
       const srcW = state.naturalWidth || masterCutoutImg.naturalWidth;
       const srcH = state.naturalHeight || masterCutoutImg.naturalHeight;
       const { w, h } = previewTargetSize();
+      const applyCrop = state.autoCrop && exportAspectMismatch();
       blob = await renderExportBlob(masterCutoutImg, srcW, srcH, {
         format: state.exportFormat,
         targetW: w,
         targetH: h,
         shadowCutoff: state.shadowCutoff,
         backdrop: state.activeBackdrop,
+        backdropSource: resolveBackdropSource(),
+        backdropBlur: state.backdropBlur,
+        autoCrop: applyCrop,
+        cropPadding: applyCrop ? state.cropPadding : 0,
+        canvasFit: state.canvasFit,
       });
-      renderedSig = JSON.stringify({
+      renderedSig = signatureFor({
         format: state.exportFormat,
         w,
         h,
         cutoff: state.shadowCutoff,
         backdrop: state.activeBackdrop,
+        autoCrop: applyCrop,
+        cropPadding: applyCrop ? state.cropPadding : 0,
       });
     }
     if (token !== state.previewRenderToken) return;
@@ -328,12 +909,21 @@ async function renderLivePreview(token) {
         : URL.createObjectURL(blob);
     dom.afterImg.src = state.previewObjectUrl;
     // The byte size is only honest when the preview blob is exactly what an
-    // export would produce (raw-passthrough or an uncapped render).
+    // export would produce (raw-passthrough or an uncapped render). When it
+    // is not (auto-crop, capped preview dims), a background full-res encode
+    // fills `exportCacheBlob` and updates the label itself.
     if (dom.exportSizeLabel) {
       dom.exportSizeLabel.textContent =
         renderedSig === exportSignature()
           ? formatDiskBytes(blob.size)
           : "...";
+    }
+    if (renderedSig === exportSignature()) {
+      state.exportCacheBlob = null;
+      state.exportCacheSignature = null;
+      state.exportCacheSource = null;
+    } else {
+      renderExportCache(token);
     }
     saveStateToActiveTab();
   } catch (err) {
@@ -416,14 +1006,11 @@ export function updateExportTelemetry() {
   if (dom.exportSizeLabel) {
     if (!state.resultBlob) {
       dom.exportSizeLabel.textContent = "--";
-    } else if (
-      state.previewBlob &&
-      state.previewSignature === exportSignature() &&
-      state.previewSource === state.resultBlob
-    ) {
-      dom.exportSizeLabel.textContent = formatDiskBytes(state.previewBlob.size);
     } else {
-      dom.exportSizeLabel.textContent = "...";
+      const exact = exactExportBlob();
+      dom.exportSizeLabel.textContent = exact
+        ? formatDiskBytes(exact.size)
+        : "...";
     }
   }
 
@@ -436,16 +1023,17 @@ export function updateExportTelemetry() {
   });
 
   if (state.naturalWidth > 0 && state.naturalHeight > 0) {
+    const baseDims = getExportBaseDims();
     if (!state.exportWidth) {
       state.exportWidth = Math.max(
         1,
-        Math.round(state.naturalWidth * state.exportScale)
+        Math.round(baseDims.w * state.exportScale)
       );
     }
     if (!state.exportHeight) {
       state.exportHeight = Math.max(
         1,
-        Math.round(state.naturalHeight * state.exportScale)
+        Math.round(baseDims.h * state.exportScale)
       );
     }
     if (document.activeElement !== dom.exportWidthInput) {
@@ -461,8 +1049,10 @@ export function updateExportTelemetry() {
         : `${state.exportWidth}x${state.exportHeight} PX (${pct}%)`;
 
     dom.lblRight.textContent = `${fmtUpper} - ${state.exportWidth}x${state.exportHeight} (${pct}%)`;
+    updateCropGuide();
     updateLiveStagePreview();
   } else {
+    updateCropGuide();
     if (document.activeElement !== dom.exportWidthInput) {
       dom.exportWidthInput.value =
         state.exportWidth > 0 ? String(state.exportWidth) : "";
@@ -472,37 +1062,154 @@ export function updateExportTelemetry() {
         state.exportHeight > 0 ? String(state.exportHeight) : "";
     }
   }
+
+  syncPresetChips();
+  syncFitChips();
 }
 
-/** Applies an export backdrop choice (transparent/white/black/custom). */
+/**
+ * Highlights the preset chip matching the current export dims. ORIGINAL
+ * lights whenever the output keeps the source aspect ratio (or no image is
+ * loaded) and no exact preset chip matches.
+ */
+function syncPresetChips() {
+  let presetHit = false;
+  document.querySelectorAll(".preset-chip[data-w]").forEach((chip) => {
+    const w = parseInt(chip.getAttribute("data-w"), 10);
+    const h = parseInt(chip.getAttribute("data-h"), 10);
+    const hit = w === state.exportWidth && h === state.exportHeight;
+    if (hit) presetHit = true;
+    chip.classList.toggle("active", hit);
+  });
+  const baseDims = getExportBaseDims();
+  const isNativeAspect =
+    !baseDims.w ||
+    Math.abs(
+      state.exportWidth * baseDims.h - state.exportHeight * baseDims.w
+    ) <= Math.max(state.exportWidth, state.exportHeight);
+  dom.presetReset?.classList.toggle("active", !presetHit && isNativeAspect);
+}
+
+/** Marks the canvas-fit chip matching `state.canvasFit`. */
+function syncFitChips() {
+  document.querySelectorAll(".fit-chip[data-fit]").forEach((chip) => {
+    chip.classList.toggle(
+      "active",
+      chip.getAttribute("data-fit") === state.canvasFit
+    );
+  });
+  // At native aspect FIT and STRETCH produce identical output; greying the
+  // row prevents a meaningless toggle and teaches when the control matters.
+  dom.canvasFitChips?.classList.toggle("disabled", !exportAspectMismatch());
+}
+
+/** Switches how the subject fills a mismatched export canvas: fit or stretch. */
+export function setCanvasFit(mode) {
+  state.canvasFit = mode === "stretch" ? "stretch" : "fit";
+  updateExportTelemetry();
+}
+
+/** Maps a backdrop value ("checker", a hex color, "blur", "image") to its mode. */
+function backdropModeOf(value) {
+  return value === "checker" || value === "blur" || value === "image"
+    ? value
+    : "color";
+}
+
+/** Applies an export backdrop choice and syncs the mode-driven controls. */
 export function applyBackdrop(value) {
   state.activeBackdrop = value;
-  document.querySelectorAll("#matteSwatches .swatch").forEach((s) => {
+  const mode = backdropModeOf(value);
+  if (mode === "color") state.backdropColor = value;
+
+  document.querySelectorAll(".mode-chip[data-mode]").forEach((chip) => {
+    chip.classList.toggle("active", chip.getAttribute("data-mode") === mode);
+  });
+  document.querySelectorAll("#matteSwatches .swatch[data-bg]").forEach((s) => {
     s.classList.toggle("active", s.getAttribute("data-bg") === value);
   });
-  if (value === "checker") {
-    dom.viewport.style.background = "";
-    dom.viewport.classList.add("checkerboard-canvas");
-  } else {
+  dom.colorPicker?.classList.toggle(
+    "active",
+    value === dom.colorPicker.value
+  );
+  if (dom.matteSwatches) {
+    dom.matteSwatches.style.display = mode === "color" ? "" : "none";
+  }
+  if (dom.backdropPhotoWrap) {
+    dom.backdropPhotoWrap.style.display = mode === "image" ? "" : "none";
+  }
+  if (dom.backdropPhotoThumb) {
+    const url = state.backdropImgUrl || "";
+    dom.backdropPhotoThumb.classList.toggle("has-image", Boolean(url));
+    dom.backdropPhotoThumb.style.backgroundImage = url ? `url("${url}")` : "";
+  }
+  if (dom.btnBackdropPhotoRemove) {
+    dom.btnBackdropPhotoRemove.style.display = state.backdropImg ? "" : "none";
+  }
+  if (dom.backdropBlurWrap) {
+    const isImgBackdrop = mode === "blur" || mode === "image";
+    dom.backdropBlurWrap.style.display = isImgBackdrop ? "" : "none";
+  }
+  if (mode === "color") {
     dom.viewport.classList.remove("checkerboard-canvas");
     dom.viewport.style.background = value;
+  } else {
+    dom.viewport.style.background = "";
+    dom.viewport.classList.toggle("checkerboard-canvas", mode === "checker");
   }
   updateLiveStagePreview();
+}
+
+/** Activates a backdrop mode chip; COLOR restores the last picked color. */
+export function applyBackdropMode(mode) {
+  applyBackdrop(mode === "color" ? state.backdropColor || "#ffffff" : mode);
 }
 
 /** Applies a preset export scale and re-renders the live preview. */
 export function applyScaleValue(newScale) {
   state.exportScale = newScale;
   if (state.naturalWidth > 0 && state.naturalHeight > 0) {
+    const baseDims = getExportBaseDims();
     state.exportWidth = Math.max(
       1,
-      Math.round(state.naturalWidth * state.exportScale)
+      Math.round(baseDims.w * state.exportScale)
     );
     state.exportHeight = Math.max(
       1,
-      Math.round(state.naturalHeight * state.exportScale)
+      Math.round(baseDims.h * state.exportScale)
     );
   }
+  updateExportTelemetry();
+}
+
+/**
+ * Applies a fixed export canvas size from a preset chip. Presets define an
+ * exact output box (subject centered inside), so aspect lock is released:
+ * locking would silently override the preset's second dimension.
+ */
+export function applyExportSizePreset(w, h) {
+  state.exportWidth = Math.max(1, Math.round(w) || 0);
+  state.exportHeight = Math.max(1, Math.round(h) || 0);
+  if (!state.exportWidth || !state.exportHeight) return;
+  state.aspectLocked = false;
+  dom.aspectLockBtn?.classList.remove("active");
+  dom.aspectLockBtn?.setAttribute("aria-pressed", "false");
+  dom.exportWidthInput.value = String(state.exportWidth);
+  dom.exportHeightInput.value = String(state.exportHeight);
+  updateExportTelemetry();
+}
+
+/** Clears a preset/custom box back to the scaled source aspect ratio. */
+export function resetExportSize() {
+  state.aspectLocked = true;
+  dom.aspectLockBtn?.classList.add("active");
+  dom.aspectLockBtn?.setAttribute("aria-pressed", "true");
+  if (state.naturalWidth > 0 && state.naturalHeight > 0) {
+    applyScaleValue(state.exportScale || 1);
+    return;
+  }
+  state.exportWidth = 0;
+  state.exportHeight = 0;
   updateExportTelemetry();
 }
 
@@ -533,19 +1240,16 @@ export async function saveBatchFile(dir, filename, blob) {
 export async function exportActiveImage() {
   if (!state.resultBlob) return;
   try {
-    // Reuse the live preview only when it was rendered under the exact current
-    // export settings and from the current cutout; otherwise re-encode so the
-    // downloaded file always matches its extension and options.
+    // Reuse the byte-exact cached encode or live preview when either was
+    // rendered under the current export settings and from the current cutout;
+    // otherwise re-encode so the saved file always matches its options.
     const exportBlob =
-      state.previewBlob &&
-      state.previewSignature === exportSignature() &&
-      state.previewSource === state.resultBlob
-        ? state.previewBlob
-        : await buildExportBlob(state.exportFormat);
+      exactExportBlob() || (await buildExportBlob(state.exportFormat));
     const suffix = state.exportFormat === "mask" ? "mask" : "cutout";
+    const baseDims = getExportBaseDims();
     const isNativeSize =
-      state.exportWidth === state.naturalWidth &&
-      state.exportHeight === state.naturalHeight;
+      state.exportWidth === baseDims.w &&
+      state.exportHeight === baseDims.h;
     const sizeTag = isNativeSize
       ? ""
       : `-${state.exportWidth}x${state.exportHeight}`;
@@ -613,7 +1317,8 @@ export async function copyActiveCutout() {
 
   try {
     const copyFormat = state.exportFormat === "mask" ? "mask" : "png";
-    const pngBlob = await buildExportBlob(copyFormat);
+    const cached = copyFormat === state.exportFormat ? exactExportBlob() : null;
+    const pngBlob = cached || (await buildExportBlob(copyFormat));
 
     if (window.pywebview?.api?.copy_image) {
       const b64 = await blobToBase64(pngBlob);

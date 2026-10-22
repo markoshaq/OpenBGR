@@ -78,11 +78,7 @@ function applyDotState(dotEl, status, allowTooltip = true) {
   }
   const tip = DOT_TOOLTIPS[status] || "";
   dotEl.setAttribute("data-tooltip", tip);
-  if (dotEl.classList.contains("has-tooltip") || dotEl.closest(".has-tooltip")) {
-    dotEl.removeAttribute("title");
-  } else {
-    dotEl.setAttribute("title", tip);
-  }
+  dotEl.removeAttribute("title");
 }
 
 /** Refreshes every model card dot plus the Settings model inventory rows from server status. */

@@ -122,11 +122,15 @@ export class FakeElement {
     this.classList = new FakeClassList(this);
     if (this.tagName === "CANVAS") {
       const self = this;
+      // Records drawImage args so tests can assert source/dest rects.
+      this._drawCalls = [];
       this._ctx = {
         imageSmoothingEnabled: true,
         imageSmoothingQuality: "high",
         fillStyle: "#000",
-        drawImage() {},
+        drawImage(...args) {
+          self._drawCalls.push(args);
+        },
         fillRect() {},
         clearRect() {},
         createPattern: () => ({}),
@@ -135,7 +139,9 @@ export class FakeElement {
         },
         putImageData() {},
       };
-      this.toBlob = (cb, mime) => cb(new Blob([new Uint8Array(8)], { type: mime }));
+      // Encode the canvas dims into the blob so tests can assert output size.
+      this.toBlob = (cb, mime) =>
+        cb(new Blob([`${self.width}x${self.height}`], { type: mime }));
       this.getContext = () => self._ctx;
     }
   }
@@ -313,6 +319,8 @@ export function installDomShims() {
     documentElement,
     body,
     activeElement: null,
+    // Every createElement("canvas") in order, for draw-call inspection.
+    _canvases: [],
     getElementById(id) {
       // Elements are auto-created on first lookup and attached to <body> so
       // querySelector can still reach them from tests.
@@ -324,7 +332,11 @@ export function installDomShims() {
       }
       return byId.get(id);
     },
-    createElement: (tag) => new FakeElement(tag),
+    createElement: (tag) => {
+      const el = new FakeElement(tag);
+      if (tag === "canvas") document._canvases.push(el);
+      return el;
+    },
     querySelector: (sel) =>
       documentElement.querySelectorAll(sel)[0] || null,
     querySelectorAll: (sel) => documentElement.querySelectorAll(sel),

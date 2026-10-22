@@ -2,9 +2,11 @@
 
 ## [0.12.0]
 
-- Batch saves now surface the real failure reason (HTTP detail, picker denial, ZIP write error) instead of a generic failed status
-- Refine and batch-request errors show the server's detail message rather than a bare status code
-- Frontend unit coverage grows from 9 to 34 tests: tab lifecycle, batch queue and run/cancel paths, byte-level ZIP output, export passthrough
-- Internal: data-driven keyboard shortcut table, split the batch run, tab switch, segmentation, and app entrypoint into smaller helpers, funnel preference writes through one helper
-- Removed dead CSS rules and an unused test constant
-- ELAPSED in the status bar only appears after a run finishes; the live timer remains on the processing overlay
+- Auto-crop to subject with adjustable padding and a live stage crop guide
+- Edge Shift and Edge Feather sliders with instant preview refinement
+- Blur and custom photo backdrops with a blur strength slider alongside grid and flat colors
+- Aspect ratio presets (Original, 1:1, 4:5, 9:16, 16:9) and a Fit / Stretch canvas toggle
+- Retry Failed button in batch mode to re-run only failed items
+- Collapsible model selector dropdown and floating tooltips that do not clip at sidebar edges
+- Accurate file size readout and cached instant export under auto-crop and custom backdrops
+- Flush GPU/MPS memory after each segmentation job to prevent high-res runs from pinning RAM

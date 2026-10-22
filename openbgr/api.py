@@ -484,6 +484,8 @@ async def api_remove_bg(
     defringe: bool = Form(True),
     despill: bool = Form(True),
     matting: bool = Form(False),
+    edge_shift: int = Form(0),
+    edge_feather: int = Form(0),
 ) -> Response:
     """
     Accepts an uploaded image file and returns a full-resolution, lossless
@@ -520,6 +522,8 @@ async def api_remove_bg(
             despill,
             matting,
             job_epoch,
+            max(-32, min(32, edge_shift)),
+            max(0, min(64, edge_feather)),
         )
     except InterruptedError as exc:
         raise HTTPException(status_code=499, detail=str(exc)) from exc
@@ -578,12 +582,15 @@ async def api_refine(
     job_id: int = Form(...),
     defringe: bool = Form(True),
     despill: bool = Form(True),
+    edge_shift: int = Form(0),
+    edge_feather: int = Form(0),
 ) -> Response:
     """
-    Re-applies the edge-refinement filters (defringe/despill) onto the cached
-    raw RGB + alpha of the last completed segmentation job: a pure
-    post-processing pass that skips re-running the neural network entirely.
-    Returns HTTP 409 when the referenced job is no longer the latest one.
+    Re-applies the edge-refinement filters (defringe/despill/edge geometry)
+    onto the cached raw RGB + alpha of the last completed segmentation job:
+    a pure post-processing pass that skips re-running the neural network
+    entirely. Returns HTTP 409 when the referenced job is no longer the
+    latest one.
     """
 
     def _render() -> tuple[bytes, int, int]:
@@ -591,7 +598,14 @@ async def api_refine(
         job = get_last_job(job_id)
         if job is None:
             raise LookupError
-        result_img = compose_rgba(job["rgb"], job["alpha"], defringe, despill)
+        result_img = compose_rgba(
+            job["rgb"],
+            job["alpha"],
+            defringe,
+            despill,
+            max(-32, min(32, edge_shift)),
+            max(0, min(64, edge_feather)),
+        )
         buf = io.BytesIO()
         try:
             result_img.save(buf, format="PNG", compress_level=1)

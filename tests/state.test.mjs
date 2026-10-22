@@ -33,6 +33,7 @@ const {
   defaultTierForNewTab,
   state,
   prefs,
+  DEFAULT_CROP_PADDING,
 } = await import("../static/state.js");
 
 test("normalizeTierKey resolves legacy aliases and passes canonical keys through", () => {
@@ -138,6 +139,18 @@ test("createTabRecord yields a well-formed image tab honoring overrides", () => 
   assert.equal(a.zoom, 1);
   assert.deepEqual(a.batchFiles, []);
   assert.equal(a.tier, state.tier);
+  assert.equal(a.autoCrop, false);
+  assert.equal(a.cropPadding, DEFAULT_CROP_PADDING);
+  assert.equal(a.edgeShift, 0);
+  assert.equal(a.edgeFeather, 0);
+  assert.equal(a.activeBackdrop, state.activeBackdrop);
+  assert.equal(a.backdropImg, state.backdropImg);
+  assert.equal(a.backdropSeq, state.backdropSeq);
+  assert.equal(a.backdropBlur, 50);
+  assert.equal(a.aspectLocked, true);
+  assert.equal(a.canvasFit, "fit");
+  assert.equal(a.backdropColor, "#ffffff");
+  assert.equal(a.exportCacheBlob, null);
 });
 
 test("defaultTierForNewTab prefers explicit pref, then recommended, then active", () => {

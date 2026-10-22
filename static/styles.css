@@ -471,6 +471,69 @@ body {
   gap: 5px;
 }
 
+/* Model dropdown: the collapsed trigger mirrors the active tier card and
+   expands the full list in flow below it. */
+.tier-dropdown .model-list {
+  display: none;
+}
+
+.tier-dropdown.open .model-list {
+  display: flex;
+  margin-top: 6px;
+}
+
+.tier-dropdown-trigger {
+  flex: none;
+  width: 100%;
+  align-items: flex-start;
+  text-align: left;
+  gap: 2px;
+  padding: 7px 26px 7px 9px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.tier-dropdown.open .tier-dropdown-trigger {
+  border-color: var(--accent);
+}
+
+/* Bordered caret zone on the trigger's right edge: the classic combo-box cue. */
+.tier-caret {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 21px;
+  display: grid;
+  place-items: center;
+  border-left: 1px solid var(--border);
+  transition: background 0.12s ease;
+}
+
+.tier-caret::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid var(--text);
+  transition:
+    transform 0.12s ease,
+    border-top-color 0.12s ease;
+}
+
+.tier-dropdown-trigger:hover .tier-caret,
+.tier-dropdown.open .tier-caret {
+  background: var(--surface-2);
+}
+
+.tier-dropdown.open .tier-caret::before {
+  transform: rotate(180deg);
+  border-top-color: var(--accent);
+}
+
+
 .model-list .tier-btn {
   flex: none;
   width: 100%;
@@ -665,6 +728,53 @@ body {
   background: var(--surface-2);
 }
 
+/* Pill switch for binary settings (auto-crop), sits in a header row. */
+.switch {
+  position: relative;
+  width: 34px;
+  height: 18px;
+  border-radius: 9px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+  transition:
+    border-color 0.12s ease,
+    box-shadow 0.12s ease;
+}
+
+.switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--muted);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  transition:
+    transform 0.12s ease,
+    background 0.12s ease;
+}
+
+.switch:hover {
+  border-color: var(--accent);
+}
+
+.switch.active {
+  border-color: var(--accent);
+  box-shadow:
+    inset 0 1px 3px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px var(--accent);
+}
+
+.switch.active .switch-knob {
+  transform: translateX(16px);
+  background: var(--accent);
+}
+
 .toggle-card-top {
   display: flex;
   align-items: center;
@@ -703,20 +813,11 @@ body {
   box-shadow: 0 0 5px rgba(239, 68, 68, 0.75);
 }
 
-.has-tooltip {
-  position: relative;
-}
-
-.tier-dot.has-tooltip {
-  position: absolute;
-}
-
-.has-tooltip::after {
-  content: attr(data-tooltip);
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 50%;
-  transform: translateX(-50%);
+/* Floating tooltip: one shared element anchored to the viewport by
+   initTooltips, so scrollable sidebars cannot clip it. */
+.floating-tooltip {
+  position: fixed;
+  z-index: 2000;
   background: var(--bg);
   color: var(--text);
   border: 1px solid var(--border-strong);
@@ -725,78 +826,26 @@ body {
   font-size: 10px;
   font-weight: 500;
   line-height: 1.35;
-  white-space: nowrap;
+  white-space: normal;
+  width: max-content;
+  max-width: 240px;
   pointer-events: none;
   opacity: 0;
   visibility: hidden;
-  transition: opacity 0.12s ease, visibility 0s linear 0.12s;
-  z-index: 100;
+  transition: opacity 0.12s ease;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
 }
 
-/* Keep sidebar tooltips inside the sidebar bounds and wrap long descriptions.
-   Full-width rows anchor left; segmented buttons anchor left / center / right. */
-.sidebar .has-tooltip::after {
-  bottom: auto;
-  top: calc(100% + 6px);
-  left: 0;
-  right: auto;
-  transform: none;
-  white-space: normal;
-  width: max-content;
-  max-width: 226px;
-  text-align: left;
-}
-
-.sidebar .tier-row .tier-btn.has-tooltip::after {
-  left: 50%;
-  right: auto;
-  transform: translateX(-50%);
-}
-
-.sidebar .tier-row .tier-btn.has-tooltip:first-child::after {
-  left: 0;
-  right: auto;
-  transform: none;
-}
-
-.sidebar .tier-row .tier-btn.has-tooltip:last-child::after {
-  left: auto;
-  right: 0;
-  transform: none;
-}
-
-/* Right-sidebar tooltips can't escape the scrollport horizontally; center them
-   on their host so neither edge of the panel clips them. */
-.sidebar-right .has-tooltip::after {
-  left: 50%;
-  right: auto;
-  transform: translateX(-50%);
-  max-width: 200px;
-}
-
-.sidebar-right .tier-row .tier-btn.has-tooltip::after {
-  max-width: 200px;
-}
-
-.topbar .has-tooltip::after {
-  bottom: auto;
-  top: calc(100% + 8px);
-  left: auto;
-  right: 0;
-  transform: none;
-}
-
-.has-tooltip:hover::after {
+.floating-tooltip.visible {
   opacity: 1;
   visibility: visible;
-  transition-delay: 0.2s;
+  transition-delay: 0.15s;
 }
 
 /* Matte Swatches Grid */
 .swatches-grid {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   border: 1px solid var(--border);
 }
 
@@ -822,15 +871,109 @@ body {
   pointer-events: none;
 }
 
-.swatch-checker {
-  background-image:
-    linear-gradient(45deg, var(--checker-a) 25%, transparent 25%),
-    linear-gradient(-45deg, var(--checker-a) 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, var(--checker-a) 75%),
-    linear-gradient(-45deg, transparent 75%, var(--checker-a) 75%);
-  background-size: 8px 8px;
-  background-position: 0 0, 0 4px, 4px -4px, -4px 0;
-  background-color: var(--checker-b);
+/* Backdrop mode chips pick the compositing mode; color swatches and the
+   photo picker only appear in their own mode. */
+.preset-chips.mode-chips {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+#matteSwatches {
+  margin-top: 8px;
+}
+
+.backdrop-photo-wrap {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.backdrop-photo-thumb {
+  width: 56px;
+  height: 44px;
+  border: 1px dashed var(--border);
+  background-size: cover;
+  background-position: center;
+  flex-shrink: 0;
+  position: relative;
+  cursor: pointer;
+}
+
+.backdrop-photo-thumb.has-image {
+  border-style: solid;
+}
+
+.backdrop-photo-thumb:not(.has-image)::after {
+  content: "NO PHOTO";
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 7px;
+  letter-spacing: 1px;
+  color: var(--muted);
+}
+
+.backdrop-photo-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+
+/* Backdrop blur slider, shown only for the blur/image backdrops. */
+.backdrop-blur-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+/* Custom-dimension preset chips */
+.preset-head {
+  margin-top: 12px;
+}
+
+.preset-chips {
+  display: grid;
+  grid-template-columns: 2.2fr repeat(4, 1fr);
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.preset-chip {
+  font-family: inherit;
+  font-size: 9px;
+  letter-spacing: 0.5px;
+  padding: 6px 0;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition:
+    color 0.12s ease,
+    border-color 0.12s ease;
+}
+
+.preset-chip:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.preset-chip.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Canvas-fit toggle under the aspect chips: two equal segments */
+.fit-chips {
+  grid-template-columns: 1fr 1fr;
+}
+
+/* Greyed when the export aspect matches the source: fit mode cannot differ. */
+.fit-chips.disabled {
+  opacity: 0.4;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
 }
 
 /* Right Sidebar Export Controls */
@@ -1346,6 +1489,39 @@ body {
   position: absolute;
   inset: 0;
   overflow: hidden;
+}
+
+.crop-guide {
+  display: none;
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 6;
+}
+
+.crop-guide.visible {
+  display: block;
+}
+
+.crop-guide::before {
+  content: "";
+  position: absolute;
+  inset: var(--crop-inset, 0);
+  border: 1.5px dashed var(--accent);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.45);
+}
+
+.crop-padding-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: opacity 0.12s ease;
+}
+
+.crop-padding-wrap.disabled {
+  opacity: 0.4;
+  pointer-events: none;
 }
 
 .split-line {
@@ -2195,7 +2371,7 @@ input[type="file"] {
   background: rgba(255, 255, 255, 0.88);
 }
 
-.theme-light .has-tooltip::after,
+.theme-light .floating-tooltip,
 .theme-light .menu-dropdown {
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
 }

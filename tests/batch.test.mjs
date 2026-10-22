@@ -204,6 +204,52 @@ test("runBatch skips deselected entries and records save/HTTP failures per row",
   assert.match(dom.modalDesc.textContent, /0 of 1 image processed, 1 failed/);
 });
 
+test("runBatch with onlyFailed retries just the failed rows", async () => {
+  resetWorkspace();
+  stubFetch((n) =>
+    n === 2
+      ? {
+          ok: false,
+          status: 500,
+          json: async () => ({ detail: "boom" }),
+          headers: new Headers(),
+        }
+      : { ...OK_RESPONSE }
+  );
+  const tab = makeBatchTab(["a.png", "b.png", "c.png"]);
+  tab.batchFiles[2].selected = false;
+
+  await runBatch(tab);
+  assert.equal(tab.batchFiles[0].status, "done");
+  assert.equal(tab.batchFiles[1].status, "failed");
+  assert.equal(tab.batchFiles[1].error, "boom");
+  assert.equal(tab.batchFiles[2].status, "skipped");
+  assert.equal(
+    dom.btnBatchRetry.style.display,
+    "",
+    "retry button appears once a row has failed"
+  );
+
+  const calls = stubFetch(() => ({ ...OK_RESPONSE }));
+  await runBatch(tab, { onlyFailed: true });
+
+  assert.equal(calls(), 1, "only the failed entry is re-fetched");
+  assert.equal(tab.batchFiles[0].status, "done", "done rows untouched");
+  assert.equal(tab.batchFiles[1].status, "done");
+  assert.equal(tab.batchFiles[1].error, undefined, "stale error cleared");
+  assert.equal(
+    tab.batchFiles[2].status,
+    "skipped",
+    "deselected rows stay skipped"
+  );
+  assert.match(dom.modalDesc.textContent, /1 of 1 image processed/);
+  assert.equal(
+    dom.btnBatchRetry.style.display,
+    "none",
+    "retry button hides when no rows remain failed"
+  );
+});
+
 test("runBatch honours a cancel flag set mid-run and restores queued statuses", async () => {
   resetWorkspace();
   stubFetch(() => {

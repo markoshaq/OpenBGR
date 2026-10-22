@@ -63,6 +63,39 @@ class TestPipeline(unittest.TestCase):
         self.assertEqual(composed.getpixel((16, 16))[3], 255)
         composed.close()
 
+    def test_adjust_alpha_geometry(self) -> None:
+        """`adjust_alpha_geometry` contracts, expands, and feathers the matte edge."""
+        alpha = np.zeros((32, 32), dtype=np.uint8)
+        alpha[8:24, 8:24] = 255
+
+        # Negative shift erodes the matte: bbox shrinks by shift px per side.
+        eroded = pipeline_mod.adjust_alpha_geometry(alpha, shift_px=-3)
+        self.assertEqual(eroded.dtype, np.uint8)
+        self.assertEqual(int(eroded[8, 8]), 0)
+        self.assertEqual(int(eroded[11, 11]), 255)
+        self.assertGreater(int(alpha.sum() - eroded.sum()), 0)
+
+        # Positive shift dilates it outward.
+        dilated = pipeline_mod.adjust_alpha_geometry(alpha, shift_px=2)
+        self.assertEqual(int(dilated[6, 16]), 255)
+        self.assertEqual(int(dilated[5, 16]), 0)
+
+        # Feather softens hard edges into intermediate alpha values.
+        feathered = pipeline_mod.adjust_alpha_geometry(alpha, shift_px=0, feather_px=2)
+        self.assertEqual(feathered.dtype, np.uint8)
+        edge_vals = feathered[7, 8:24]
+        self.assertTrue(((edge_vals > 0) & (edge_vals < 255)).any())
+        self.assertEqual(int(feathered[16, 16]), 255)
+
+        # compose_rgba applies geometry before compositing.
+        rgb = np.full((32, 32, 3), (40, 200, 60), dtype=np.uint8)
+        contracted = pipeline_mod.compose_rgba(
+            rgb, alpha, defringe=False, despill=False, edge_shift=-4
+        )
+        self.assertEqual(contracted.getpixel((10, 10))[3], 0)
+        self.assertEqual(contracted.getpixel((16, 16))[3], 255)
+        contracted.close()
+
     def test_fp16_cache_compaction(self) -> None:
         """`compact_model_cache_fp16` rewrites FP32 safetensors to FP16 and is idempotent."""
         from safetensors import safe_open
@@ -131,6 +164,8 @@ class TestPipeline(unittest.TestCase):
                     defringe=True,
                     despill=True,
                     matting=False,
+                    edge_shift=0,
+                    edge_feather=0,
                 )
             )
             self.assertEqual(res.media_type, "image/png")

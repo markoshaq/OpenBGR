@@ -37,6 +37,11 @@ import {
   updateLiveStagePreview,
   applyBackdrop,
   applyScaleValue,
+  applyExportSizePreset,
+  resetExportSize,
+  setCanvasFit,
+  applyBackdropMode,
+  getExportBaseDims,
   exportActiveImage,
   copyActiveCutout,
 } from "./export.js";
@@ -80,6 +85,62 @@ import {
   runSegmentation,
   applyEdgeRefinement,
 } from "./tabs.js";
+
+/**
+ * Shared floating tooltip anchored to the viewport on `<body>` for every
+ * `[data-tooltip]` element, so scrollable sidebars cannot clip it.
+ */
+function initTooltips() {
+  let tipEl = null;
+  let tipHost = null;
+
+  const ensureTip = () => {
+    if (!tipEl) {
+      tipEl = document.createElement("div");
+      tipEl.className = "floating-tooltip";
+      tipEl.setAttribute("role", "tooltip");
+      document.body.appendChild(tipEl);
+    }
+    return tipEl;
+  };
+
+  const hideTip = () => {
+    tipHost = null;
+    tipEl?.classList.remove("visible");
+  };
+
+  document.addEventListener("mouseover", (e) => {
+    const host = e.target?.closest?.("[data-tooltip]");
+    const text = host?.getAttribute("data-tooltip");
+    if (!text) {
+      if (tipHost) hideTip();
+      return;
+    }
+    if (host === tipHost && tipEl?.textContent === text) return;
+    tipHost = host;
+    const tip = ensureTip();
+    tip.textContent = text;
+    tip.classList.add("visible");
+
+    const hostRect = host.getBoundingClientRect();
+    const tipRect = tip.getBoundingClientRect();
+    let top = hostRect.bottom + 6;
+    if (top + tipRect.height > window.innerHeight - 8) {
+      top = hostRect.top - tipRect.height - 6;
+    }
+    let left = hostRect.left + hostRect.width / 2 - tipRect.width / 2;
+    left = Math.max(8, Math.min(left, window.innerWidth - tipRect.width - 8));
+    tip.style.left = `${Math.round(left)}px`;
+    tip.style.top = `${Math.round(top)}px`;
+  });
+  document.addEventListener("pointerdown", hideTip, true);
+  document.addEventListener("mouseleave", hideTip);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") hideTip();
+  });
+  window.addEventListener("scroll", hideTip, true);
+  window.addEventListener("blur", hideTip);
+}
 
 // Connectivity listeners for model cache indicators
 window.addEventListener("online", updateCacheIndicator);
@@ -260,6 +321,59 @@ dom.btnResetPrefs?.addEventListener("click", () => {
   }
 });
 
+// Model dropdown: the collapsed trigger mirrors the active tier card. A
+// MutationObserver keeps the mirror synced with .active and dot-class changes
+// made elsewhere (tab restore, server-status updates, downloads).
+function syncTierDropdownTrigger() {
+  const active =
+    document.querySelector("#tierSelector .tier-btn.active") ||
+    document.querySelector("#tierSelector .tier-btn");
+  if (!active) return;
+  if (dom.tierDropdownLabel) {
+    dom.tierDropdownLabel.textContent =
+      active.querySelector(".tier-label")?.textContent || "";
+  }
+  if (dom.tierDropdownTech) {
+    dom.tierDropdownTech.textContent =
+      active.querySelector(".tier-tech")?.textContent || "";
+  }
+}
+
+function setTierDropdownOpen(open) {
+  dom.tierDropdown?.classList.toggle("open", open);
+  dom.tierDropdownBtn?.setAttribute("aria-expanded", String(open));
+}
+
+dom.tierDropdownBtn?.addEventListener("click", () => {
+  setTierDropdownOpen(!dom.tierDropdown.classList.contains("open"));
+});
+
+// A chosen option collapses the list; the tier handler above still runs.
+dom.tierDropdown?.addEventListener("click", (e) => {
+  if (e.target.closest("#tierSelector .tier-btn")) setTierDropdownOpen(false);
+});
+
+document.addEventListener("click", (e) => {
+  if (
+    dom.tierDropdown?.classList.contains("open") &&
+    !e.target.closest("#tierDropdown")
+  ) {
+    setTierDropdownOpen(false);
+  }
+});
+
+new MutationObserver(syncTierDropdownTrigger).observe(
+  document.getElementById("tierSelector"),
+  {
+    attributes: true,
+    attributeFilter: ["class"],
+    childList: true,
+    characterData: true,
+    subtree: true,
+  }
+);
+syncTierDropdownTrigger();
+
 // Left sidebar: Model selector, Process button, Edge & Reflection toggles, Shadow Cutoff
 document.querySelectorAll("#tierSelector .tier-btn").forEach((btn) => {
   btn.addEventListener("click", () => {
@@ -303,7 +417,30 @@ dom.shadowCutoffSlider?.addEventListener("input", (e) => {
   if (dom.shadowCutoffLabel) {
     dom.shadowCutoffLabel.textContent = `${state.shadowCutoff}%`;
   }
+  if (state.autoCrop) {
+    if (state.aspectLocked) applyScaleValue(state.exportScale);
+    else updateExportTelemetry();
+    return;
+  }
   updateLiveStagePreview();
+});
+
+dom.edgeShiftSlider?.addEventListener("input", (e) => {
+  state.edgeShift = parseInt(e.target.value || "0", 10);
+  if (dom.edgeShiftLabel) {
+    dom.edgeShiftLabel.textContent = `${state.edgeShift > 0 ? "+" : ""}${state.edgeShift}px`;
+  }
+  applyEdgeRefinement();
+  saveStateToActiveTab();
+});
+
+dom.edgeFeatherSlider?.addEventListener("input", (e) => {
+  state.edgeFeather = parseInt(e.target.value || "0", 10);
+  if (dom.edgeFeatherLabel) {
+    dom.edgeFeatherLabel.textContent = `${state.edgeFeather}px`;
+  }
+  applyEdgeRefinement();
+  saveStateToActiveTab();
 });
 
 // Top bar: View mode, Zoom, and 4x Loupe
@@ -334,6 +471,37 @@ document.querySelectorAll("#formatRow .fmt-btn").forEach((btn) => {
 dom.btnFileDest?.addEventListener("click", () =>
   chooseOutputFolder(renderBatchPanel)
 );
+
+dom.btnAutoCrop?.addEventListener("click", () => {
+  state.autoCrop = !state.autoCrop;
+  dom.btnAutoCrop.classList.toggle("active", state.autoCrop);
+  dom.btnAutoCrop.setAttribute("aria-checked", String(state.autoCrop));
+  dom.cropPaddingWrap?.classList.toggle("disabled", !state.autoCrop);
+  if (state.aspectLocked) applyScaleValue(state.exportScale);
+  else updateExportTelemetry();
+  saveStateToActiveTab();
+});
+
+dom.cropPaddingSlider?.addEventListener("input", (e) => {
+  state.cropPadding = parseInt(e.target.value || "0", 10);
+  if (dom.cropPaddingLabel) {
+    dom.cropPaddingLabel.textContent = `${state.cropPadding}%`;
+  }
+  if (state.autoCrop) {
+    if (state.aspectLocked) applyScaleValue(state.exportScale);
+    else updateExportTelemetry();
+  }
+  saveStateToActiveTab();
+});
+
+dom.backdropBlurSlider?.addEventListener("input", (e) => {
+  state.backdropBlur = parseInt(e.target.value || "0", 10);
+  if (dom.backdropBlurLabel) {
+    dom.backdropBlurLabel.textContent = `${state.backdropBlur}%`;
+  }
+  updateLiveStagePreview();
+  saveStateToActiveTab();
+});
 
 dom.exportScaleSlider.addEventListener("input", (e) => {
   const pct = parseInt(e.target.value || "100", 10);
@@ -368,10 +536,11 @@ dom.exportWidthInput.addEventListener("input", (e) => {
     state.naturalWidth > 0 &&
     state.naturalHeight > 0
   ) {
-    state.exportScale = state.exportWidth / state.naturalWidth;
+    const baseDims = getExportBaseDims();
+    state.exportScale = state.exportWidth / baseDims.w;
     state.exportHeight = Math.max(
       1,
-      Math.round(state.naturalHeight * state.exportScale)
+      Math.round(baseDims.h * state.exportScale)
     );
     dom.exportHeightInput.value = String(state.exportHeight);
   }
@@ -392,14 +561,39 @@ dom.exportHeightInput.addEventListener("input", (e) => {
     state.naturalWidth > 0 &&
     state.naturalHeight > 0
   ) {
-    state.exportScale = state.exportHeight / state.naturalHeight;
+    const baseDims = getExportBaseDims();
+    state.exportScale = state.exportHeight / baseDims.h;
     state.exportWidth = Math.max(
       1,
-      Math.round(state.naturalWidth * state.exportScale)
+      Math.round(baseDims.w * state.exportScale)
     );
     dom.exportWidthInput.value = String(state.exportWidth);
   }
   updateExportTelemetry();
+});
+
+// Preset export sizes: exact custom boxes with the subject centered on canvas.
+document.querySelectorAll(".preset-chip[data-w]").forEach((chip) => {
+  chip.addEventListener("click", () => {
+    applyExportSizePreset(
+      parseInt(chip.getAttribute("data-w"), 10),
+      parseInt(chip.getAttribute("data-h"), 10)
+    );
+    saveStateToActiveTab();
+  });
+});
+
+dom.presetReset?.addEventListener("click", () => {
+  resetExportSize();
+  saveStateToActiveTab();
+});
+
+// Canvas fit: FIT keeps aspect with margins, STRETCH distorts to fill.
+document.querySelectorAll(".fit-chip[data-fit]").forEach((chip) => {
+  chip.addEventListener("click", () => {
+    setCanvasFit(chip.getAttribute("data-fit"));
+    saveStateToActiveTab();
+  });
 });
 
 dom.btnDownload.addEventListener("click", () => {
@@ -411,19 +605,126 @@ dom.btnDownload.addEventListener("click", () => {
   exportActiveImage();
 });
 
+dom.btnBatchRetry?.addEventListener("click", () => {
+  const activeTab = getActiveTab();
+  if (activeTab?.kind === "batch") runBatch(activeTab, { onlyFailed: true });
+});
+
 dom.btnCopy.addEventListener("click", copyActiveCutout);
 
 // Matte backdrop swatches & custom color picker
-document.querySelectorAll(".swatch[data-bg]").forEach((swatch) => {
+/** Decodes a picked photo and installs it as the "image" matte backdrop. */
+async function setBackdropFile(file) {
+  if (file) {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    await new Promise((resolve) => {
+      img.onload = resolve;
+      img.onerror = resolve;
+      img.src = url;
+    });
+    if (!img.naturalWidth) {
+      URL.revokeObjectURL(url);
+      setError("Could not decode the selected backdrop image.");
+      return;
+    }
+    // Replaced URLs are not revoked: tab records snapshot backdropImgUrl and
+    // would render broken thumbnails if their copy were revoked under them.
+    state.backdropImg = img;
+    state.backdropImgUrl = url;
+    state.backdropSeq += 1;
+  }
+  if (state.backdropImg) {
+    applyBackdrop("image");
+    saveStateToActiveTab();
+  }
+}
+
+/** Picks (or replaces) the photo used by the "image" matte backdrop. */
+async function chooseBackdropImage() {
+  if (window.pywebview?.api?.open_image_dialog) {
+    try {
+      const res = await window.pywebview.api.open_image_dialog();
+      if (res?.error) {
+        setError(res.error);
+        return;
+      }
+      const files = await filesFromDialogResult(res);
+      await setBackdropFile(files.find(isImageFile));
+      return;
+    } catch (err) {
+      console.warn("[OpenBGR] Native image dialog failed:", err);
+    }
+  }
+  dom.backdropInput.value = "";
+  dom.backdropInput.click();
+}
+
+dom.backdropInput.addEventListener("change", async (e) => {
+  const file = Array.from(e.target.files || []).find(isImageFile);
+  dom.backdropInput.value = "";
+  await setBackdropFile(file);
+});
+
+// Backdrop mode chips pick the compositing mode; PHOTO opens the picker when
+// no backdrop photo is loaded yet.
+document.querySelectorAll(".mode-chip[data-mode]").forEach((chip) => {
+  chip.addEventListener("click", () => {
+    const mode = chip.getAttribute("data-mode");
+    if (mode === "image" && !state.backdropImg) {
+      chooseBackdropImage();
+      return;
+    }
+    applyBackdropMode(mode);
+    saveStateToActiveTab();
+  });
+});
+
+document.querySelectorAll("#matteSwatches .swatch[data-bg]").forEach((swatch) => {
   swatch.addEventListener("click", () => {
     applyBackdrop(swatch.getAttribute("data-bg") || "checker");
     saveStateToActiveTab();
   });
 });
 
-document.getElementById("colorPicker").addEventListener("input", (e) => {
+/** Drops the loaded backdrop photo, falling back to the grid if it was active. */
+function removeBackdropPhoto() {
+  state.backdropImg = null;
+  state.backdropImgUrl = null;
+  state.backdropSeq += 1;
+  applyBackdrop(
+    state.activeBackdrop === "image" ? "checker" : state.activeBackdrop
+  );
+  saveStateToActiveTab();
+}
+
+dom.btnBackdropPhoto?.addEventListener("click", chooseBackdropImage);
+dom.backdropPhotoThumb?.addEventListener("click", chooseBackdropImage);
+dom.btnBackdropPhotoRemove?.addEventListener("click", removeBackdropPhoto);
+
+// Right-clicking the photo thumbnail offers the same remove action.
+dom.backdropPhotoThumb?.addEventListener("contextmenu", (e) => {
+  e.preventDefault();
+  if (!state.backdropImg || !dom.tabContextMenu) return;
+  const menu = dom.tabContextMenu;
+  menu.replaceChildren();
+  const item = document.createElement("button");
+  item.type = "button";
+  item.className = "ctx-item";
+  item.textContent = "REMOVE PHOTO";
+  item.addEventListener("click", () => {
+    hideTabContextMenu();
+    removeBackdropPhoto();
+  });
+  menu.appendChild(item);
+  menu.style.display = "block";
+  const rect = menu.getBoundingClientRect();
+  menu.style.left = `${Math.min(e.clientX, window.innerWidth - rect.width - 8)}px`;
+  menu.style.top = `${Math.min(e.clientY, window.innerHeight - rect.height - 8)}px`;
+});
+
+dom.colorPicker.addEventListener("input", (e) => {
   applyBackdrop(e.target.value);
-  e.target.classList.add("active");
   saveStateToActiveTab();
 });
 
@@ -915,6 +1216,9 @@ window.addEventListener("keydown", (e) => {
     hideTabContextMenu();
     if (dom.menuBar?.querySelector(".menu-root.open")) {
       closeAllMenus();
+    } else if (dom.tierDropdown?.classList.contains("open")) {
+      setTierDropdownOpen(false);
+      dom.tierDropdownBtn?.focus();
     } else if (dom.infoModal.classList.contains("active")) {
       closePrefsDialog();
     } else if (dom.confirmModal.classList.contains("active")) {
@@ -1148,6 +1452,7 @@ const MOD_SHORTCUTS = [
 })();
 
 // Startup initialization
+initTooltips();
 applyPreferences(syncMenuBarState);
 syncFormatButtons();
 applyBackdrop(state.activeBackdrop);

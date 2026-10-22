@@ -23,6 +23,7 @@ import {
   closeConfirmModal,
   normalizeTierKey,
   PRESET_NAMES,
+  DEFAULT_CROP_PADDING,
   updateTierDownloadUI,
   clearTierDownloadProgress,
   formatDiskBytes,
@@ -36,7 +37,8 @@ import {
   updateDestUI,
   updateExportTelemetry,
   applyBackdrop,
-  updateLiveStagePreview,
+  applyScaleValue,
+  updateCropGuide,
 } from "./export.js";
 import {
   updateCacheIndicator,
@@ -354,6 +356,7 @@ export function resetToEmptyWorkspace() {
   masterCutoutImg.removeAttribute("src");
 
   dom.stage.classList.remove("visible");
+  dom.cropGuide?.classList.remove("visible");
   dom.emptyState.style.display = "";
   dom.batchPanel?.classList.remove("active");
   dom.appShell?.classList.remove("batch-active");
@@ -381,6 +384,9 @@ function restoreTabState(tab) {
   state.previewBlob = tab.previewBlob;
   state.previewSignature = tab.previewSignature ?? null;
   state.previewSource = tab.previewSource ?? null;
+  state.exportCacheBlob = tab.exportCacheBlob ?? null;
+  state.exportCacheSignature = tab.exportCacheSignature ?? null;
+  state.exportCacheSource = tab.exportCacheSource ?? null;
   state.resultObjectUrl = tab.resultObjectUrl;
   state.previewObjectUrl = tab.previewObjectUrl;
   state.naturalWidth = tab.naturalWidth;
@@ -390,14 +396,25 @@ function restoreTabState(tab) {
   state.despill = tab.despill ?? true;
   state.refineJobId = tab.refineJobId ?? null;
   state.shadowCutoff = tab.shadowCutoff ?? 0;
+  state.edgeShift = tab.edgeShift ?? 0;
+  state.edgeFeather = tab.edgeFeather ?? 0;
   state.viewMode = tab.viewMode;
   state.splitPercent = tab.splitPercent;
   state.exportFormat = tab.exportFormat;
   state.outputDir = tab.outputDir || null;
+  state.autoCrop = Boolean(tab.autoCrop);
+  state.cropPadding = tab.cropPadding ?? DEFAULT_CROP_PADDING;
   state.exportScale = tab.exportScale;
   state.exportWidth = tab.exportWidth;
   state.exportHeight = tab.exportHeight;
+  state.aspectLocked = tab.aspectLocked ?? true;
+  state.canvasFit = tab.canvasFit ?? "fit";
   state.activeBackdrop = tab.activeBackdrop;
+  state.backdropColor = tab.backdropColor ?? "#ffffff";
+  state.backdropImg = tab.backdropImg ?? null;
+  state.backdropImgUrl = tab.backdropImgUrl ?? null;
+  state.backdropSeq = tab.backdropSeq ?? 0;
+  state.backdropBlur = tab.backdropBlur ?? 50;
   state.zoom = tab.zoom ?? 1;
   state.panX = tab.panX ?? 0;
   state.panY = tab.panY ?? 0;
@@ -416,9 +433,39 @@ function syncTabControls() {
   if (dom.shadowCutoffLabel) {
     dom.shadowCutoffLabel.textContent = `${state.shadowCutoff}%`;
   }
+  if (dom.edgeShiftSlider) {
+    dom.edgeShiftSlider.value = String(state.edgeShift);
+  }
+  if (dom.edgeShiftLabel) {
+    dom.edgeShiftLabel.textContent = `${state.edgeShift > 0 ? "+" : ""}${state.edgeShift}px`;
+  }
+  if (dom.edgeFeatherSlider) {
+    dom.edgeFeatherSlider.value = String(state.edgeFeather);
+  }
+  if (dom.edgeFeatherLabel) {
+    dom.edgeFeatherLabel.textContent = `${state.edgeFeather}px`;
+  }
+  dom.btnAutoCrop?.classList.toggle("active", state.autoCrop);
+  dom.btnAutoCrop?.setAttribute("aria-checked", String(state.autoCrop));
+  dom.cropPaddingWrap?.classList.toggle("disabled", !state.autoCrop);
+  if (dom.cropPaddingSlider) {
+    dom.cropPaddingSlider.value = String(state.cropPadding);
+  }
+  if (dom.cropPaddingLabel) {
+    dom.cropPaddingLabel.textContent = `${state.cropPadding}%`;
+  }
+  if (dom.backdropBlurSlider) {
+    dom.backdropBlurSlider.value = String(state.backdropBlur);
+  }
+  if (dom.backdropBlurLabel) {
+    dom.backdropBlurLabel.textContent = `${state.backdropBlur}%`;
+  }
+  dom.aspectLockBtn?.classList.toggle("active", state.aspectLocked);
+  dom.aspectLockBtn?.setAttribute("aria-pressed", String(state.aspectLocked));
   syncFormatButtons();
   updateDestUI();
   applyBackdrop(state.activeBackdrop);
+  updateCropGuide();
 }
 
 /** Renders a switched-to batch tab: queue panel, stats, and app-shell flags. */
@@ -624,6 +671,7 @@ export function setViewMode(mode) {
   document.getElementById("viewCutout").classList.toggle("active", mode === "cutout");
   document.getElementById("viewOriginal").classList.toggle("active", mode === "original");
   renderStageGeometry();
+  updateCropGuide();
   saveStateToActiveTab();
   syncMenuBarState();
 }
@@ -858,12 +906,21 @@ export function stopJobProgressPolling() {
 }
 
 /** Builds the `/api/remove-bg` multipart body shared by single and batch runs. */
-export function buildRemoveBgForm(file, tier, defringe, despill) {
+export function buildRemoveBgForm(
+  file,
+  tier,
+  defringe,
+  despill,
+  edgeShift = 0,
+  edgeFeather = 0
+) {
   const fd = new FormData();
   fd.append("file", file);
   fd.append("tier", tier);
   fd.append("defringe", defringe ? "true" : "false");
   fd.append("despill", despill ? "true" : "false");
+  fd.append("edge_shift", String(edgeShift));
+  fd.append("edge_feather", String(edgeFeather));
   return fd;
 }
 
@@ -935,8 +992,10 @@ async function applySegmentationResult(response, controller) {
   state.refineJobId = jobId || null;
   state.naturalWidth = width;
   state.naturalHeight = height;
-  state.exportWidth = Math.max(1, Math.round(width * state.exportScale));
-  state.exportHeight = Math.max(1, Math.round(height * state.exportScale));
+  if (state.aspectLocked) {
+    state.exportWidth = 0;
+    state.exportHeight = 0;
+  }
 
   if (
     state.previewObjectUrl &&
@@ -980,7 +1039,9 @@ export async function runSegmentation() {
     state.sourceFile,
     state.tier,
     state.defringe,
-    state.despill
+    state.despill,
+    state.edgeShift,
+    state.edgeFeather
   );
 
   try {
@@ -1021,8 +1082,9 @@ export async function runSegmentation() {
 }
 
 /**
- * Re-applies the edge-refinement filters (DEFRINGE / SUPPRESS COLOR SPILL) on
- * the server-side cached raw RGB + alpha of the last job: a pure NumPy
+ * Re-applies the edge-refinement filters (DEFRINGE / SUPPRESS COLOR SPILL /
+ * EDGE SHIFT / EDGE FEATHER) on the server-side cached raw RGB + alpha of the
+ * last job: a pure NumPy
  * post-processing pass (~20 ms), no neural-network re-inference required.
  * No-ops when the active tab has no fresh cutout job on the server.
  */
@@ -1062,6 +1124,8 @@ export async function applyEdgeRefinement() {
       fd.append("job_id", String(state.refineJobId));
       fd.append("defringe", state.defringe ? "true" : "false");
       fd.append("despill", state.despill ? "true" : "false");
+      fd.append("edge_shift", String(state.edgeShift));
+      fd.append("edge_feather", String(state.edgeFeather));
 
       try {
         const response = await apiFetch("/api/refine", {
@@ -1099,7 +1163,11 @@ export async function applyEdgeRefinement() {
         });
         if (token !== state.refineToken) continue;
 
-        updateLiveStagePreview();
+        if (state.autoCrop && state.aspectLocked) {
+          applyScaleValue(state.exportScale);
+        } else {
+          updateExportTelemetry();
+        }
         saveStateToActiveTab();
       } catch (err) {
         console.warn("[OpenBGR] Edge refinement request failed:", err);
