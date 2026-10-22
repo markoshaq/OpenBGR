@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from huggingface_hub import snapshot_download
@@ -47,6 +48,7 @@ from .models import (
     JOB_PROGRESS,
     JOB_PROGRESS_LOCK,
     MANAGER,
+    clear_model_disk_bytes_cache,
     compact_model_cache_fp16,
     expected_model_bytes,
     get_model_cache_dir,
@@ -391,6 +393,7 @@ def api_uninstall_model(target: str = Form(...)) -> dict[str, Any]:
     finally:
         MANAGER.inference_lock.release()
 
+    clear_model_disk_bytes_cache()
     logger.info(
         "[API] Uninstalled %s (freed %.1f MB).",
         ", ".join(model_keys),
@@ -526,10 +529,19 @@ async def api_save(
 ) -> dict[str, Any]:
     """
     Writes a processed image into a user-chosen output directory (batch mode).
-    The filename is sanitized to a plain basename and name collisions are
-    auto-renamed (`name.png` -> `name-1.png`, `name-2.png`, ...).
+    The directory must have been granted by a native folder-dialog pick (see
+    `desktop_bridge.grant_output_dir`), the filename is sanitized to a plain
+    basename, and name collisions are auto-renamed (`name.png` -> `name-1.png`).
     """
     dest_dir = Path(directory).expanduser()
+    if not desktop.is_output_dir_granted(dest_dir):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Output folder was not picked through the app's folder dialog. "
+                "Choose it again before exporting."
+            ),
+        )
     if not dest_dir.is_dir():
         raise HTTPException(status_code=400, detail="Output folder does not exist.")
     safe_name = Path(filename).name.strip()
@@ -544,7 +556,12 @@ async def api_save(
             counter += 1
         target = dest_dir / f"{stem}-{counter}{suffix}"
 
-    data = await file.read()
+    data = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail="File exceeds the 256 MB upload limit.",
+        )
     # Keep large writes off the event loop so batch saves don't stall the
     # 250ms progress polls.
     await asyncio.to_thread(target.write_bytes, data)
@@ -570,8 +587,13 @@ async def api_remove_bg(
         raise HTTPException(status_code=400, detail=f"Invalid model preset '{tier}'.")
 
     job_epoch = MANAGER.cancel_epoch
-    raw_bytes = await file.read()
+    raw_bytes = await file.read(MAX_UPLOAD_BYTES + 1)
     await file.close()
+    if len(raw_bytes) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail="Image exceeds the 256 MB upload limit.",
+        )
     if not raw_bytes:
         raise HTTPException(status_code=400, detail="Uploaded image file is empty.")
 
@@ -609,7 +631,8 @@ async def api_remove_bg(
         pil_img.close()
 
     # All except paths above raise, so reaching here means the job succeeded.
-    assert result_img is not None
+    if result_img is None:
+        raise HTTPException(status_code=500, detail="Pipeline returned no image.")
     output_buffer = io.BytesIO()
     try:
         result_img.save(output_buffer, format="PNG", compress_level=1)
@@ -617,8 +640,7 @@ async def api_remove_bg(
         img_w, img_h = result_img.width, result_img.height
     finally:
         output_buffer.close()
-        if result_img is not None:
-            result_img.close()
+        result_img.close()
 
     telemetry_headers = {
         "X-Inference-Time-Ms": f"{elapsed_ms:.1f}",
@@ -726,6 +748,14 @@ _MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 # cross-site fetch metadata is a second layer in case the token ever leaks.
 _CROSS_SITE_FETCH = {"cross-site", "same-site"}
 
+# Uploads are buffered whole before decode/write, so request bodies are
+# hard-capped to keep a bad client from pinning gigabytes of RAM. Generous
+# for real photography: a 100 MP JPEG is ~40 MB.
+MAX_UPLOAD_BYTES = 256 * 1024 * 1024
+# Slack on top of the file cap so the multipart envelope itself (boundaries,
+# form fields) cannot false-positive a borderline upload.
+_MULTIPART_OVERHEAD_BYTES = 64 * 1024
+
 
 @app.middleware("http")
 async def api_token_guard(request, call_next):
@@ -742,6 +772,36 @@ async def api_token_guard(request, call_next):
         if not secrets.compare_digest(token, API_TOKEN):
             return JSONResponse({"detail": "Forbidden"}, status_code=403)
     return await call_next(request)
+
+
+@app.middleware("http")
+async def request_size_guard(request, call_next):
+    """
+    Rejects over-sized API uploads by Content-Length before the body is
+    consumed. Uploads lacking a length (chunked) are still capped when the
+    handlers read the file with a `MAX_UPLOAD_BYTES` bound.
+    """
+    if request.method in _MUTATING_METHODS and request.url.path.startswith("/api/"):
+        length = request.headers.get("content-length")
+        if (
+            length is not None
+            and length.isdigit()
+            and int(length) > MAX_UPLOAD_BYTES + _MULTIPART_OVERHEAD_BYTES
+        ):
+            return JSONResponse({"detail": "Upload exceeds the 256 MB limit."}, status_code=413)
+    return await call_next(request)
+
+
+# Host allowlisting closes the rebinding hole: the session token is injected
+# into `/` for anyone who can reach the port, so a page loaded from a domain
+# that rebinds to 127.0.0.1 could otherwise read the token same-origin and
+# call mutating endpoints that pass both checks above. Only loopback names
+# may serve the app (the server binds 127.0.0.1, so no other Host is valid).
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=["127.0.0.1", "localhost", "*.localhost"],
+    www_redirect=False,
+)
 
 
 @app.get("/")

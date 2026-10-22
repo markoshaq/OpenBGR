@@ -21,6 +21,7 @@ from .config import (
     DTYPE,
     RECOMMENDED_TIER,
     TIERS,
+    logger,
     normalize_tier_key,
 )
 from .models import (
@@ -222,6 +223,10 @@ def suppress_color_spill(rgb_np: np.ndarray, alpha_norm: np.ndarray) -> np.ndarr
 _JOB_ID_SEQ = itertools.count(1)
 _LAST_JOB: dict[str, Any] = {}
 _LAST_JOB_LOCK = threading.Lock()
+# Ceiling on the cached raw RGB + alpha pair (4 bytes/pixel). Above ~64MP a
+# job would pin hundreds of MB between requests, so refine support is skipped
+# and the user re-processes instead.
+_LAST_JOB_MAX_BYTES = 256 * 1024 * 1024
 
 # Serializes compose_rgba across threads: segment_foreground runs it inside
 # inference_lock while /api/refine calls it standalone. Concurrent passes
@@ -233,11 +238,12 @@ def get_last_job(job_id: int) -> dict[str, Any] | None:
     """
     Returns a snapshot of the cached last-job raw RGB/alpha iff `job_id`
     matches the latest completed job, else None. Keeps `_LAST_JOB` and its
-    lock private to this module.
+    lock private to this module. Jobs over `_LAST_JOB_MAX_BYTES` store no
+    pixel buffers, so they fail the `"rgb" in job` check like an id miss.
     """
     with _LAST_JOB_LOCK:
         job = dict(_LAST_JOB)
-    return job if job.get("id") == job_id else None
+    return job if job.get("id") == job_id and "rgb" in job else None
 
 
 def compose_rgba(
@@ -348,9 +354,16 @@ def segment_foreground(
             # Snapshot the raw RGB + alpha so /api/refine can re-apply the
             # edge filters later without re-running inference.
             with _LAST_JOB_LOCK:
+                _LAST_JOB.clear()
                 _LAST_JOB["id"] = job_id
-                _LAST_JOB["rgb"] = rgb_np_raw
-                _LAST_JOB["alpha"] = alpha_np
+                if rgb_np_raw.nbytes + alpha_np.nbytes <= _LAST_JOB_MAX_BYTES:
+                    _LAST_JOB["rgb"] = rgb_np_raw
+                    _LAST_JOB["alpha"] = alpha_np
+                else:
+                    logger.info(
+                        "[Pipeline] Job over %dMB refine cache cap; skipping buffers.",
+                        _LAST_JOB_MAX_BYTES // (1024 * 1024),
+                    )
 
             MANAGER.check_cancelled(job_epoch)
             result_image = compose_rgba(

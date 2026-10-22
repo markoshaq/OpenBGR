@@ -60,15 +60,17 @@ from openbgr.server_probe import (
 )
 
 
-def _graceful_exit(_signum: int, _frame: Any) -> None:
+def _graceful_exit(signum: int, _frame: Any) -> None:
     """
-    Aborts active jobs and exits immediately. `unload()` is deliberately not
-    called: `get_or_load` holds the model lock across the whole download, so
-    waiting on it here could hang SIGINT for an entire first-run download.
-    `os._exit` lets the OS reclaim device memory instantly.
+    Aborts active jobs and exits immediately with the conventional signal
+    status (128 + signum) so a killed process does not report success.
+    `unload()` is deliberately not called: `get_or_load` holds the model lock
+    across the whole download, so waiting on it here could hang SIGINT for an
+    entire first-run download. `os._exit` lets the OS reclaim device memory
+    instantly.
     """
     MANAGER.request_cancel()
-    os._exit(0)
+    os._exit(128 + signum)
 
 
 def _start_signal_watchdog() -> None:
@@ -97,15 +99,25 @@ def _start_signal_watchdog() -> None:
                 while True:
                     select.select([r_fd], [], [])
                     data = os.read(r_fd, 64)
-                    if data and any(b in lethal for b in data):
+                    if not data:
+                        return  # pipe closed; stop instead of spinning
+                    sig = next((b for b in data if b in lethal), None)
+                    if sig is not None:
                         MANAGER.request_cancel()
-                        os._exit(0)
-            except Exception:
-                os._exit(0)
+                        os._exit(128 + sig)
+            except Exception as exc:
+                # A broken pipe must not kill the app: headless mode still has
+                # the Python-level handlers, and desktop mode degrades to the
+                # pre-watchdog behavior (signals swallowed), not data loss.
+                logger.warning("[Desktop] Signal watchdog stopped (%s).", exc)
 
         threading.Thread(target=_watch, daemon=True).start()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning(
+            "[Desktop] Signal watchdog unavailable (%s); SIGINT/SIGTERM may be "
+            "swallowed while the native window is open.",
+            exc,
+        )
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -187,7 +199,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     """Entrypoint for CLI, Quick Action, and native desktop / browser studio modes."""
     parser = build_arg_parser()
-    args, _unknown = parser.parse_known_args(argv)
+    args, unknown = parser.parse_known_args(argv)
+    # Finder still appends a legacy `-psn_<a>_<b>` process-serial flag to .app
+    # launches; anything else unrecognized is a typo worth failing loudly on
+    # rather than silently ignoring (e.g. `--clii` opening the GUI).
+    unknown = [a for a in unknown if not a.startswith("-psn_")]
+    if unknown:
+        parser.error(f"unrecognized arguments: {' '.join(unknown)}")
 
     if args.tier is not None:
         norm_tier = normalize_tier_key(args.tier)

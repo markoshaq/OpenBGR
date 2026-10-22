@@ -82,8 +82,13 @@ def persist_api_token() -> None:
         APP_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         API_TOKEN_PATH.write_text(API_TOKEN, encoding="utf-8")
         os.chmod(API_TOKEN_PATH, 0o600)
-    except OSError:
-        pass
+    except OSError as exc:
+        logger.warning(
+            "[Config] Failed to persist the session token to %s (%s); Quick "
+            "Action and open-files delegation will not authenticate.",
+            API_TOKEN_PATH,
+            exc,
+        )
 
 
 def read_api_token() -> str:

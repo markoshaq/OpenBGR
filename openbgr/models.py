@@ -11,6 +11,7 @@ import importlib
 import os
 import shutil
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -91,17 +92,35 @@ def get_model_cache_dir(repo_id: str) -> Path:
     return Path(HF_HUB_CACHE) / repo_folder_name(repo_id=repo_id, repo_type="model")
 
 
+# /api/status calls get_model_disk_bytes once per tier; a full HF cache rglob
+# is slow enough to matter when the endpoint is polled, so results are cached
+# briefly and the cache is dropped wherever model bytes can change.
+_MODEL_DISK_BYTES_TTL_S = 30.0
+_MODEL_DISK_BYTES_CACHE: dict[str, tuple[float, int]] = {}
+
+
+def clear_model_disk_bytes_cache() -> None:
+    """Drops cached disk sizes after a cache mutation (install/uninstall/import)."""
+    _MODEL_DISK_BYTES_CACHE.clear()
+
+
 def get_model_disk_bytes(repo_id: str) -> int:
     """Returns total bytes on disk occupied by `repo_id` inside the HF Hub cache."""
+    now = time.monotonic()
+    hit = _MODEL_DISK_BYTES_CACHE.get(repo_id)
+    if hit is not None and now - hit[0] < _MODEL_DISK_BYTES_TTL_S:
+        return hit[1]
     try:
         folder = get_model_cache_dir(repo_id)
-        if not folder.exists():
-            return 0
-        return sum(
-            f.stat().st_size for f in folder.rglob("*") if f.is_file() and not f.is_symlink()
+        total = (
+            sum(f.stat().st_size for f in folder.rglob("*") if f.is_file() and not f.is_symlink())
+            if folder.exists()
+            else 0
         )
     except Exception:
-        return 0
+        total = 0
+    _MODEL_DISK_BYTES_CACHE[repo_id] = (now, total)
+    return total
 
 
 # Shared job-progress state polled by `/api/progress`. `phase` is one of
@@ -168,8 +187,13 @@ def set_job_phase(phase: str, model_key: str | None = None) -> None:
 
 
 # The module object behind `huggingface_hub.utils.tqdm`, NOT the `tqdm`
-# class re-exported under the same attribute name.
-_HF_TQDM_MODULE = importlib.import_module("huggingface_hub.utils.tqdm")
+# class re-exported under the same attribute name. None when a future
+# huggingface_hub moves the private module: `track_model_download` then
+# degrades to phase-only progress with a warning instead of failing import.
+try:
+    _HF_TQDM_MODULE: Any = importlib.import_module("huggingface_hub.utils.tqdm")
+except ImportError:
+    _HF_TQDM_MODULE = None
 
 
 class _JobDownloadTqdm(_TqdmAuto):
@@ -257,17 +281,27 @@ def track_model_download(model_key: str | None = None) -> Iterator[type]:
             JOB_PROGRESS["total_bytes"] = 0
         # Swap the tqdm class used by `huggingface_hub`'s internal progress-bar
         # factory so per-file download bars (and their chunk deltas) report into
-        # `JOB_PROGRESS`. Restored on exit regardless of outcome.
-        original_tqdm = _HF_TQDM_MODULE.tqdm  # type: ignore[attr-defined]
-        _HF_TQDM_MODULE.tqdm = _JobDownloadTqdm  # type: ignore[attr-defined]
+        # `JOB_PROGRESS`. Restored on exit regardless of outcome. When the
+        # private module is gone, degrade to phase-only progress and say so:
+        # a stale-looking bar is worse than an honest coarse one.
+        original_tqdm = getattr(_HF_TQDM_MODULE, "tqdm", None)
+        if original_tqdm is None:
+            logger.warning(
+                "[Model] huggingface_hub tqdm internals unavailable; download "
+                "progress will show phases only, no byte counts."
+            )
+        else:
+            _HF_TQDM_MODULE.tqdm = _JobDownloadTqdm
         try:
             yield _JobOuterBarTqdm
         finally:
-            _HF_TQDM_MODULE.tqdm = original_tqdm  # type: ignore[attr-defined]
+            if original_tqdm is not None:
+                _HF_TQDM_MODULE.tqdm = original_tqdm
             with JOB_PROGRESS_LOCK:
                 JOB_PROGRESS["_dl_key"] = None
                 JOB_PROGRESS["_dl_epoch"] = None
     finally:
+        clear_model_disk_bytes_cache()
         _MODEL_DOWNLOAD_LOCK.release()
 
 
@@ -352,6 +386,7 @@ def compact_model_cache_fp16(repo_id: str) -> int:
                 old_size / 1024**2,
                 new_size / 1024**2,
             )
+        clear_model_disk_bytes_cache()
         return saved
     except Exception as exc:
         logger.warning("[Model] Failed to compact %s cache to FP16: %s", repo_id, exc)
@@ -414,6 +449,7 @@ def import_model_from_dir(repo_id: str, source_dir: Path | str) -> int:
         src,
         copied_bytes / 1024**2,
     )
+    clear_model_disk_bytes_cache()
     return copied_bytes
 
 

@@ -56,7 +56,7 @@ APP_FILES = [
     "requirements.txt",
     "start.sh",
     "start.bat",
-    "Start Mac.command",
+    "start_mac.command",
     "LICENSE",
     "README.md",
 ]
@@ -628,7 +628,7 @@ def _prune_macos_payload(stage_dir: Path) -> None:
         (
             "start.sh",
             "start.bat",
-            "Start Mac.command",
+            "start_mac.command",
             "scripts/install_linux_integration.sh",
             "scripts/install_windows_context_menu.bat",
             "scripts/uninstall_windows_context_menu.bat",
@@ -643,7 +643,7 @@ def _prune_windows_payload(stage_dir: Path) -> None:
         stage_dir,
         (
             "start.sh",
-            "Start Mac.command",
+            "start_mac.command",
             "scripts/context_process.sh",
             "scripts/install_linux_integration.sh",
             "scripts/install_macos_quick_action.py",
@@ -658,7 +658,7 @@ def _prune_linux_payload(stage_dir: Path) -> None:
         stage_dir,
         (
             "start.bat",
-            "Start Mac.command",
+            "start_mac.command",
             "scripts/install_macos_quick_action.py",
             "scripts/install_windows_context_menu.bat",
             "scripts/uninstall_windows_context_menu.bat",

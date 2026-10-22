@@ -110,6 +110,7 @@ class TestApiContracts(unittest.TestCase):
     def test_api_save_sanitizes_and_renames_collisions(self) -> None:
         """`/api/save` strips path traversal and de-duplicates colliding filenames."""
         with tempfile.TemporaryDirectory() as tmp:
+            bridge_mod.grant_output_dir(Path(tmp))
             up1 = UploadFile(filename="cutout.png", file=io.BytesIO(b"png-bytes-1"))
             res1 = asyncio.run(
                 api_mod.api_save(directory=tmp, filename="../../evil/cutout.png", file=up1)
@@ -365,6 +366,42 @@ class TestApiContracts(unittest.TestCase):
         self.assertEqual(models_mod.JOB_PROGRESS["model_key"], "general")
         models_mod.set_job_phase("idle")
 
+    def test_track_model_download_patches_and_restores_tqdm(self) -> None:
+        """The download progress patch swaps hf's tqdm factory, restores it, and warns when absent."""
+        import types
+
+        sentinel = object()
+        fake_mod = types.SimpleNamespace(tqdm=sentinel)
+        original_mod = models_mod._HF_TQDM_MODULE
+        try:
+            models_mod._HF_TQDM_MODULE = fake_mod
+            with models_mod.track_model_download("general"):
+                self.assertIs(fake_mod.tqdm, models_mod._JobDownloadTqdm)
+            self.assertIs(fake_mod.tqdm, sentinel)
+
+            # Moved/broken huggingface_hub internals warn instead of silently
+            # degrading, and still yield the outer-bar class.
+            models_mod._HF_TQDM_MODULE = None
+            with self.assertLogs("openbgr", level="WARNING") as logs:
+                with models_mod.track_model_download("general") as bar_cls:
+                    self.assertIs(bar_cls, models_mod._JobOuterBarTqdm)
+            self.assertTrue(any("tqdm" in out for out in logs.output))
+        finally:
+            models_mod._HF_TQDM_MODULE = original_mod
+            models_mod.set_job_phase("idle")
+
+    def test_apply_offline_mode_reports_unapplied_layers(self) -> None:
+        """`apply_offline_mode` returns False and warns when HF session reset is unavailable."""
+        try:
+            with (
+                patch.dict("sys.modules", {"huggingface_hub.utils._http": None}),
+                self.assertLogs("openbgr", level="WARNING") as logs,
+            ):
+                self.assertFalse(settings_mod.apply_offline_mode(True))
+            self.assertTrue(any("session" in m.lower() for m in logs.output))
+        finally:
+            settings_mod.apply_offline_mode(False)
+
 
 class TestApiEndpoints(unittest.TestCase):
     """HTTP-level coverage of the FastAPI surface: routing, form parsing, and status codes."""
@@ -373,7 +410,8 @@ class TestApiEndpoints(unittest.TestCase):
     def setUpClass(cls) -> None:
         from fastapi.testclient import TestClient
 
-        cls.client = TestClient(api_mod.app)
+        # Loopback base URL: TrustedHostMiddleware rejects every other Host.
+        cls.client = TestClient(api_mod.app, base_url="http://127.0.0.1")
         # Mutating endpoints require the per-session token header.
         cls.client.headers.update({config_mod.API_TOKEN_HEADER: config_mod.API_TOKEN})
 
@@ -395,7 +433,7 @@ class TestApiEndpoints(unittest.TestCase):
         """Mutating `/api/*` calls without a valid token or cross-site are rejected."""
         from fastapi.testclient import TestClient
 
-        bare = TestClient(api_mod.app)
+        bare = TestClient(api_mod.app, base_url="http://127.0.0.1")
         self.assertEqual(bare.post("/api/cancel").status_code, 403)
         self.assertEqual(
             bare.post(
@@ -422,6 +460,26 @@ class TestApiEndpoints(unittest.TestCase):
         self.assertIn('name="openbgr-api-token"', home.text)
         self.assertIn(config_mod.API_TOKEN, home.text)
 
+    def test_foreign_host_header_rejected(self) -> None:
+        """Non-loopback Host headers get HTTP 400 and never receive the token page."""
+        from fastapi.testclient import TestClient
+
+        client = TestClient(api_mod.app, base_url="http://127.0.0.1")
+        foreign = {"host": "evil.example.com"}
+        res = client.get("/", headers=foreign)
+        self.assertEqual(res.status_code, 400)
+        self.assertNotIn("openbgr-api-token", res.text)
+        # A valid token cannot rescue a rebounded Host on mutating calls.
+        res = client.post(
+            "/api/cancel",
+            headers={**foreign, config_mod.API_TOKEN_HEADER: config_mod.API_TOKEN},
+        )
+        self.assertEqual(res.status_code, 400)
+        # The loopback names the app and its probes use still pass.
+        for host in ("127.0.0.1", "127.0.0.1:7860", "localhost", "app.localhost"):
+            res = client.get("/api/progress", headers={"host": host})
+            self.assertEqual(res.status_code, 200, host)
+
     def test_status_and_progress_over_http(self) -> None:
         """`GET /api/status` and `/api/progress` return 200 with their contract fields."""
         res = self.client.get("/api/status")
@@ -446,6 +504,7 @@ class TestApiEndpoints(unittest.TestCase):
         """`POST /api/save` writes files, auto-renames collisions, and rejects bad input."""
         payload = {"file": ("cut.png", b"png-bytes", "image/png")}
         with tempfile.TemporaryDirectory() as tmp:
+            bridge_mod.grant_output_dir(Path(tmp))
             res = self.client.post(
                 "/api/save", data={"directory": tmp, "filename": "out.png"}, files=payload
             )
@@ -457,9 +516,31 @@ class TestApiEndpoints(unittest.TestCase):
             )
             self.assertEqual(res.json()["name"], "out-1.png")
 
+            # Directories that were never dialog-picked are refused, even when
+            # they exist; the folder check never runs for ungranted paths.
+            unpicked = Path(tmp) / "unpicked"
+            unpicked.mkdir()
+            res = self.client.post(
+                "/api/save",
+                data={"directory": str(unpicked), "filename": "x.png"},
+                files=payload,
+            )
+            self.assertEqual(res.status_code, 403)
             res = self.client.post(
                 "/api/save",
                 data={"directory": "/nonexistent-openbgr-dir", "filename": "x.png"},
+                files=payload,
+            )
+            self.assertEqual(res.status_code, 403)
+
+            # A granted folder that no longer exists still reports 400.
+            gone = Path(tmp) / "gone"
+            gone.mkdir()
+            bridge_mod.grant_output_dir(gone)
+            gone.rmdir()
+            res = self.client.post(
+                "/api/save",
+                data={"directory": str(gone), "filename": "x.png"},
                 files=payload,
             )
             self.assertEqual(res.status_code, 400)
@@ -468,6 +549,29 @@ class TestApiEndpoints(unittest.TestCase):
                 "/api/save", data={"directory": tmp, "filename": ".."}, files=payload
             )
             self.assertEqual(res.status_code, 400)
+
+    def test_upload_size_cap_over_http(self) -> None:
+        """Oversized uploads are refused with HTTP 413 at the middleware and read caps."""
+        # Middleware Content-Length rejection fires before the body is parsed.
+        with (
+            patch.object(api_mod, "MAX_UPLOAD_BYTES", 32),
+            patch.object(api_mod, "_MULTIPART_OVERHEAD_BYTES", 0),
+        ):
+            res = self.client.post(
+                "/api/remove-bg",
+                files={"file": ("big.png", b"x" * 1024, "image/png")},
+            )
+            self.assertEqual(res.status_code, 413)
+        # The bounded read still catches bodies under a missing/forged length.
+        with (
+            patch.object(api_mod, "MAX_UPLOAD_BYTES", 8),
+            patch.object(api_mod, "_MULTIPART_OVERHEAD_BYTES", 1024 * 1024),
+        ):
+            res = self.client.post(
+                "/api/remove-bg",
+                files={"file": ("big.png", b"x" * 1024, "image/png")},
+            )
+            self.assertEqual(res.status_code, 413)
 
     def test_open_files_pending_round_trip_over_http(self) -> None:
         """`POST /api/open-files` queues a path and `/api/pending-files` drains it once."""

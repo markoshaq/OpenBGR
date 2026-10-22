@@ -149,6 +149,36 @@ class TestQuickAction(unittest.TestCase):
 
         fake_rgba.close()
 
+    def test_main_rejects_unknown_flags(self) -> None:
+        """Typos like `--clii` fail loudly instead of silently opening the GUI."""
+        import contextlib
+
+        import app as app_mod
+
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as ctx:
+            app_mod.main(["--clii", "photo.png"])
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertIn("--clii", err.getvalue())
+
+        # The legacy -psn flag Finder appends to .app launches is ignored.
+        with patch.object(app_mod, "run_cli", return_value=0) as cli:
+            with self.assertRaises(SystemExit) as ctx2:
+                app_mod.main(["--cli", "-psn_0_12345", "photo.png"])
+        self.assertEqual(ctx2.exception.code, 0)
+        cli.assert_called_once()
+        self.assertEqual(cli.call_args.args[0], ["photo.png"])
+
+    def test_graceful_exit_uses_signal_status(self) -> None:
+        """Signal exits report 128 + signum, not a clean 0."""
+        import signal
+
+        import app as app_mod
+
+        with patch("os._exit") as mock_exit:
+            app_mod._graceful_exit(signal.SIGINT, None)
+        mock_exit.assert_called_once_with(128 + signal.SIGINT)
+
     def test_macos_notifier_strips_asset_catalog_icon(self) -> None:
         """`ensure_macos_notifier_app` removes `CFBundleIconName` and `Assets.car` so `.icns` wins."""
         with tempfile.TemporaryDirectory() as tmp:

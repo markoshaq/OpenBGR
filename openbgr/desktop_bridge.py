@@ -84,6 +84,33 @@ _LOCAL_FILE_LOCK = threading.Lock()
 _LOCAL_FILES: dict[str, tuple[Path, float]] = {}
 _LOCAL_FILE_TTL_S = 600.0
 
+# Session-scoped registry of output folders the user picked through the
+# native folder dialog. `/api/save` refuses any directory outside this set,
+# so a page holding the session token cannot write into paths the user never
+# chose. Unlike one-shot file reads, dir grants stay valid all session: the
+# same picked folder serves every export and batch item.
+_OUTPUT_DIRS_LOCK = threading.Lock()
+_OUTPUT_DIRS: set[Path] = set()
+
+
+def grant_output_dir(path: Path) -> Path:
+    """Marks a native folder-dialog pick as a trusted export destination."""
+    resolved = path.expanduser().resolve()
+    with _OUTPUT_DIRS_LOCK:
+        _OUTPUT_DIRS.add(resolved)
+    return resolved
+
+
+def is_output_dir_granted(path: Path) -> bool:
+    """True when `path` resolves to a folder the user picked via the native dialog."""
+    try:
+        resolved = path.expanduser().resolve()
+    except Exception:
+        return False
+    with _OUTPUT_DIRS_LOCK:
+        return resolved in _OUTPUT_DIRS
+
+
 # Recently opened image paths, persisted across restarts for File > Open Recent.
 _RECENT_FILES_LOCK = threading.Lock()
 _MAX_RECENT_FILES = 12
@@ -394,6 +421,7 @@ class DesktopApi:
             if not result:
                 return {"cancelled": True}
             path = result[0] if isinstance(result, (list, tuple)) else str(result)
+            grant_output_dir(Path(path))
             return {"cancelled": False, "path": str(path)}
         except Exception as exc:
             return {"cancelled": True, "error": str(exc)}

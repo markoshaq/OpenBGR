@@ -98,7 +98,7 @@ Each model downloads to the Hugging Face cache on first use only; FP32 checkpoin
 
 ## API
 
-The local FastAPI server that drives the UI is callable directly, so scripts and other apps can use the same pipeline. Mutating calls require the per-session token the server writes to `~/.openbgr/session_token` at launch:
+The local FastAPI server that drives the UI is callable directly, so scripts and other apps can use the same pipeline. Mutating calls require the per-session token the server writes to `~/.openbgr/session_token` at launch. All requests must use a loopback Host (`127.0.0.1` or `localhost`), and uploads are capped at 256 MB:
 
 ```bash
 curl -X POST "http://127.0.0.1:7860/api/remove-bg" \
@@ -116,7 +116,7 @@ curl -X POST "http://127.0.0.1:7860/api/remove-bg" \
 | `GET /api/status` | Version, device, RAM, per-model cache state |
 | `GET /api/progress` | Pipeline phase + live download bytes |
 | `POST /api/cancel` | Abort the active job |
-| `POST /api/save` | Write the result to a chosen folder |
+| `POST /api/save` | Write the result to a folder picked via the app's folder dialog |
 | `POST /api/models/install` `/uninstall` | Manage checkpoints |
 | `POST /api/open-files` `/pending-files` | Queue/drain OS "Open With" paths |
 | `POST /api/open-cache-dir` `/open-logs-dir` | Reveal the HF cache or logs folder |

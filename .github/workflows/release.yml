@@ -4,6 +4,9 @@ on:
   workflow_dispatch:
   push:
   pull_request:
+    # `labeled` is included so attaching `build-release` kicks the platform
+    # builds below; without it they only run on tags and manual dispatch.
+    types: [opened, synchronize, reopened, labeled]
 
 permissions:
   contents: write
@@ -45,7 +48,7 @@ jobs:
           node --test "tests/*.test.mjs"
 
   build-macos:
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'build-release'))
     needs: [test]
     runs-on: macos-latest
     steps:
@@ -58,7 +61,7 @@ jobs:
       - name: Build OpenBGR-macOS.dmg
         run: |
           python -m compileall -q app.py openbgr scripts
-          bash -n start.sh "Start Mac.command" scripts/context_process.sh scripts/install_linux_integration.sh
+          bash -n start.sh "start_mac.command" scripts/context_process.sh scripts/install_linux_integration.sh
           python scripts/build_release.py
       - uses: actions/upload-artifact@v4
         with:
@@ -66,7 +69,7 @@ jobs:
           path: dist/OpenBGR-macOS.dmg
 
   build-windows:
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'build-release'))
     needs: [test]
     runs-on: windows-latest
     steps:
@@ -110,7 +113,7 @@ jobs:
             dist/OpenBGR-Windows.zip
 
   build-linux:
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'build-release'))
     needs: [test]
     runs-on: ubuntu-latest
     steps:
@@ -152,7 +155,7 @@ jobs:
           {
             echo "## What's new in ${TAG}"
             echo
-            awk '/^## \[/{if (found) exit; found=1; next} found' CHANGELOG.md | sed -e '/./,$!d' -e :a -e '/^\n*$/{$d;N;ba' -e '}'
+            awk '/^## \[/{if (found) exit; found=1; next} /^<details>/{if (found) exit} found' CHANGELOG.md | sed -e '/./,$!d' -e :a -e '/^\n*$/{$d;N;ba' -e '}'
             echo
             echo "**Full Changelog**: [${PREV_TAG}...${TAG}](https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${TAG})"
           } > release-notes.md
