@@ -46,7 +46,11 @@ class TestRepoIntegrity(unittest.TestCase):
 
     def test_dependencies_single_sourced_from_requirements_txt(self) -> None:
         """`requirements.txt` is the only dependency list; pyproject consumes it."""
-        import tomllib
+        try:
+            import tomllib
+        except ModuleNotFoundError:
+            # Python 3.10 has no tomllib; the dev extra installs tomli there.
+            import tomli as tomllib
 
         parsed = tomllib.loads((ROOT_DIR / "pyproject.toml").read_text())
         project = parsed["project"]
@@ -66,6 +70,44 @@ class TestRepoIntegrity(unittest.TestCase):
         for req in requirements:
             self.assertRegex(req, r"^[A-Za-z0-9][A-Za-z0-9._-]*")
 
+    def test_runtime_dependencies_have_upper_bounds(self) -> None:
+        """Every runtime requirement is capped so unvetted majors can't auto-resolve."""
+        for line in (ROOT_DIR / "requirements.txt").read_text().splitlines():
+            req = line.strip()
+            if not req or req.startswith("#"):
+                continue
+            name = re.split(r"[<>=!~;\s]", req, maxsplit=1)[0]
+            self.assertIn(">=", req, f"{name} has no lower bound")
+            self.assertIn("<", req, f"{name} has no upper bound")
+
+    def test_frontend_constants_match_backend(self) -> None:
+        """Constants duplicated across index.html / state.js / config.py cannot drift."""
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        state_js = (STATIC_DIR / "state.js").read_text(encoding="utf-8")
+
+        def js_object_block(text: str, name: str) -> str:
+            m = re.search(rf"{name}\s*=\s*\{{(.*?)\}}", text, re.DOTALL)
+            return m.group(1) if m else ""
+
+        pair_re = r'(\w+)\s*:\s*\[\s*"([^"]+)"\s*,\s*"([^"]+)"\s*\]'
+        html_accents = {
+            k: [a, b] for k, a, b in re.findall(pair_re, js_object_block(html, "ACCENTS"))
+        }
+        js_accents = {
+            k: [a, b] for k, a, b in re.findall(pair_re, js_object_block(state_js, "ACCENTS"))
+        }
+        self.assertTrue(html_accents, "ACCENTS literal missing from index.html")
+        self.assertEqual(html_accents, js_accents)
+
+        js_aliases = dict(
+            re.findall(r'(\w+)\s*:\s*"(\w+)"', js_object_block(state_js, "TIER_ALIASES"))
+        )
+        self.assertEqual(js_aliases, config_mod.TIER_ALIASES)
+
+        keys_block = re.search(r"TIER_KEYS\s*=\s*\[(.*?)\]", state_js, re.DOTALL)
+        js_tier_keys = re.findall(r'"(\w+)"', keys_block.group(1) if keys_block else "")
+        self.assertEqual(js_tier_keys, list(config_mod.TIERS.keys()))
+
     def test_frontend_modules_and_dom_ids(self) -> None:
         """Every `getElementById` in the ES modules resolves to a real `id` in index.html."""
         expected_modules = [
@@ -75,6 +117,27 @@ class TestRepoIntegrity(unittest.TestCase):
             "preferences.js",
             "batch.js",
             "tabs.js",
+            "shortcuts.js",
+            "bridge.js",
+            "menubar.js",
+            "keyboard.js",
+            "open-files.js",
+            "clipboard.js",
+            "recent.js",
+            "backdrop.js",
+            "tier-dropdown.js",
+            "tooltips.js",
+            "modals.js",
+            "settings.js",
+            "controls.js",
+            "stage-input.js",
+            "export-ui.js",
+            "export-io.js",
+            "zip.js",
+            "segmentation.js",
+            "batch-panel.js",
+            "batch-run.js",
+            "bus.js",
             "app.js",
         ]
         html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
@@ -123,8 +186,29 @@ class TestRepoIntegrity(unittest.TestCase):
                 "OpenBGR/static/stage.js",
                 "OpenBGR/static/export.js",
                 "OpenBGR/static/preferences.js",
+                "OpenBGR/static/shortcuts.js",
                 "OpenBGR/static/batch.js",
                 "OpenBGR/static/tabs.js",
+                "OpenBGR/static/bridge.js",
+                "OpenBGR/static/menubar.js",
+                "OpenBGR/static/keyboard.js",
+                "OpenBGR/static/open-files.js",
+                "OpenBGR/static/clipboard.js",
+                "OpenBGR/static/recent.js",
+                "OpenBGR/static/backdrop.js",
+                "OpenBGR/static/tier-dropdown.js",
+                "OpenBGR/static/tooltips.js",
+                "OpenBGR/static/modals.js",
+                "OpenBGR/static/settings.js",
+                "OpenBGR/static/controls.js",
+                "OpenBGR/static/stage-input.js",
+                "OpenBGR/static/export-ui.js",
+                "OpenBGR/static/export-io.js",
+                "OpenBGR/static/zip.js",
+                "OpenBGR/static/segmentation.js",
+                "OpenBGR/static/batch-panel.js",
+                "OpenBGR/static/batch-run.js",
+                "OpenBGR/static/bus.js",
             }
             windows_entries = common_entries | {
                 "OpenBGR/start.bat",
@@ -138,7 +222,7 @@ class TestRepoIntegrity(unittest.TestCase):
             }
             windows_foreign_entries = {
                 "OpenBGR/start.sh",
-                "OpenBGR/Start Mac.command",
+                "OpenBGR/start_mac.command",
                 "OpenBGR/scripts/context_process.sh",
                 "OpenBGR/scripts/install_linux_integration.sh",
                 "OpenBGR/scripts/install_macos_quick_action.py",
@@ -146,7 +230,7 @@ class TestRepoIntegrity(unittest.TestCase):
             }
             linux_foreign_entries = {
                 "OpenBGR/start.bat",
-                "OpenBGR/Start Mac.command",
+                "OpenBGR/start_mac.command",
                 "OpenBGR/scripts/install_macos_quick_action.py",
                 "OpenBGR/scripts/install_windows_context_menu.bat",
                 "OpenBGR/scripts/uninstall_windows_context_menu.bat",

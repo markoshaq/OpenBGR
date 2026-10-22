@@ -8,8 +8,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { installDomShims } from "./dom-shim.mjs";
+import { wireRealTabOps } from "./workspace-deps.mjs";
 
 installDomShims();
+await wireRealTabOps();
 globalThis.createImageBitmap = async () => ({
   width: 320,
   height: 240,
@@ -17,9 +19,14 @@ globalThis.createImageBitmap = async () => ({
 });
 
 const { state, dom, createTabRecord } = await import("../static/state.js");
-const { addFilesToBatchTab, renderBatchPanel, runBatch } = await import(
-  "../static/batch.js"
-);
+const {
+  addFilesToBatchTab,
+  mergeTabsIntoBatch,
+  extractBatchItemToTab,
+  moveBatchItemToBatch,
+} = await import("../static/batch.js");
+const { renderBatchPanel } = await import("../static/batch-panel.js");
+const { runBatch } = await import("../static/batch-run.js");
 
 const enc = new TextEncoder();
 
@@ -307,4 +314,63 @@ test("runBatch honours a cancel flag set mid-run and restores queued statuses", 
     !dom.confirmModal.classList.contains("active"),
     "no completion modal on cancel"
   );
+});
+
+test("mergeTabsIntoBatch folds a source image tab into a batch target", () => {
+  resetWorkspace();
+  const dst = makeBatchTab(["a.png"]);
+  const src = createTabRecord({
+    sourceFile: new File([enc.encode("x")], "x.png", { type: "image/png" }),
+    name: "x.png",
+  });
+  state.tabs.push(src);
+  mergeTabsIntoBatch(src.id, dst.id);
+  assert.equal(dst.batchFiles.length, 2);
+  assert.equal(dst.batchFiles[1].name, "x.png");
+  assert.equal(state.tabs.includes(src), false);
+});
+
+test("mergeTabsIntoBatch converts a plain image tab into a batch target", () => {
+  resetWorkspace();
+  // The merge-into-normal-tab path runs convertTabToBatch; a clipped
+  // definition used to make this path throw ReferenceError.
+  const dst = createTabRecord({
+    sourceFile: new File([enc.encode("d")], "d.png", { type: "image/png" }),
+    name: "d.png",
+  });
+  state.tabs.push(dst);
+  const src = createTabRecord({
+    sourceFile: new File([enc.encode("x")], "x.png", { type: "image/png" }),
+    name: "x.png",
+  });
+  state.tabs.push(src);
+  mergeTabsIntoBatch(src.id, dst.id);
+  assert.equal(dst.kind, "batch");
+  assert.equal(dst.name, "BATCH");
+  assert.equal(dst.sourceFile, null);
+  assert.deepEqual(
+    dst.batchFiles.map((e) => e.name),
+    ["d.png", "x.png"]
+  );
+});
+
+test("extractBatchItemToTab moves a queue row into its own tab", () => {
+  resetWorkspace();
+  const tab = makeBatchTab(["a.png", "b.png"]);
+  extractBatchItemToTab(tab, 0);
+  assert.equal(tab.batchFiles.length, 1);
+  const spawned = state.tabs.find((t) => t.id !== tab.id);
+  assert.ok(spawned);
+  assert.equal(spawned.kind, "image");
+});
+
+test("moveBatchItemToBatch transfers a row between batch tabs", () => {
+  resetWorkspace();
+  const src = makeBatchTab(["a.png", "b.png"]);
+  const dst = makeBatchTab(["c.png"]);
+  moveBatchItemToBatch({ tabId: src.id, index: 0 }, dst);
+  assert.equal(src.batchFiles.length, 1);
+  assert.equal(dst.batchFiles.length, 2);
+  assert.equal(dst.batchFiles[1].name, "a.png");
+  assert.equal(dst.batchFiles[1].status, "queued");
 });

@@ -80,8 +80,14 @@ function matchesCompound(el, sel) {
   return true;
 }
 
-/** Descendant-combinator matching: last compound matches el, rest match ancestors. */
+/**
+ * Descendant-combinator matching: last compound matches el, rest match
+ * ancestors. A comma-separated list matches when any of its selectors does.
+ */
 function matchesSelector(el, sel) {
+  if (sel.includes(",")) {
+    return sel.split(",").some((s) => matchesSelector(el, s));
+  }
   const compounds = sel.trim().split(/\s+/);
   if (!matchesCompound(el, compounds[compounds.length - 1])) return false;
   let node = el.parentElement;
@@ -355,6 +361,7 @@ export function installDomShims() {
   globalThis.Image = FakeImage;
   globalThis.FileReader = FakeFileReader;
   globalThis.HTMLElement = FakeElement;
+  globalThis.Node = FakeElement;
   globalThis.window = globalThis;
   globalThis.innerWidth = 1400;
   globalThis.innerHeight = 900;

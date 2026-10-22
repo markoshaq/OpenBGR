@@ -1,6 +1,7 @@
 /**
- * Node unit tests for static/export.js: the STORED-ZIP builder/writer and
- * the batch export blob pipeline (passthrough vs canvas re-render).
+ * Node unit tests for static/zip.js, static/export.js, and static/export-ui.js:
+ * the STORED-ZIP builder/writer, the export blob pipeline (passthrough vs
+ * canvas re-render), and the export panel sync.
  *
  * Run with: node --test tests/
  */
@@ -22,23 +23,24 @@ globalThis.createImageBitmap = async () => ({
 const { state, dom, masterCutoutImg, DEFAULT_CROP_PADDING } = await import(
   "../static/state.js"
 );
+const { buildZip, createZipWriter } = await import("../static/zip.js");
 const {
-  buildZip,
-  createZipWriter,
   buildBatchExportBlob,
   scanAlphaBBoxFromPixels,
   expandCropBox,
   getActiveCropRect,
   getExportBaseDims,
-  updateCropGuide,
   updateLiveStagePreview,
+} = await import("../static/export.js");
+const {
+  updateCropGuide,
   updateExportTelemetry,
   applyExportSizePreset,
   resetExportSize,
   setCanvasFit,
   applyBackdrop,
   applyBackdropMode,
-} = await import("../static/export.js");
+} = await import("../static/export-ui.js");
 
 const enc = new TextEncoder();
 

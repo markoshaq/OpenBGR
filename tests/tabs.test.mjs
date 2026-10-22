@@ -9,8 +9,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { installDomShims } from "./dom-shim.mjs";
+import { wireRealTabOps } from "./workspace-deps.mjs";
 
 installDomShims();
+await wireRealTabOps();
 globalThis.createImageBitmap = async () => ({
   width: 320,
   height: 240,
@@ -27,9 +29,10 @@ const {
   requestCloseTab,
   closeTabImmediate,
   switchToTab,
-  cancelProcessing,
-  runSegmentation,
 } = await import("../static/tabs.js");
+const { cancelProcessing, runSegmentation } = await import(
+  "../static/segmentation.js"
+);
 
 const enc = new TextEncoder();
 

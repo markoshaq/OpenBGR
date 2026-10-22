@@ -691,3 +691,9 @@ export function applyPreferences(onSyncMenu) {
 
   onSyncMenu?.();
 }
+
+/** Refreshes model cache indicators whenever the browser regains or loses connectivity. */
+export function initConnectivity() {
+  window.addEventListener("online", updateCacheIndicator);
+  window.addEventListener("offline", updateCacheIndicator);
+}

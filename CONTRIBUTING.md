@@ -33,13 +33,34 @@ npm ci && npx eslint static             # frontend lint (Node 18+)
 node --test "tests/*.test.mjs"          # frontend unit tests
 ```
 
-Test coverage spans the pipeline, API contracts, CLI and Quick Action runners, release payloads, and frontend state helpers.
+Optionally, `npm run test:smoke` runs the headless-browser smoke test (`scripts/browser_smoke.mjs`): it starts the server and drives a real Chromium-family browser through menus, paste, zoom, and settings. It needs Node 22+ and Chrome, Brave, Chromium, or Edge installed (or `CHROME_BIN` set).
+
+Test coverage spans the pipeline, API contracts, the desktop bridge, CLI and Quick Action runners, release payloads, and frontend modules.
 
 ## Guidelines
 
 - Match the existing style: compact functions, type hints, docstrings on public APIs.
 - Keep the privacy guarantee intact: no telemetry, no analytics, no network calls beyond Hugging Face model downloads.
 - If you add or rename files, update the layout below.
+
+## Frontend architecture
+
+`static/` is vanilla ES modules with no build step. `tests/architecture.test.mjs` enforces the structure below, so CI fails if it regresses:
+
+- **Import graph is acyclic.** Imports may point downward in the layer map or sideways within a layer; calls that need to travel upward go through injected collaborators (`init*` functions wired in `app.js`) or `bus.js` events for fire-and-forget signals.
+- **No import-time side effects.** Only `app.js` runs code at load; every other module must be importable under `node --test` without triggering fetch calls, timers, or event listeners. Behavior lives behind exported functions and `init*` wiring.
+- **Bounded file sizes.** `app.js` stays a thin boot file (imports, init calls, startup sync); other modules stay under 1000 lines.
+
+Layer map, bottom to top:
+
+1. **Primitives:** `state.js`, `bus.js`, `zip.js`, `shortcuts.js`, `tooltips.js` (no internal imports).
+2. **Shared helpers:** `stage.js`, `preferences.js`, `export.js`, `export-ui.js`, `export-io.js` (export stack builds downward).
+3. **Workspace domains:** `segmentation.js`, `batch.js`, `batch-panel.js`, `batch-run.js` (batch/segmentation operations; their calls into the tab strip are injected, not imported).
+4. **Workspace coordinator:** `tabs.js` (tab lifecycle and workspace state; may call domain modules directly).
+5. **UI wiring:** `menubar.js`, `keyboard.js`, `modals.js`, `clipboard.js`, `open-files.js`, `recent.js`, `settings.js`, `controls.js`, `stage-input.js`, `backdrop.js`, `tier-dropdown.js`, `bridge.js` (event listeners and the `window.openBGR` command surface).
+6. **Boot:** `app.js`.
+
+New module checklist: a `tests/<name>.test.mjs`, an entry in `expected_modules` and the archive set in `tests/test_repo_integrity.py`, and a line in the layout below.
 
 ## Project layout
 
@@ -67,17 +88,39 @@ Test coverage spans the pipeline, API contracts, CLI and Quick Action runners, r
 │   ├── styles.css          # Stylesheet
 │   ├── state.js            # Shared state, tab model & helpers
 │   ├── stage.js            # Split view, pan/zoom & loupe rendering
-│   ├── export.js           # Canvas export pipeline & ZIP writer
+│   ├── export.js           # Canvas export pipeline, live preview & batch render
+│   ├── export-ui.js        # Export telemetry, backdrop/scale controls & dim sync
+│   ├── export-io.js        # Save/copy/reveal & output-folder actions
+│   ├── zip.js              # ZIP writer (store + stream)
 │   ├── preferences.js      # Hardware status, cache dots & preferences
-│   ├── batch.js            # Batch queue, panel & runner
-│   ├── tabs.js             # Tab bar, ingestion & segmentation lifecycle
-│   └── app.js              # Event wiring, menus & native bridge
+│   ├── batch.js            # Batch queue model, tab ops & context menu
+│   ├── batch-panel.js      # Batch row & panel rendering
+│   ├── batch-run.js        # Sequential batch processing runner
+│   ├── tabs.js             # Tab bar, ingestion, switching & view state
+│   ├── segmentation.js     # Segmentation run, progress polling & refinement
+│   ├── shortcuts.js        # Shortcut table, text-field gate & platform labels
+│   ├── bridge.js           # window.openBGR command bridge (menus, shortcuts, native)
+│   ├── menubar.js          # In-app menu bar & native-menus mode
+│   ├── keyboard.js         # Escape cascade & key handlers
+│   ├── open-files.js       # Open dialog, drag-and-drop & OS-delivered files
+│   ├── clipboard.js        # Paste ingest & clipboard probe
+│   ├── recent.js           # Open Recent modal
+│   ├── backdrop.js         # Matte backdrop chips, swatches & photo
+│   ├── tier-dropdown.js    # Model dropdown & tier cards
+│   ├── tooltips.js         # Shared floating tooltip
+│   ├── modals.js           # Confirm modal, busy cancel & context-menu dismiss
+│   ├── settings.js         # Settings modal controls
+│   ├── controls.js         # Sidebar, top-bar & export controls
+│   ├── stage-input.js      # Stage wheel, gestures, pan & split drag
+│   ├── bus.js              # Small event bus for cross-module signals
+│   └── app.js              # Entry point: module init & startup only
 ├── scripts/
 │   ├── build_release.py    # Builds .dmg / OpenBGR-Setup.exe / .zip / .tar.gz into dist/
 │   ├── OpenBGR.iss         # Thin Inno Setup 6 definition for OpenBGR-Setup.exe
 │   ├── OpenBGR.cs          # C# first-run bootstrapper compiled into OpenBGR.exe
 │   ├── make_dev_bundle.py  # Generates the venv-local OpenBGR.app for dev runs
 │   ├── bump_version.py     # Bumps the version in pyproject/package*.json together
+│   ├── browser_smoke.mjs   # Headless-browser smoke test for the frontend
 │   ├── context_process.sh  # Headless cutout helper (server fast-path > --cli fallback)
 │   ├── install_macos_quick_action.py      # Finder "Remove Background" Quick Action
 │   ├── install_windows_context_menu.bat   # Explorer right-click entries (HKCU)
@@ -87,9 +130,14 @@ Test coverage spans the pipeline, API contracts, CLI and Quick Action runners, r
 │   ├── test_api.py             # HTTP endpoint contracts & pending-file queueing
 │   ├── test_pipeline.py        # Icon render, edge refinement, FP16 compaction, segmentation
 │   ├── test_quick_action.py    # Quick Action config, dialogs, runner & notifier bundle
+│   ├── test_desktop_bridge.py  # DesktopApi bridge: dialogs, clipboard, window actions
 │   ├── test_repo_integrity.py  # Version/dependency sync, release payloads & DOM integrity
-│   └── state.test.mjs          # Frontend state helpers (node:test)
-├── Start Mac.command       # macOS Finder launcher
+│   ├── dom-shim.mjs            # Minimal DOM for importing static/ modules in node
+│   ├── workspace-deps.mjs      # Injects real tab ops into domain modules for tests
+│   ├── import-probe.mjs        # Side-effect counter used by the architecture test
+│   ├── architecture.test.mjs   # Acyclic imports, import-safety & file-size caps
+│   └── *.test.mjs              # Frontend module tests, one per static/ module (node:test)
+├── start_mac.command       # macOS Finder launcher
 ├── start.sh                # macOS / Linux bootstrapper
 ├── start.bat               # Windows bootstrapper
 └── requirements.txt        # Canonical Python dependency list

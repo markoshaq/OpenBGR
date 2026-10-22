@@ -6,7 +6,8 @@
   "description": "Dev-only frontend tooling for OpenBGR (eslint + node:test). Not shipped to users.",
   "scripts": {
     "lint:js": "eslint static",
-    "test:js": "node --test \"tests/*.test.mjs\""
+    "test:js": "node --test \"tests/*.test.mjs\"",
+    "test:smoke": "node scripts/browser_smoke.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",
