@@ -27,6 +27,8 @@ let bboxCache = null;
 /**
  * Scans an RGBA pixel buffer (`width * height * 4`) for the tight bounding box
  * of pixels with `alpha > threshold`. Falls back to the full frame when empty.
+ * Each bound scans inward from its edge and stops at the first hit, so a
+ * typical centered subject costs a fraction of a full pass.
  */
 export function scanAlphaBBoxFromPixels(
   data,
@@ -36,57 +38,75 @@ export function scanAlphaBBoxFromPixels(
 ) {
   const w = Math.max(1, width | 0);
   const h = Math.max(1, height | 0);
-  let minX = w;
-  let minY = h;
-  let maxX = -1;
-  let maxY = -1;
+  const rowBytes = w * 4;
 
-  for (let y = 0, idx = 3; y < h; y++) {
-    for (let x = 0; x < w; x++, idx += 4) {
-      if (data[idx] > threshold) {
-        if (x < minX) minX = x;
-        if (x > maxX) maxX = x;
-        if (y < minY) minY = y;
-        if (y > maxY) maxY = y;
-      }
+  const rowHasAlpha = (y) => {
+    for (let i = y * rowBytes + 3, end = (y + 1) * rowBytes; i < end; i += 4) {
+      if (data[i] > threshold) return true;
     }
-  }
-  return maxX < minX || maxY < minY
-    ? { x: 0, y: 0, w, h }
-    : { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 };
+    return false;
+  };
+  const colHasAlpha = (x, y0, y1) => {
+    for (let y = y0; y <= y1; y++) {
+      if (data[(y * w + x) * 4 + 3] > threshold) return true;
+    }
+    return false;
+  };
+
+  let minY = 0;
+  while (minY < h && !rowHasAlpha(minY)) minY++;
+  let maxY = h - 1;
+  while (maxY > minY && !rowHasAlpha(maxY)) maxY--;
+  if (minY > maxY) return { x: 0, y: 0, w, h };
+
+  let minX = 0;
+  while (minX < w && !colHasAlpha(minX, minY, maxY)) minX++;
+  let maxX = w - 1;
+  while (maxX > minX && !colHasAlpha(maxX, minY, maxY)) maxX--;
+
+  return { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 };
 }
 
 /**
  * Returns the tight alpha bounding box `{ x, y, w, h }` of `source` at the
- * given `shadowCutoff` percentage, cached by `(source, srcW, srcH, cutoff)`.
+ * given `shadowCutoff` percentage. The full-res pixel buffer is cached by
+ * `(source, srcW, srcH)` so a cutoff change only costs a rescan, not another
+ * drawImage + getImageData readback.
  */
 export function computeAlphaBBox(source, srcW, srcH, shadowCutoff = 0) {
   const w = Math.max(1, srcW | 0);
   const h = Math.max(1, srcH | 0);
   const cutoff = Number(shadowCutoff) || 0;
   const key = source?.currentSrc || source?.src || source;
+  const threshold = Math.max(
+    ALPHA_BBOX_FLOOR,
+    Math.round((cutoff / 100) * 255)
+  );
+
   if (
     bboxCache &&
     bboxCache.key === key &&
     bboxCache.w === w &&
-    bboxCache.h === h &&
-    bboxCache.cutoff === cutoff
+    bboxCache.h === h
   ) {
-    return bboxCache.box;
+    if (bboxCache.cutoff === cutoff) return bboxCache.box;
+    const box = scanAlphaBBoxFromPixels(bboxCache.data, w, h, threshold);
+    bboxCache.cutoff = cutoff;
+    bboxCache.box = box;
+    return box;
   }
 
   const canvas = document.createElement("canvas");
   canvas.width = w;
   canvas.height = h;
-  const ctx = canvas.getContext("2d");
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
   ctx.drawImage(source, 0, 0, w, h);
   const { data } = ctx.getImageData(0, 0, w, h);
   canvas.width = 0;
   canvas.height = 0;
 
-  const threshold = Math.max(ALPHA_BBOX_FLOOR, Math.round((cutoff / 100) * 255));
   const box = scanAlphaBBoxFromPixels(data, w, h, threshold);
-  bboxCache = { key, w, h, cutoff, box };
+  bboxCache = { key, w, h, cutoff, box, data };
   return box;
 }
 
@@ -144,12 +164,10 @@ export function updateCropGuide() {
     return;
   }
   const rect = getActiveCropRect();
-  const x0 = Math.max(0, Math.min(srcW, rect.x));
-  const y0 = Math.max(0, Math.min(srcH, rect.y));
-  const x1 = Math.max(x0, Math.min(srcW, rect.x + rect.w));
-  const y1 = Math.max(y0, Math.min(srcH, rect.y + rect.h));
-
-  const inset = `${(y0 / srcH) * 100}% ${((srcW - x1) / srcW) * 100}% ${((srcH - y1) / srcH) * 100}% ${(x0 / srcW) * 100}%`;
+  // The rect may reach past the frame (padding beyond the image edge exports
+  // as transparent canvas margin): negative insets push the border off-stage,
+  // so the dim overlay covers only pixels that are actually cropped away.
+  const inset = `${(rect.y / srcH) * 100}% ${((srcW - rect.x - rect.w) / srcW) * 100}% ${((srcH - rect.y - rect.h) / srcH) * 100}% ${(rect.x / srcW) * 100}%`;
   guide.style.setProperty("--crop-inset", inset);
   guide.dataset.inset = inset;
   guide.classList.add("visible");
@@ -317,7 +335,7 @@ function drawBlurred(ctx, src, srcRect, dstRect, strength) {
   const mini = document.createElement("canvas");
   mini.width = sw;
   mini.height = sh;
-  const mctx = mini.getContext("2d");
+  const mctx = mini.getContext("2d", { willReadFrequently: true });
   mctx.imageSmoothingEnabled = true;
   mctx.imageSmoothingQuality = "high";
   mctx.drawImage(
@@ -372,7 +390,10 @@ async function renderExportBlob(source, srcW, srcH, opts) {
   const canvas = document.createElement("canvas");
   canvas.width = targetW;
   canvas.height = targetH;
-  const ctx = canvas.getContext("2d");
+  // Mask mode reads every pixel back; the other formats stay GPU-friendly.
+  const ctx = canvas.getContext("2d", {
+    willReadFrequently: format === "mask",
+  });
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = "high";
 
@@ -477,7 +498,7 @@ async function renderExportBlob(source, srcW, srcH, opts) {
     const fgCanvas = document.createElement("canvas");
     fgCanvas.width = targetW;
     fgCanvas.height = targetH;
-    const fgCtx = fgCanvas.getContext("2d");
+    const fgCtx = fgCanvas.getContext("2d", { willReadFrequently: true });
     fgCtx.imageSmoothingEnabled = true;
     fgCtx.imageSmoothingQuality = "high";
     drawCroppedSource(fgCtx, source, srcW, srcH, cropRect, targetW, targetH, stretch);
@@ -721,44 +742,65 @@ function exactExportBlob() {
   return null;
 }
 
+// One export-cache encode at a time: full-res canvas work is expensive, and
+// slider bursts would otherwise stack encodes whose results are all but one
+// discarded. Calls landing while busy are dropped; the drain loop re-encodes
+// until the stored signature matches the live settings anyway.
+let exportCacheBusy = false;
+
 /**
  * Background full-res encode of the real export settings. The stage preview
  * is deliberately uncropped/capped, so its bytes can't back the size label:
- * this runs once after each preview render whose signature differs from the
+ * this runs after each preview render whose signature differs from the
  * export's, giving an honest size readout and a warm EXPORT button.
  */
-async function renderExportCache(token) {
-  const source = state.resultBlob;
-  const srcW = state.naturalWidth || masterCutoutImg.naturalWidth;
-  const srcH = state.naturalHeight || masterCutoutImg.naturalHeight;
-  const baseDims = getExportBaseDims();
-  const targetW = Math.max(1, state.exportWidth || baseDims.w || srcW);
-  const targetH = Math.max(1, state.exportHeight || baseDims.h || srcH);
+async function renderExportCache() {
+  if (exportCacheBusy) return;
+  exportCacheBusy = true;
   try {
-    const blob = await renderExportBlob(masterCutoutImg, srcW, srcH, {
-      format: state.exportFormat,
-      targetW,
-      targetH,
-      shadowCutoff: state.shadowCutoff,
-      backdrop: state.activeBackdrop,
-      backdropSource: resolveBackdropSource(),
-      backdropBlur: state.backdropBlur,
-      autoCrop: state.autoCrop,
-      cropPadding: state.cropPadding,
-      canvasFit: state.canvasFit,
-    });
-    if (token !== state.previewRenderToken || source !== state.resultBlob) {
-      return;
+    while (!exportCacheMatches()) {
+      const source = state.resultBlob;
+      if (
+        !source ||
+        !masterCutoutImg.complete ||
+        !masterCutoutImg.naturalWidth
+      ) {
+        return;
+      }
+      const srcW = state.naturalWidth || masterCutoutImg.naturalWidth;
+      const srcH = state.naturalHeight || masterCutoutImg.naturalHeight;
+      const baseDims = getExportBaseDims();
+      const targetW = Math.max(1, state.exportWidth || baseDims.w || srcW);
+      const targetH = Math.max(1, state.exportHeight || baseDims.h || srcH);
+      // Snapshot the signature alongside the render options so the stored
+      // signature describes the settings this blob was encoded under, even
+      // if they change while the encode is in flight.
+      const renderedSig = exportSignature();
+      const blob = await renderExportBlob(masterCutoutImg, srcW, srcH, {
+        format: state.exportFormat,
+        targetW,
+        targetH,
+        shadowCutoff: state.shadowCutoff,
+        backdrop: state.activeBackdrop,
+        backdropSource: resolveBackdropSource(),
+        backdropBlur: state.backdropBlur,
+        autoCrop: state.autoCrop,
+        cropPadding: state.cropPadding,
+        canvasFit: state.canvasFit,
+      });
+      if (source !== state.resultBlob) continue; // cutout swapped; re-evaluate
+      state.exportCacheBlob = blob;
+      state.exportCacheSignature = renderedSig;
+      state.exportCacheSource = source;
+      if (dom.exportSizeLabel && exportCacheMatches()) {
+        dom.exportSizeLabel.textContent = formatDiskBytes(blob.size);
+      }
+      saveStateToActiveTab();
     }
-    state.exportCacheBlob = blob;
-    state.exportCacheSignature = exportSignature();
-    state.exportCacheSource = source;
-    if (dom.exportSizeLabel && exportCacheMatches()) {
-      dom.exportSizeLabel.textContent = formatDiskBytes(blob.size);
-    }
-    saveStateToActiveTab();
   } catch (err) {
     console.warn("[OpenBGR] Export cache render failed:", err);
+  } finally {
+    exportCacheBusy = false;
   }
 }
 
@@ -923,7 +965,7 @@ async function renderLivePreview(token) {
       state.exportCacheSignature = null;
       state.exportCacheSource = null;
     } else {
-      renderExportCache(token);
+      renderExportCache();
     }
     saveStateToActiveTab();
   } catch (err) {

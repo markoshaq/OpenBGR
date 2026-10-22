@@ -250,7 +250,9 @@ test("getExportBaseDims, updateCropGuide, and buildBatchExportBlob handle autoCr
   assert.deepEqual(getExportBaseDims(), { w: 120, h: 100 });
   updateCropGuide();
   assert.ok(dom.cropGuide.classList.contains("visible"));
-  assert.equal(dom.cropGuide.dataset.inset, "0% 0% 0% 0%");
+  // Padding reaches 10px past every edge of the 100x80 frame, so the guide
+  // insets go negative instead of clamping to the frame.
+  assert.equal(dom.cropGuide.dataset.inset, "-12.5% -10% -12.5% -10%");
 
   state.viewMode = "original";
   updateCropGuide();

@@ -36,7 +36,6 @@ function resetWorkspace() {
     running: false,
     tabId: null,
     total: 0,
-    index: 0,
     failed: 0,
     cancelled: false,
     results: [],
@@ -248,6 +247,45 @@ test("runBatch with onlyFailed retries just the failed rows", async () => {
     "none",
     "retry button hides when no rows remain failed"
   );
+});
+
+test("runBatch onlyFailed skips queued rows that never failed", async () => {
+  resetWorkspace();
+  stubFetch((n) =>
+    n === 1
+      ? {
+          ok: false,
+          status: 500,
+          json: async () => ({ detail: "boom" }),
+          headers: new Headers(),
+        }
+      : { ...OK_RESPONSE }
+  );
+  const tab = makeBatchTab(["a.png", "b.png"]);
+
+  await runBatch(tab);
+  assert.equal(tab.batchFiles[0].status, "failed");
+  assert.equal(tab.batchFiles[1].status, "done");
+
+  // Rows added after a run (or left queued by a cancelled run) carry the
+  // "queued" status but are not part of a retry.
+  addFilesToBatchTab(tab, [
+    new File([enc.encode("data-c.png")], "c.png", { type: "image/png" }),
+  ]);
+  assert.equal(tab.batchFiles[2].status, "queued");
+
+  const calls = stubFetch(() => ({ ...OK_RESPONSE }));
+  await runBatch(tab, { onlyFailed: true });
+
+  assert.equal(calls(), 1, "only the failed row is re-fetched");
+  assert.equal(tab.batchFiles[0].status, "done");
+  assert.equal(tab.batchFiles[1].status, "done", "done rows untouched");
+  assert.equal(
+    tab.batchFiles[2].status,
+    "queued",
+    "queued leftovers wait for a full run"
+  );
+  assert.match(dom.modalDesc.textContent, /1 of 1 image processed/);
 });
 
 test("runBatch honours a cancel flag set mid-run and restores queued statuses", async () => {

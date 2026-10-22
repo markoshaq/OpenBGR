@@ -761,27 +761,29 @@ async function resolveBatchOutput(tab, batch) {
 function beginBatchRun(tab, batch, onlyFailed) {
   batch.running = true;
   batch.tabId = tab.id;
-  batch.total = onlyFailed
-    ? tab.batchFiles.filter(
-        (e) => e.status === "failed" && e.selected !== false
-      ).length
-    : tab.batchFiles.filter((e) => e.selected !== false).length;
-  batch.index = 0;
   batch.failed = 0;
   batch.cancelled = false;
   batch.results = [];
 
+  // runTarget is the explicit membership of this run. "queued" alone cannot
+  // be trusted in retry mode: newly added files and entries left over from a
+  // cancelled run also carry that status.
+  batch.total = 0;
   tab.batchFiles.forEach((e) => {
+    e.runTarget = onlyFailed
+      ? e.status === "failed" && e.selected !== false
+      : e.selected !== false;
+    if (e.runTarget) batch.total++;
     if (onlyFailed) {
       // Retry targets only failed, still-selected rows; done and skipped
       // rows keep their status.
-      if (e.status === "failed" && e.selected !== false) {
+      if (e.runTarget) {
         e.status = "queued";
         delete e.error;
       }
       return;
     }
-    e.status = e.selected === false ? "skipped" : "queued";
+    e.status = e.runTarget ? "queued" : "skipped";
     delete e.error;
   });
 
@@ -812,10 +814,9 @@ async function processBatchQueue(tab, batch, snap, outputDir, controller) {
   for (let i = 0; i < tab.batchFiles.length; i++) {
     if (batch.cancelled) break;
     const entry = tab.batchFiles[i];
-    // Queued is the only runnable status: full runs mark selected entries
-    // queued, retry runs mark only previously-failed entries queued.
-    if (entry.status !== "queued") continue;
-    batch.index = i;
+    // Only entries marked for this run (and still queued: a mid-run deselect
+    // flips a row to skipped) are processed.
+    if (!entry.runTarget || entry.status !== "queued") continue;
     seen++;
     entry.status = "processing";
     updateBatchRowStatus(tab, i);

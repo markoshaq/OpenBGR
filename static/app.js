@@ -128,6 +128,7 @@ function initTooltips() {
     if (top + tipRect.height > window.innerHeight - 8) {
       top = hostRect.top - tipRect.height - 6;
     }
+    top = Math.max(8, Math.min(top, window.innerHeight - tipRect.height - 8));
     let left = hostRect.left + hostRect.width / 2 - tipRect.width / 2;
     left = Math.max(8, Math.min(left, window.innerWidth - tipRect.width - 8));
     tip.style.left = `${Math.round(left)}px`;

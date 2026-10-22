@@ -817,7 +817,9 @@ body {
    initTooltips, so scrollable sidebars cannot clip it. */
 .floating-tooltip {
   position: fixed;
-  z-index: 2000;
+  /* Above modals (9999) and the tab context menu (10050): hosts under an
+     overlay can't be hovered anyway, so nothing is gained by hiding tips. */
+  z-index: 11000;
   background: var(--bg);
   color: var(--text);
   border: 1px solid var(--border-strong);
