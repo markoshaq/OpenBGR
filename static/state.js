@@ -84,6 +84,16 @@ export function apiFetch(url, options = {}) {
   return fetch(url, { ...options, headers });
 }
 
+/** Extracts the server's `detail` string from a non-OK API response. */
+export async function apiErrorDetail(response) {
+  let detail = `HTTP ${response.status}`;
+  try {
+    const payload = await response.json();
+    if (payload?.detail) detail = payload.detail;
+  } catch (_) {}
+  return detail;
+}
+
 /** Returns the factory-default preference snapshot (theme, model, filters, export). */
 export function getDefaultPrefs() {
   return {
@@ -174,6 +184,18 @@ function loadPrefs() {
 }
 
 export const prefs = loadPrefs();
+
+/** Updates one preference key and persists the whole object to `localStorage`. */
+export function setPref(key, value) {
+  prefs[key] = value;
+  savePrefs();
+}
+
+/** Restores every preference to its factory default and persists it. */
+export function resetPrefs() {
+  Object.assign(prefs, getDefaultPrefs());
+  savePrefs();
+}
 
 /**
  * Returns a function `(downloadedBytes, totalBytes) => shownBytes` that
@@ -290,43 +312,34 @@ export function getTierDownloadText(key) {
 export function savePrefs() {
   try {
     localStorage.setItem(STORAGE_KEY_PREFS, JSON.stringify(prefs));
-  } catch (_) {}
+  } catch (err) {
+    console.warn("[OpenBGR] Failed to persist preferences:", err);
+  }
 }
 
 export const masterCutoutImg = new Image();
 
 let nextTabSeq = 1;
 
+/**
+ * The single live workspace store. `state` mirrors the active tab's fields
+ * (image, result, view, export settings); `saveStateToActiveTab` writes them
+ * back into the tab record before a switch. Fields are grouped below by
+ * concern so a reader can tell workspace state from transient input state.
+ */
 export const state = {
+  // Tabs & workspace
   tabs: [],
   activeTabId: null,
   confirmCloseTab: prefs.confirmClose,
+
+  // Per-tab mirrored settings (restored on tab switch)
   tier: prefs.defaultTier !== "auto" ? prefs.defaultTier : "general",
   defringe: true,
   despill: true,
   shadowCutoff: 0,
   viewMode: "split",
   splitPercent: 50,
-  isDraggingSplit: false,
-  isProcessing: false,
-  abortController: null,
-  pendingConfirmFn: null,
-  pendingAltFn: null,
-  sourceFile: null,
-  resultBlob: null,
-  refineJobId: null,
-  refineToken: 0,
-  refineInFlight: false,
-  refinePending: false,
-  previewBlob: null,
-  previewSignature: null,
-  previewSource: null,
-  originalObjectUrl: null,
-  resultObjectUrl: null,
-  previewObjectUrl: null,
-  previewRenderToken: 0,
-  naturalWidth: 0,
-  naturalHeight: 0,
   exportFormat: prefs.defaultFormat,
   outputDir: null,
   exportScale: 1,
@@ -334,17 +347,49 @@ export const state = {
   exportHeight: 0,
   aspectLocked: true,
   activeBackdrop: prefs.defaultBackdrop,
+
+  // Active job lifecycle
+  isProcessing: false,
+  abortController: null,
+  pendingConfirmFn: null,
+  pendingAltFn: null,
+  expectingBatch: false,
+
+  // Edge-refinement coalescing (/api/refine)
+  refineJobId: null,
+  refineToken: 0,
+  refineInFlight: false,
+  refinePending: false,
+
+  // Source image, result, and live-preview blobs/URLs
+  sourceFile: null,
+  originalObjectUrl: null,
+  resultBlob: null,
+  resultObjectUrl: null,
+  previewBlob: null,
+  previewObjectUrl: null,
+  previewSignature: null,
+  previewSource: null,
+  previewRenderToken: 0,
+  naturalWidth: 0,
+  naturalHeight: 0,
+
+  // Stage view transform
   zoom: 1,
   panX: 0,
   panY: 0,
   isPanning: false,
   panStartX: 0,
   panStartY: 0,
+  isDraggingSplit: false,
+  loupeEnabled: false,
+
+  // Transient input / capability flags
   spacePressed: false,
   clipboardHasImage: null,
-  loupeEnabled: false,
   serverStatus: null,
-  expectingBatch: false,
+
+  // Batch run state (shared; only one run at a time)
   batch: {
     running: false,
     tabId: null,
@@ -355,6 +400,8 @@ export const state = {
     results: [],
     zipWriter: null,
   },
+
+  // Drag-and-drop in flight
   dragTabId: null,
   dragBatchItem: null,
 };
@@ -745,7 +792,12 @@ export async function filesFromDialogResult(res) {
           if (r.ok) {
             return new File([await r.blob()], entry.name || "image.png");
           }
-        } catch (_) {}
+          console.warn(
+            `[OpenBGR] Local file grant ${entry.file_id} failed: HTTP ${r.status}`
+          );
+        } catch (err) {
+          console.warn("[OpenBGR] Local file fetch failed:", err);
+        }
         return null;
       }
       if (entry.data_b64) {

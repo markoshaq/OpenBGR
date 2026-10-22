@@ -93,7 +93,8 @@ body {
 .app-shell.no-result:not(.batch-active) .requires-image,
 .app-shell.no-result:not(.batch-active) .sidebar-right,
 .app-shell.no-result .view-cluster,
-.app-shell.no-result:not(.batch-active):not(.is-processing) .status-kv-time {
+.app-shell.no-result:not(.batch-active) .status-kv-time,
+.app-shell.is-processing .status-kv-time {
   display: none;
 }
 
@@ -635,17 +636,6 @@ body {
   color: var(--text);
 }
 
-.tier-sub {
-  font-size: 8px;
-  font-weight: 500;
-  letter-spacing: 0.06em;
-  color: var(--muted);
-}
-
-.tier-btn.active .tier-sub {
-  color: var(--accent);
-}
-
 .tier-btn .tier-dot {
   top: 6px;
   right: 6px;
@@ -978,13 +968,6 @@ body {
   border-color: var(--accent);
 }
 
-.px-sep {
-  font-family: var(--mono);
-  font-size: 12px;
-  color: var(--muted);
-  padding-bottom: 8px;
-}
-
 .aspect-lock-btn {
   display: flex;
   align-items: center;
@@ -1252,45 +1235,11 @@ body {
   letter-spacing: -0.02em;
 }
 
-.empty-tagline {
-  font-family: var(--mono);
-  font-size: 9px;
-  letter-spacing: 0.18em;
-  color: var(--muted);
-  margin-top: 5px;
-}
-
 .empty-desc {
   font-size: 13px;
   color: var(--muted);
   line-height: 1.6;
   margin-bottom: 20px;
-}
-
-.empty-badges {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 22px;
-}
-
-.empty-badge {
-  font-family: var(--mono);
-  font-size: 9px;
-  letter-spacing: 0.12em;
-  color: var(--fg);
-  border: 1px solid var(--border-strong);
-  background: var(--surface-2);
-  padding: 4px 9px;
-}
-
-.empty-hint {
-  font-family: var(--mono);
-  font-size: 10px;
-  letter-spacing: 0.04em;
-  color: var(--muted);
-  margin-top: 14px;
-  opacity: 0.75;
 }
 
 .empty-shortcuts {

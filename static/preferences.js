@@ -8,6 +8,7 @@ import {
   dom,
   prefs,
   apiFetch,
+  apiErrorDetail,
   DOT_TOOLTIPS,
   TIER_KEYS,
   ACCENTS,
@@ -240,12 +241,7 @@ export async function uninstallModel(target) {
       body: fd,
     });
     if (!response.ok) {
-      let detail = `HTTP ${response.status}`;
-      try {
-        const err = await response.json();
-        if (err?.detail) detail = err.detail;
-      } catch (_) {}
-      throw new Error(detail);
+      throw new Error(await apiErrorDetail(response));
     }
     const payload = await response.json();
     if (payload?.status) {
@@ -312,12 +308,7 @@ async function installModel(target) {
       body: fd,
     });
     if (!response.ok) {
-      let detail = `HTTP ${response.status}`;
-      try {
-        const err = await response.json();
-        if (err?.detail) detail = err.detail;
-      } catch (_) {}
-      throw new Error(detail);
+      throw new Error(await apiErrorDetail(response));
     }
     const payload = await response.json();
     if (payload?.status) {
@@ -466,8 +457,7 @@ export async function toggleQuickActionInstall() {
       body: fd,
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err?.detail || `HTTP ${res.status}`);
+      throw new Error(await apiErrorDetail(res));
     }
     const payload = await res.json();
     if (payload?.quick_action && state.serverStatus) {
@@ -510,7 +500,8 @@ export async function syncServerStatus(isInitialLoad = false, onSelectTier = nul
     }
     updateQuickActionInstallStatus();
     updateCacheIndicator();
-  } catch (_) {
+  } catch (err) {
+    console.warn("[OpenBGR] /api/status request failed:", err);
     dom.hwCompute.textContent = "LOCAL ENGINE";
   }
 }
@@ -584,7 +575,9 @@ export function applyPreferences(onSyncMenu) {
 
   try {
     window.pywebview?.api?.set_window_theme?.(prefs.theme);
-  } catch (_) {}
+  } catch (err) {
+    console.warn("[OpenBGR] Native window theme sync failed:", err);
+  }
 
   onSyncMenu?.();
 }

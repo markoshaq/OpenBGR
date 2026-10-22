@@ -10,8 +10,8 @@ import {
   prefs,
   apiFetch,
   TIER_KEYS,
-  savePrefs,
-  getDefaultPrefs,
+  setPref,
+  resetPrefs,
   getActiveTab,
   saveStateToActiveTab,
   normalizeTierKey,
@@ -175,32 +175,27 @@ if (dom.btnToggleConfirmClose) {
   dom.btnToggleConfirmClose.classList.toggle("active", state.confirmCloseTab);
   dom.btnToggleConfirmClose.addEventListener("click", () => {
     state.confirmCloseTab = !state.confirmCloseTab;
-    prefs.confirmClose = state.confirmCloseTab;
-    savePrefs();
+    setPref("confirmClose", state.confirmCloseTab);
     dom.btnToggleConfirmClose.classList.toggle("active", state.confirmCloseTab);
   });
 }
 
 dom.prefThemeDark?.addEventListener("click", () => {
-  prefs.theme = "dark";
-  savePrefs();
+  setPref("theme", "dark");
   applyPreferences(syncMenuBarState);
 });
 dom.prefThemeLight?.addEventListener("click", () => {
-  prefs.theme = "light";
-  savePrefs();
+  setPref("theme", "light");
   applyPreferences(syncMenuBarState);
 });
 dom.accentSwatches?.querySelectorAll(".swatch").forEach((sw) => {
   sw.addEventListener("click", () => {
-    prefs.accent = sw.getAttribute("data-accent") || "default";
-    savePrefs();
+    setPref("accent", sw.getAttribute("data-accent") || "default");
     applyPreferences(syncMenuBarState);
   });
 });
 dom.prefDefaultTier?.addEventListener("change", (e) => {
-  prefs.defaultTier = e.target.value;
-  savePrefs();
+  setPref("defaultTier", e.target.value);
   if (!state.sourceFile) {
     const targetTier =
       prefs.defaultTier !== "auto"
@@ -210,50 +205,42 @@ dom.prefDefaultTier?.addEventListener("change", (e) => {
   }
 });
 dom.prefDefaultFormat?.addEventListener("change", (e) => {
-  prefs.defaultFormat = e.target.value;
-  savePrefs();
+  setPref("defaultFormat", e.target.value);
   if (!state.resultBlob) {
     state.exportFormat = prefs.defaultFormat;
     updateExportTelemetry();
   }
 });
 dom.prefDefaultBackdrop?.addEventListener("change", (e) => {
-  prefs.defaultBackdrop = e.target.value;
-  savePrefs();
+  setPref("defaultBackdrop", e.target.value);
   if (!state.resultBlob) {
     applyBackdrop(prefs.defaultBackdrop);
   }
 });
 dom.prefQaTier?.addEventListener("change", (e) => {
-  prefs.qaTier = e.target.value;
-  savePrefs();
+  setPref("qaTier", e.target.value);
   syncQuickActionConfigToServer();
 });
 dom.prefQaSaveMode?.addEventListener("change", (e) => {
-  prefs.qaSaveMode = e.target.value;
-  savePrefs();
+  setPref("qaSaveMode", e.target.value);
   syncQuickActionConfigToServer();
 });
 dom.prefQaFormat?.addEventListener("change", (e) => {
-  prefs.qaFormat = e.target.value;
-  savePrefs();
+  setPref("qaFormat", e.target.value);
   syncQuickActionConfigToServer();
 });
 dom.btnToggleQaEdgeRefine?.addEventListener("click", () => {
-  prefs.qaEdgeRefine = !prefs.qaEdgeRefine;
-  savePrefs();
+  setPref("qaEdgeRefine", !prefs.qaEdgeRefine);
   dom.btnToggleQaEdgeRefine.classList.toggle("active", prefs.qaEdgeRefine);
   syncQuickActionConfigToServer();
 });
 dom.btnToggleQaClipboard?.addEventListener("click", () => {
-  prefs.qaCopyClipboard = !prefs.qaCopyClipboard;
-  savePrefs();
+  setPref("qaCopyClipboard", !prefs.qaCopyClipboard);
   dom.btnToggleQaClipboard.classList.toggle("active", prefs.qaCopyClipboard);
   syncQuickActionConfigToServer();
 });
 dom.btnToggleQaNotify?.addEventListener("click", () => {
-  prefs.qaNotify = !prefs.qaNotify;
-  savePrefs();
+  setPref("qaNotify", !prefs.qaNotify);
   dom.btnToggleQaNotify.classList.toggle("active", prefs.qaNotify);
   syncQuickActionConfigToServer();
 });
@@ -261,9 +248,8 @@ dom.btnQaInstallToggle?.addEventListener("click", () => {
   toggleQuickActionInstall();
 });
 dom.btnResetPrefs?.addEventListener("click", () => {
-  Object.assign(prefs, getDefaultPrefs());
+  resetPrefs();
   state.confirmCloseTab = prefs.confirmClose;
-  savePrefs();
   applyPreferences(syncMenuBarState);
   syncQuickActionConfigToServer();
   if (!state.resultBlob) {
@@ -575,7 +561,9 @@ async function openImageDialog() {
         ingestImageFile(files[0]);
       }
       return;
-    } catch (_) {}
+    } catch (err) {
+      console.warn("[OpenBGR] Native image dialog failed:", err);
+    }
   }
   triggerOpenFileDialog();
 }
@@ -723,7 +711,9 @@ async function readNativeClipboardImage() {
         type: "image/png",
       });
     }
-  } catch (_) {}
+  } catch (err) {
+    console.warn("[OpenBGR] Native clipboard read failed:", err);
+  }
   return null;
 }
 
@@ -879,17 +869,20 @@ window.openBGR = {
     if (state.sourceFile) toggleLoupe();
   },
   toggleTheme: () => {
-    prefs.theme = prefs.theme === "light" ? "dark" : "light";
-    savePrefs();
+    setPref("theme", prefs.theme === "light" ? "dark" : "light");
     applyPreferences(syncMenuBarState);
   },
   toggleFullscreen: () => {
     if (window.pywebview?.api?.toggle_fullscreen) {
       window.pywebview.api.toggle_fullscreen();
     } else if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen?.().catch(() => {});
+      document.documentElement.requestFullscreen?.().catch((err) => {
+        console.warn("[OpenBGR] Fullscreen request failed:", err);
+      });
     } else {
-      document.exitFullscreen?.().catch(() => {});
+      document.exitFullscreen?.().catch((err) => {
+        console.warn("[OpenBGR] Exiting fullscreen failed:", err);
+      });
     }
   },
   selectPreset: (tierKey) => {
@@ -954,52 +947,15 @@ window.addEventListener("keydown", (e) => {
   }
 
   if (e.metaKey || e.ctrlKey) {
-    const key = e.key.toLowerCase();
-    if (key === "t") {
+    const sc = MOD_SHORTCUTS.find(
+      (s) =>
+        s.keys.includes(e.key.toLowerCase()) &&
+        (s.shift === undefined || e.shiftKey === s.shift) &&
+        (!s.bothMods || (e.metaKey && e.ctrlKey))
+    );
+    if (sc) {
       e.preventDefault();
-      window.openBGR.newTab();
-    } else if (key === "o") {
-      e.preventDefault();
-      window.openBGR.openImage();
-    } else if (key === "e" || key === "s") {
-      e.preventDefault();
-      window.openBGR.exportImage();
-    } else if (key === "w") {
-      e.preventDefault();
-      window.openBGR.closeActiveTab();
-    } else if (key === "b") {
-      e.preventDefault();
-      window.openBGR.startBatch();
-    } else if (key === ",") {
-      e.preventDefault();
-      window.openBGR.openSettings("preferences");
-    } else if (key === "r") {
-      e.preventDefault();
-      window.openBGR.rerunSegmentation();
-    } else if (key === "tab") {
-      e.preventDefault();
-      window.openBGR.switchTabOffset(e.shiftKey ? -1 : 1);
-    } else if (/^[1-9]$/.test(key)) {
-      e.preventDefault();
-      window.openBGR.switchToTabAt(Number(key));
-    } else if (key === "0") {
-      e.preventDefault();
-      window.openBGR.zoomReset();
-    } else if (key === "=" || key === "+") {
-      e.preventDefault();
-      window.openBGR.zoomIn();
-    } else if (key === "-") {
-      e.preventDefault();
-      window.openBGR.zoomOut();
-    } else if (key === "c" && e.shiftKey) {
-      e.preventDefault();
-      window.openBGR.copyImage();
-    } else if (key === "f" && e.metaKey && e.ctrlKey) {
-      e.preventDefault();
-      window.openBGR.toggleFullscreen();
-    } else if (key === "q") {
-      e.preventDefault();
-      window.openBGR.quitApp();
+      sc.run(e);
     }
     return;
   }
@@ -1059,6 +1015,39 @@ async function refreshClipboardState() {
   syncMenuBarState();
 }
 window.addEventListener("focus", refreshClipboardState);
+
+/**
+ * Cmd/Ctrl-modified keyboard shortcuts, matched on the lowercased `e.key`.
+ * `shift` pins the required Shift state (undefined = ignored); `bothMods`
+ * requires Cmd and Ctrl together (macOS fullscreen convention).
+ */
+const MOD_SHORTCUTS = [
+  { keys: ["t"], run: () => window.openBGR.newTab() },
+  { keys: ["o"], run: () => window.openBGR.openImage() },
+  { keys: ["e", "s"], run: () => window.openBGR.exportImage() },
+  { keys: ["w"], run: () => window.openBGR.closeActiveTab() },
+  { keys: ["b"], run: () => window.openBGR.startBatch() },
+  { keys: [","], run: () => window.openBGR.openSettings("preferences") },
+  { keys: ["r"], run: () => window.openBGR.rerunSegmentation() },
+  {
+    keys: ["tab"],
+    run: (e) => window.openBGR.switchTabOffset(e.shiftKey ? -1 : 1),
+  },
+  {
+    keys: ["1", "2", "3", "4", "5", "6", "7", "8", "9"],
+    run: (e) => window.openBGR.switchToTabAt(Number(e.key)),
+  },
+  { keys: ["0"], run: () => window.openBGR.zoomReset() },
+  { keys: ["=", "+"], run: () => window.openBGR.zoomIn() },
+  { keys: ["-"], run: () => window.openBGR.zoomOut() },
+  { keys: ["c"], shift: true, run: () => window.openBGR.copyImage() },
+  {
+    keys: ["f"],
+    bothMods: true,
+    run: () => window.openBGR.toggleFullscreen(),
+  },
+  { keys: ["q"], run: () => window.openBGR.quitApp() },
+];
 
 // In-app menu bar initialization
 (function initStudioMenuBar() {

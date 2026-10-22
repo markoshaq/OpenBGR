@@ -5,7 +5,7 @@
 - Do not commit, tag, or push without being asked.
 - Version is single-sourced from `pyproject.toml`; bump with `python3 scripts/bump_version.py X.Y.Z`.
 - Runtime dependencies are single-sourced from `requirements.txt`; `pyproject.toml` reads them via setuptools dynamic metadata.
-- `CHANGELOG.md` holds one section for the current release only; release notes on GitHub are generated from it by `.github/workflows/release.yml` on a `v*` tag push.
+- `CHANGELOG.md` documents only the current work: one section that is replaced each release, never appended to; release notes on GitHub are generated from it by `.github/workflows/release.yml` on a `v*` tag push.
 
 ## Writing style
 - No em dashes or en dashes in docs, comments, or commit messages.

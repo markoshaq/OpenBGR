@@ -257,101 +257,117 @@ def main(argv: list[str] | None = None) -> None:
         threading.Timer(1.0, lambda: open_fallback_app_window(url)).start()
         uvicorn.run(app, host=host, port=port, log_level="warning", log_config=None)
     else:
-        server_thread: threading.Thread | None = None
-        if wait_for_server(host, port, timeout_s=0.15):
-            if not is_openbgr_server(url, timeout_s=3.0):
-                logger.error("[Server] Port %s is already in use by another application.", port)
-                logger.error("[Server] Close it or set PORT=<free port> and try again.")
-                raise SystemExit(1)
-            logger.info("[Server] Reusing existing OpenBGR server at %s.", url)
+        _run_desktop_window(url, _ensure_server(host, port, url))
+
+
+def _ensure_server(host: str, port: int, url: str) -> threading.Thread | None:
+    """
+    Returns a running OpenBGR server for `url`, reusing an existing instance or
+    starting Uvicorn on a daemon thread. Returns None when a live instance is
+    reused; raises SystemExit when the port is held by another application or
+    the server fails to start.
+    """
+    if wait_for_server(host, port, timeout_s=0.15):
+        if not is_openbgr_server(url, timeout_s=3.0):
+            logger.error("[Server] Port %s is already in use by another application.", port)
+            logger.error("[Server] Close it or set PORT=<free port> and try again.")
+            raise SystemExit(1)
+        logger.info("[Server] Reusing existing OpenBGR server at %s.", url)
+        return None
+
+    # Start FastAPI server in a background daemon thread and open native desktop window
+    server_thread = threading.Thread(
+        target=lambda: uvicorn.run(app, host=host, port=port, log_level="warning", log_config=None),
+        daemon=True,
+    )
+    server_thread.start()
+    if wait_for_server(host, port):
+        if not is_openbgr_server(url):
+            logger.error("[Server] Port %s is already in use by another application.", port)
+            logger.error("[Server] Close it or set PORT=<free port> and try again.")
+            raise SystemExit(1)
+    elif not server_thread.is_alive():
+        logger.error("[Server] Uvicorn failed to start; see errors above.")
+        raise SystemExit(1)
+    return server_thread
+
+
+def _run_desktop_window(url: str, server_thread: threading.Thread | None) -> None:
+    """
+    Opens the native pywebview window (with menus, icon, and OS 'Open With'
+    handlers) and blocks in its run loop until the user closes it. Falls back
+    to a plain browser window when the native window cannot be created.
+    """
+    try:
+        set_macos_app_name("OpenBGR")
+        import webview
+
+        webview.settings["SHOW_DEFAULT_MENUS"] = False
+        api_bridge = DesktopApi()
+        set_desktop_api(api_bridge)
+        install_macos_open_documents_handler()
+        install_macos_open_files_delegate()
+        icon_path = ensure_app_icon()
+
+        window_kwargs: dict[str, Any] = {}
+        saved_geometry = load_window_state()
+        if saved_geometry.get("width") and saved_geometry.get("height"):
+            window_kwargs["width"] = max(980, saved_geometry["width"])
+            window_kwargs["height"] = max(640, saved_geometry["height"])
+            if saved_geometry.get("x") is not None:
+                window_kwargs["x"] = saved_geometry["x"]
+            if saved_geometry.get("y") is not None:
+                window_kwargs["y"] = saved_geometry["y"]
         else:
-            # Start FastAPI server in a background daemon thread and open native desktop window
-            server_thread = threading.Thread(
-                target=lambda: uvicorn.run(
-                    app, host=host, port=port, log_level="warning", log_config=None
-                ),
-                daemon=True,
-            )
-            server_thread.start()
-            if wait_for_server(host, port):
-                if not is_openbgr_server(url):
-                    logger.error("[Server] Port %s is already in use by another application.", port)
-                    logger.error("[Server] Close it or set PORT=<free port> and try again.")
-                    raise SystemExit(1)
-            elif not server_thread.is_alive():
-                logger.error("[Server] Uvicorn failed to start; see errors above.")
-                raise SystemExit(1)
+            window_kwargs["width"] = 1380
+            window_kwargs["height"] = 860
 
-        try:
-            set_macos_app_name("OpenBGR")
-            import webview
+        window = webview.create_window(
+            title="OpenBGR",
+            url=url,
+            min_size=(980, 640),
+            background_color="#09090b",
+            js_api=api_bridge,
+            **window_kwargs,
+        )
+        api_bridge.window = window
+        attach_window_state_persistence(window)
+        ensure_window_on_screen(window)
+        configure_macos_native_window_and_menus(window)
 
-            webview.settings["SHOW_DEFAULT_MENUS"] = False
-            api_bridge = DesktopApi()
-            set_desktop_api(api_bridge)
-            install_macos_open_documents_handler()
-            install_macos_open_files_delegate()
-            icon_path = ensure_app_icon()
+        # On macOS and Linux, attach the native OS menu bar; on Windows,
+        # WinForms MenuStrip clashes with WebView2 DockStyle.Fill, so Windows
+        # uses the themed in-app Studio Menu Bar in the top header.
+        native_menus = None
+        if platform.system() != "Windows":
+            try:
+                native_menus = build_native_menus(window)
+            except Exception as menu_exc:
+                logger.warning("[Desktop] Native menu bar unavailable (%s).", menu_exc)
+                native_menus = None
 
-            window_kwargs: dict[str, Any] = {}
-            saved_geometry = load_window_state()
-            if saved_geometry.get("width") and saved_geometry.get("height"):
-                window_kwargs["width"] = max(980, saved_geometry["width"])
-                window_kwargs["height"] = max(640, saved_geometry["height"])
-                if saved_geometry.get("x") is not None:
-                    window_kwargs["x"] = saved_geometry["x"]
-                if saved_geometry.get("y") is not None:
-                    window_kwargs["y"] = saved_geometry["y"]
-            else:
-                window_kwargs["width"] = 1380
-                window_kwargs["height"] = 860
+        start_kwargs: dict[str, Any] = {}
+        if native_menus:
+            start_kwargs["menu"] = native_menus
+        if icon_path:
+            start_kwargs["icon"] = icon_path
 
-            window = webview.create_window(
-                title="OpenBGR",
-                url=url,
-                min_size=(980, 640),
-                background_color="#09090b",
-                js_api=api_bridge,
-                **window_kwargs,
-            )
-            api_bridge.window = window
-            attach_window_state_persistence(window)
-            ensure_window_on_screen(window)
-            configure_macos_native_window_and_menus(window)
-
-            # On macOS and Linux, attach the native OS menu bar; on Windows,
-            # WinForms MenuStrip clashes with WebView2 DockStyle.Fill, so Windows
-            # uses the themed in-app Studio Menu Bar in the top header.
-            native_menus = None
-            if platform.system() != "Windows":
-                try:
-                    native_menus = build_native_menus(window)
-                except Exception as menu_exc:
-                    logger.warning("[Desktop] Native menu bar unavailable (%s).", menu_exc)
-                    native_menus = None
-
-            start_kwargs: dict[str, Any] = {}
-            if native_menus:
-                start_kwargs["menu"] = native_menus
-            if icon_path:
-                start_kwargs["icon"] = icon_path
-
-            webview.start(**start_kwargs)
-            # When the native desktop window is closed by the user, terminate
-            # the process tree immediately so no background server or worker
-            # threads remain running. As in _graceful_exit, skip unload():
-            # it can block on a whole first-run model download, and process
-            # teardown reclaims device memory anyway.
-            logger.info("[Desktop] Window closed; shutting down.")
-            MANAGER.request_cancel()
-            os._exit(0)
-        except Exception as exc:
-            logger.warning("[Desktop] Native window unavailable (%s); opening app window...", exc)
-            open_fallback_app_window(url)
-            # Keep the daemon server thread alive; without this, main() returns
-            # and the browser window opens a dead URL (Ctrl+C exits the join).
-            if server_thread is not None:
-                server_thread.join()
+        webview.start(**start_kwargs)
+        # When the native desktop window is closed by the user, terminate
+        # the process tree immediately so no background server or worker
+        # threads remain running. As in _graceful_exit, skip unload():
+        # it can block on a whole first-run model download, and process
+        # teardown reclaims device memory anyway.
+        logger.info("[Desktop] Window closed; shutting down.")
+        MANAGER.request_cancel()
+        os._exit(0)
+    except Exception as exc:
+        logger.warning("[Desktop] Native window unavailable (%s); opening app window...", exc)
+        open_fallback_app_window(url)
+        # Keep the daemon server thread alive; without this, main() returns
+        # and the browser window opens a dead URL (Ctrl+C exits the join).
+        if server_thread is not None:
+            server_thread.join()
 
 
 if __name__ == "__main__":

@@ -1,14 +1,10 @@
 # Changelog
 
-## [0.11.3]
+## [0.12.0]
 
-- Mutating API endpoints now require a per-session token, blocking drive-by writes and deletes from other sites
-- Edge refinement on 24MP photos: separable filters up to 67x faster; despill 4.0s down to 1.6s, defringe 2.1s down to 1.5s
-- Batch ZIP streams files to disk (~2GB peak down to one at a time) and reports the 4 GiB limit instead of writing a corrupt archive
-- FP16 model compaction streams per-tensor: ~1.3GB peak RAM down to ~424MB
-- Native file dialogs use one-shot HTTP grants: no base64, no 48 MB limit, parallel multi-file fetches
-- Fixed Restart exiting instead of restarting, and Quick Action batches duplicating files after a delegation timeout or misreporting a cancel as failures
-- /api/refine calls serialize and coalesce instead of stacking ~1GB of composes per toggle click
-- macOS clipboard probe reads the pasteboard counter instead of spawning osascript per focus (172ms down to microseconds); Finder-copied images now paste
-- Fixed stuck pan/split drag after off-window mouse release and dead tabs from non-image drops
-- Misc: cheaper preview/loupe/batch-panel updates, no runaway timers or .venv walk on /api/status, slower pending-file poll, bounded caches, batch saves off the event loop
+- Batch saves now surface the real failure reason (HTTP detail, picker denial, ZIP write error) instead of a generic failed status
+- Refine and batch-request errors show the server's detail message rather than a bare status code
+- Frontend unit coverage grows from 9 to 34 tests: tab lifecycle, batch queue and run/cancel paths, byte-level ZIP output, export passthrough
+- Internal: data-driven keyboard shortcut table, split the batch run, tab switch, segmentation, and app entrypoint into smaller helpers, funnel preference writes through one helper
+- Removed dead CSS rules and an unused test constant
+- ELAPSED in the status bar only appears after a run finishes; the live timer remains on the processing overlay

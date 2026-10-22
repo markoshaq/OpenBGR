@@ -8,6 +8,7 @@ import {
   dom,
   prefs,
   apiFetch,
+  apiErrorDetail,
   masterCutoutImg,
   getActiveTab,
   defaultTierForNewTab,
@@ -298,7 +299,7 @@ export function closeTabImmediate(tabId) {
       state.abortController.abort();
       state.abortController = null;
     }
-    apiFetch("/api/cancel", { method: "POST" }).catch(() => {});
+    postCancel();
     state.isProcessing = false;
     dom.busyOverlay.classList.remove("active");
     stopJobProgressPolling();
@@ -313,7 +314,7 @@ export function closeTabImmediate(tabId) {
       state.abortController.abort();
       state.abortController = null;
     }
-    apiFetch("/api/cancel", { method: "POST" }).catch(() => {});
+    postCancel();
     state.isProcessing = false;
     dom.busyOverlay.classList.remove("active");
     stopJobProgressPolling();
@@ -371,18 +372,8 @@ export function resetToEmptyWorkspace() {
   syncMenuBarState();
 }
 
-/** Switches the workspace to a tab, restoring its image, result, zoom, and mode. */
-export async function switchToTab(tabId) {
-  if (state.activeTabId && state.activeTabId !== tabId) {
-    saveStateToActiveTab();
-  }
-  // Invalidate any debounced preview render still queued for the old tab so a
-  // late canvas encode can't paint over the incoming tab's image.
-  state.previewRenderToken++;
-
-  const tab = state.tabs.find((t) => t.id === tabId);
-  if (!tab) return;
-
+/** Copies a tab record's fields back into the live `state` object. */
+function restoreTabState(tab) {
   state.activeTabId = tab.id;
   state.sourceFile = tab.sourceFile;
   state.originalObjectUrl = tab.originalObjectUrl;
@@ -410,10 +401,10 @@ export async function switchToTab(tabId) {
   state.zoom = tab.zoom ?? 1;
   state.panX = tab.panX ?? 0;
   state.panY = tab.panY ?? 0;
-  applyZoomTransform();
+}
 
-  renderTabBar();
-
+/** Syncs the sidebar controls (tier, edge toggles, cutoff) to restored state. */
+function syncTabControls() {
   document.querySelectorAll("#tierSelector .tier-btn").forEach((btn) => {
     btn.classList.toggle("active", btn.getAttribute("data-tier") === state.tier);
   });
@@ -428,32 +419,28 @@ export async function switchToTab(tabId) {
   syncFormatButtons();
   updateDestUI();
   applyBackdrop(state.activeBackdrop);
+}
 
-  if (tab.kind === "batch") {
-    updateExportTelemetry();
-    renderBatchPanel(tab);
-    dom.appShell?.classList.add("no-image");
-    dom.appShell?.classList.add("no-result");
-    dom.appShell?.classList.add("batch-active");
-    dom.btnCopy.classList.add("disabled");
-    dom.statFile.textContent = `BATCH - ${tab.batchFiles.length} FILE${tab.batchFiles.length === 1 ? "" : "S"}`;
-    dom.statDim.textContent = "--";
-    dom.statTime.textContent = tab.elapsedText || "--";
-    dom.appShell?.classList.toggle(
-      "batch-elapsed",
-      Boolean(tab.elapsedText && tab.elapsedText !== "--")
-    );
-    syncMenuBarState();
-    return;
-  }
-  dom.batchPanel?.classList.remove("active");
-  dom.appShell?.classList.remove("batch-active");
+/** Renders a switched-to batch tab: queue panel, stats, and app-shell flags. */
+function switchToBatchTab(tab) {
+  updateExportTelemetry();
+  renderBatchPanel(tab);
+  dom.appShell?.classList.add("no-image");
+  dom.appShell?.classList.add("no-result");
+  dom.appShell?.classList.add("batch-active");
+  dom.btnCopy.classList.add("disabled");
+  dom.statFile.textContent = `BATCH - ${tab.batchFiles.length} FILE${tab.batchFiles.length === 1 ? "" : "S"}`;
+  dom.statDim.textContent = "--";
+  dom.statTime.textContent = tab.elapsedText || "--";
+  dom.appShell?.classList.toggle(
+    "batch-elapsed",
+    Boolean(tab.elapsedText && tab.elapsedText !== "--")
+  );
+  syncMenuBarState();
+}
 
-  if (!tab.sourceFile) {
-    resetToEmptyWorkspace();
-    return;
-  }
-
+/** Restores an image tab's stage: source/result images, stats, and view mode. */
+async function switchToImageTab(tab) {
   dom.emptyState.style.display = "none";
   dom.stage.classList.add("visible");
   dom.beforeImg.onload = () => {
@@ -509,6 +496,37 @@ export async function switchToTab(tabId) {
     setViewMode("original");
   }
   syncMenuBarState();
+}
+
+/** Switches the workspace to a tab, restoring its image, result, zoom, and mode. */
+export async function switchToTab(tabId) {
+  if (state.activeTabId && state.activeTabId !== tabId) {
+    saveStateToActiveTab();
+  }
+  // Invalidate any debounced preview render still queued for the old tab so a
+  // late canvas encode can't paint over the incoming tab's image.
+  state.previewRenderToken++;
+
+  const tab = state.tabs.find((t) => t.id === tabId);
+  if (!tab) return;
+
+  restoreTabState(tab);
+  applyZoomTransform();
+  renderTabBar();
+  syncTabControls();
+
+  if (tab.kind === "batch") {
+    switchToBatchTab(tab);
+    return;
+  }
+  dom.batchPanel?.classList.remove("active");
+  dom.appShell?.classList.remove("batch-active");
+
+  if (!tab.sourceFile) {
+    resetToEmptyWorkspace();
+    return;
+  }
+  await switchToImageTab(tab);
 }
 
 /** Loads a File/Blob into the current (or a new) tab and shows the loaded state. */
@@ -680,6 +698,13 @@ export function syncMenuBarState() {
   if (activeTabNow?.kind === "batch") syncBatchPanelChrome(activeTabNow);
 }
 
+/** Fire-and-forget job cancel; warns when the server cannot be reached. */
+function postCancel() {
+  apiFetch("/api/cancel", { method: "POST" }).catch((err) =>
+    console.warn("[OpenBGR] Cancel request failed:", err)
+  );
+}
+
 /** Aborts the in-flight segmentation fetch and tells the server to drop the job. */
 export function cancelProcessing() {
   if (state.batch.running) {
@@ -689,7 +714,7 @@ export function cancelProcessing() {
     state.abortController.abort();
     state.abortController = null;
   }
-  apiFetch("/api/cancel", { method: "POST" }).catch(() => {});
+  postCancel();
   state.isProcessing = false;
   dom.busyOverlay.classList.remove("active");
   stopJobProgressPolling();
@@ -832,25 +857,49 @@ export function stopJobProgressPolling() {
   setBusyProgress(null);
 }
 
-/** POSTs the active image to `/api/remove-bg` and applies the returned cutout + job id. */
-export async function runSegmentation() {
-  if (!state.sourceFile) return;
+/** Builds the `/api/remove-bg` multipart body shared by single and batch runs. */
+export function buildRemoveBgForm(file, tier, defringe, despill) {
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("tier", tier);
+  fd.append("defringe", defringe ? "true" : "false");
+  fd.append("despill", despill ? "true" : "false");
+  return fd;
+}
+
+/** Persists the server-reported inference time as the ETA baseline for `tierKey`. */
+export function recordInferenceEstimate(response, tierKey) {
+  const inferenceMs = parseFloat(
+    response.headers.get("X-Inference-Time-Ms") || "0"
+  );
+  if (inferenceMs > 0) {
+    prefs.inferEstimates = prefs.inferEstimates || {};
+    prefs.inferEstimates[tierKey] = inferenceMs;
+    savePrefs();
+  }
+}
+
+/** Reports why a run must not start; returns true when blocked. */
+function segmentationBlocked() {
   if (isModelInstallInProgress()) {
     setError(
       "A model download is in progress. Wait for it to finish before processing."
     );
-    return;
+    return true;
   }
-
   const tierInfo = state.serverStatus?.tiers?.[state.tier];
   if (tierInfo && !tierInfo.cached && !navigator.onLine) {
     setError("Selected model is not cached on disk and device is currently offline.");
-    return;
+    return true;
   }
+  return false;
+}
 
+/** Aborts any in-flight job, marks the UI busy, and starts progress/elapsed pollers. */
+function beginSegmentationUI(tierInfo) {
   if (state.abortController) {
     state.abortController.abort();
-    apiFetch("/api/cancel", { method: "POST" }).catch(() => {});
+    postCancel();
   }
   const controller = new AbortController();
   state.abortController = controller;
@@ -866,16 +915,73 @@ export async function runSegmentation() {
   syncMenuBarState();
 
   const isCached = tierInfo ? tierInfo.cached : true;
-
   dom.busyTitle.textContent = isCached
     ? "PROCESSING IMAGE"
     : "PROCESSING IMAGE - FETCHING MODEL WEIGHTS";
+  return controller;
+}
 
-  const formData = new FormData();
-  formData.append("file", state.sourceFile);
-  formData.append("tier", state.tier);
-  formData.append("defringe", state.defringe ? "true" : "false");
-  formData.append("despill", state.despill ? "true" : "false");
+/** Applies a successful `/api/remove-bg` response: headers, blob, URLs, stage. */
+async function applySegmentationResult(response, controller) {
+  recordInferenceEstimate(response, state.tier);
+  const width = parseInt(response.headers.get("X-Image-Width") || "0", 10);
+  const height = parseInt(response.headers.get("X-Image-Height") || "0", 10);
+  const jobId = parseInt(response.headers.get("X-Refine-Job-Id") || "0", 10);
+
+  const blob = await response.blob();
+  if (controller.signal.aborted) return;
+
+  state.resultBlob = blob;
+  state.refineJobId = jobId || null;
+  state.naturalWidth = width;
+  state.naturalHeight = height;
+  state.exportWidth = Math.max(1, Math.round(width * state.exportScale));
+  state.exportHeight = Math.max(1, Math.round(height * state.exportScale));
+
+  if (
+    state.previewObjectUrl &&
+    state.previewObjectUrl !== state.resultObjectUrl
+  ) {
+    URL.revokeObjectURL(state.previewObjectUrl);
+  }
+  state.previewBlob = null;
+  state.previewObjectUrl = null;
+  if (state.resultObjectUrl) {
+    URL.revokeObjectURL(state.resultObjectUrl);
+  }
+  state.resultObjectUrl = URL.createObjectURL(state.resultBlob);
+
+  await new Promise((resolve) => {
+    masterCutoutImg.onload = resolve;
+    masterCutoutImg.onerror = resolve;
+    masterCutoutImg.src = state.resultObjectUrl;
+  });
+
+  dom.appShell?.classList.remove("no-result");
+  dom.btnDownload.classList.remove("disabled");
+  dom.btnCopy.classList.remove("disabled");
+
+  updateExportTelemetry();
+  const finishedMs = stopElapsedTicker();
+  dom.statTime.textContent =
+    finishedMs != null ? formatElapsed(finishedMs) : "DONE";
+
+  setViewMode("split");
+  saveStateToActiveTab();
+  syncServerStatus(false);
+}
+
+/** POSTs the active image to `/api/remove-bg` and applies the returned cutout + job id. */
+export async function runSegmentation() {
+  if (!state.sourceFile || segmentationBlocked()) return;
+  const tierInfo = state.serverStatus?.tiers?.[state.tier];
+  const controller = beginSegmentationUI(tierInfo);
+  const formData = buildRemoveBgForm(
+    state.sourceFile,
+    state.tier,
+    state.defringe,
+    state.despill
+  );
 
   try {
     const response = await apiFetch("/api/remove-bg", {
@@ -883,72 +989,10 @@ export async function runSegmentation() {
       body: formData,
       signal: controller.signal,
     });
-
     if (!response.ok) {
-      let detail = `HTTP ${response.status}`;
-      try {
-        const errPayload = await response.json();
-        if (errPayload.detail) detail = errPayload.detail;
-      } catch (_) {}
-      throw new Error(detail);
+      throw new Error(await apiErrorDetail(response));
     }
-
-    const inferenceMs = parseFloat(
-      response.headers.get("X-Inference-Time-Ms") || "0"
-    );
-    if (inferenceMs > 0) {
-      prefs.inferEstimates = prefs.inferEstimates || {};
-      prefs.inferEstimates[state.tier] = inferenceMs;
-      savePrefs();
-    }
-    const width = parseInt(response.headers.get("X-Image-Width") || "0", 10);
-    const height = parseInt(response.headers.get("X-Image-Height") || "0", 10);
-    const jobId = parseInt(
-      response.headers.get("X-Refine-Job-Id") || "0",
-      10
-    );
-
-    const blob = await response.blob();
-    if (controller.signal.aborted) return;
-
-    state.resultBlob = blob;
-    state.refineJobId = jobId || null;
-    state.naturalWidth = width;
-    state.naturalHeight = height;
-    state.exportWidth = Math.max(1, Math.round(width * state.exportScale));
-    state.exportHeight = Math.max(1, Math.round(height * state.exportScale));
-
-    if (
-      state.previewObjectUrl &&
-      state.previewObjectUrl !== state.resultObjectUrl
-    ) {
-      URL.revokeObjectURL(state.previewObjectUrl);
-    }
-    state.previewBlob = null;
-    state.previewObjectUrl = null;
-    if (state.resultObjectUrl) {
-      URL.revokeObjectURL(state.resultObjectUrl);
-    }
-    state.resultObjectUrl = URL.createObjectURL(state.resultBlob);
-
-    await new Promise((resolve) => {
-      masterCutoutImg.onload = resolve;
-      masterCutoutImg.onerror = resolve;
-      masterCutoutImg.src = state.resultObjectUrl;
-    });
-
-    dom.appShell?.classList.remove("no-result");
-    dom.btnDownload.classList.remove("disabled");
-    dom.btnCopy.classList.remove("disabled");
-
-    updateExportTelemetry();
-    const finishedMs = stopElapsedTicker();
-    dom.statTime.textContent =
-      finishedMs != null ? formatElapsed(finishedMs) : "DONE";
-
-    setViewMode("split");
-    saveStateToActiveTab();
-    syncServerStatus(false);
+    await applySegmentationResult(response, controller);
   } catch (err) {
     if (err.name === "AbortError") return;
     stopElapsedTicker();
@@ -1057,7 +1101,9 @@ export async function applyEdgeRefinement() {
 
         updateLiveStagePreview();
         saveStateToActiveTab();
-      } catch (_) {}
+      } catch (err) {
+        console.warn("[OpenBGR] Edge refinement request failed:", err);
+      }
     } while (state.refinePending);
   } finally {
     state.refineInFlight = false;

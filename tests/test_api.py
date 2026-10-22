@@ -25,8 +25,6 @@ import openbgr.desktop_bridge as bridge_mod
 import openbgr.models as models_mod
 import openbgr.pipeline as pipeline_mod
 
-ROOT_DIR = Path(__file__).resolve().parent.parent
-
 
 class TestApiContracts(unittest.TestCase):
     """Direct-call contract tests for the OpenBGR server endpoints."""

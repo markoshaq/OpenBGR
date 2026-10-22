@@ -8,6 +8,7 @@ import {
   state,
   dom,
   apiFetch,
+  apiErrorDetail,
   masterCutoutImg,
   getActiveTab,
   saveStateToActiveTab,
@@ -335,7 +336,9 @@ async function renderLivePreview(token) {
           : "...";
     }
     saveStateToActiveTab();
-  } catch (_) {}
+  } catch (err) {
+    console.warn("[OpenBGR] Live preview render failed:", err);
+  }
 }
 
 /** Marks the active export-format segment button. */
@@ -390,7 +393,9 @@ export async function chooseOutputFolder(onBatchUpdate) {
     } else if (res?.error) {
       setError(res.error);
     }
-  } catch (_) {}
+  } catch (err) {
+    console.warn("[OpenBGR] Output directory picker failed:", err);
+  }
 }
 
 /** Updates the dims/size/format readouts in the export panel. */
@@ -510,13 +515,17 @@ async function postSaveFile(dir, filename, blob) {
   return apiFetch("/api/save", { method: "POST", body: fd });
 }
 
-/** Writes one exported batch file to the batch's output directory (or downloads it). */
+/**
+ * Writes one exported batch file to the batch's output directory.
+ * Returns `{ ok, detail? }` so callers can surface the server's failure reason.
+ */
 export async function saveBatchFile(dir, filename, blob) {
   try {
     const res = await postSaveFile(dir, filename, blob);
-    return res.ok;
-  } catch (_) {
-    return false;
+    if (res.ok) return { ok: true };
+    return { ok: false, detail: await apiErrorDetail(res) };
+  } catch (err) {
+    return { ok: false, detail: err?.message || "Save request failed." };
   }
 }
 
@@ -546,12 +555,10 @@ export async function exportActiveImage() {
 
     if (state.outputDir && window.pywebview?.api?.choose_output_dir) {
       const res = await postSaveFile(state.outputDir, fileName, exportBlob);
-      const payload = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(
-          payload?.detail || "Failed to write to the output folder."
-        );
+        throw new Error(await apiErrorDetail(res));
       }
+      const payload = await res.json().catch(() => ({}));
       setSuccess(`SAVED: ${payload.name || fileName} IN ${state.outputDir}`);
       return;
     }
