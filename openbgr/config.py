@@ -357,11 +357,12 @@ def format_device_label(device: torch.device) -> str:
 def select_recommended_tier(device: torch.device) -> str:
     """
     Heuristically chooses the default model at startup:
-    - CPU hosts default to 'lite' (1024x1024 BiRefNet_lite) for responsive latency.
+    - CPU hosts and machines with < 10 GB of unified/system RAM default to
+      'lite' (1024x1024 BiRefNet_lite) to avoid unified-memory pressure.
     - Dedicated CUDA GPUs with >= 16 GB VRAM default to 'hr' (2048x2048 BiRefNet_HR).
     - All other GPU/MPS accelerators default to 'general' (1024x1024 BiRefNet Swin-L).
     """
-    if device.type == "cpu":
+    if device.type == "cpu" or SYSTEM_MEMORY_GB < 10.0:
         return "lite"
     if device.type == "cuda":
         try:

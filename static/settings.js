@@ -20,6 +20,7 @@ import {
   toggleOfflineMode,
   chooseImportFolder,
   importModelFromFolder,
+  syncImportButton,
 } from "./preferences.js";
 import { selectTier, syncMenuBarState } from "./tabs.js";
 
@@ -185,8 +186,12 @@ export function initSettings() {
   dom.btnChooseImportFolder?.addEventListener("click", () => {
     chooseImportFolder();
   });
+  dom.importFolderPath?.addEventListener("input", () => {
+    syncImportButton();
+  });
   dom.btnImportModel?.addEventListener("click", () => {
     importModelFromFolder();
   });
+  syncImportButton();
   dom.btnResetPrefs?.addEventListener("click", resetAllPrefs);
 }

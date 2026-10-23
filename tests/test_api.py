@@ -781,6 +781,72 @@ class TestApiEndpoints(unittest.TestCase):
             )
             self.assertEqual(res.status_code, 400)
 
+    def test_models_import_auto_detect_over_http(self) -> None:
+        """`POST /api/models/import` without `target` detects and imports recognized checkpoints."""
+        with tempfile.TemporaryDirectory() as src, tempfile.TemporaryDirectory() as cache:
+            src_dir = Path(src)
+            # Checkpoint identified via config.json _name_or_path.
+            lite_dir = src_dir / "checkpoint-a"
+            lite_dir.mkdir()
+            (lite_dir / "model.safetensors").write_bytes(b"w1")
+            (lite_dir / "config.json").write_text(
+                '{"_name_or_path": "ZhengPeng7/BiRefNet_lite"}', encoding="utf-8"
+            )
+            # Checkpoint identified via its folder name.
+            hr_dir = src_dir / "BiRefNet_HR"
+            hr_dir.mkdir()
+            (hr_dir / "model.safetensors").write_bytes(b"w2")
+            (hr_dir / "config.json").write_text("{}", encoding="utf-8")
+            # Checkpoint-looking folder that matches no known model is skipped.
+            stray_dir = src_dir / "some-other-model"
+            stray_dir.mkdir()
+            (stray_dir / "model.safetensors").write_bytes(b"w3")
+            (stray_dir / "config.json").write_text(
+                '{"_name_or_path": "unrelated/repo"}', encoding="utf-8"
+            )
+
+            bridge_mod.grant_output_dir(src_dir)
+            with (
+                patch.object(models_mod, "HF_HUB_CACHE", cache),
+                patch.object(api_mod, "compact_model_cache_fp16", return_value=0),
+            ):
+                res = self.client.post("/api/models/import", data={"path": src})
+                self.assertEqual(res.status_code, 200)
+                imported = res.json()["imported"]
+                self.assertEqual({e["target"] for e in imported}, {"lite", "hr"})
+                for repo in ("BiRefNet_lite", "BiRefNet_HR"):
+                    snap = (
+                        Path(cache)
+                        / f"models--ZhengPeng7--{repo}"
+                        / "snapshots"
+                        / "manual"
+                        / "model.safetensors"
+                    )
+                    self.assertTrue(snap.is_file(), f"missing snapshot {snap}")
+
+                # A picked folder that is itself a checkpoint imports directly.
+                flat = src_dir / "flat" / "BiRefNet-portrait"
+                flat.mkdir(parents=True)
+                (flat / "model.safetensors").write_bytes(b"w4")
+                (flat / "config.json").write_text("{}", encoding="utf-8")
+                bridge_mod.grant_output_dir(flat)
+                res = self.client.post("/api/models/import", data={"path": str(flat)})
+                self.assertEqual(res.status_code, 200)
+                self.assertEqual([e["target"] for e in res.json()["imported"]], ["portrait"])
+
+            # No checkpoint folders at all -> 400.
+            empty = src_dir / "empty"
+            empty.mkdir()
+            (empty / "notes.txt").write_text("nothing here", encoding="utf-8")
+            bridge_mod.grant_output_dir(empty)
+            res = self.client.post("/api/models/import", data={"path": str(empty)})
+            self.assertEqual(res.status_code, 400)
+
+            # Checkpoint present but unidentifiable -> 400.
+            bridge_mod.grant_output_dir(stray_dir)
+            res = self.client.post("/api/models/import", data={"path": str(stray_dir)})
+            self.assertEqual(res.status_code, 400)
+
     def test_quick_action_config_over_http(self) -> None:
         """`GET /api/quick-action-config` returns the persisted config and install status."""
         res = self.client.get("/api/quick-action-config")
@@ -788,6 +854,62 @@ class TestApiEndpoints(unittest.TestCase):
         data = res.json()
         self.assertIn("installed", data)
         self.assertIn("platform", data)
+
+    def test_extract_and_encode_animation_over_http(self) -> None:
+        """`/api/extract-frames` and `/api/encode-animation` extract and re-encode multi-frame GIF/WebP."""
+        f1 = Image.new("RGBA", (20, 16), (255, 0, 0, 255))
+        f2 = Image.new("RGBA", (20, 16), (0, 255, 0, 128))
+        gif_bytes = pipeline_mod.encode_animated_image([f1, f2], [70, 90], fmt="gif")
+        png_buf1 = io.BytesIO()
+        f1.save(png_buf1, format="PNG")
+        png_bytes = png_buf1.getvalue()
+        png_buf2 = io.BytesIO()
+        f2.save(png_buf2, format="PNG")
+        png2_bytes = png_buf2.getvalue()
+        f1.close()
+        f2.close()
+
+        # Static PNG reports animated=False.
+        res_static = self.client.post(
+            "/api/extract-frames",
+            files={"file": ("static.png", png_bytes, "image/png")},
+        )
+        self.assertEqual(res_static.status_code, 200)
+        self.assertFalse(res_static.json()["animated"])
+
+        # Multi-frame GIF returns base64 PNG frames and durations.
+        res_anim = self.client.post(
+            "/api/extract-frames",
+            files={"file": ("anim.gif", gif_bytes, "image/gif")},
+        )
+        self.assertEqual(res_anim.status_code, 200)
+        body = res_anim.json()
+        self.assertTrue(body["animated"])
+        self.assertEqual(body["frame_count"], 2)
+        self.assertEqual(len(body["frames"]), 2)
+
+        # Re-encode frames as GIF and WebP via /api/encode-animation.
+        for fmt, expected_mime in (("gif", "image/gif"), ("webp", "image/webp")):
+            enc_res = self.client.post(
+                "/api/encode-animation",
+                files=[
+                    ("files", ("f1.png", png_bytes, "image/png")),
+                    ("files", ("f2.png", png2_bytes, "image/png")),
+                ],
+                data={"durations": "[80, 120]", "format": fmt},
+            )
+            self.assertEqual(enc_res.status_code, 200)
+            self.assertEqual(enc_res.headers["content-type"], expected_mime)
+            with Image.open(io.BytesIO(enc_res.content)) as out_im:
+                self.assertEqual(getattr(out_im, "n_frames", 1), 2)
+
+        # Bad format rejected with HTTP 400.
+        bad_res = self.client.post(
+            "/api/encode-animation",
+            files=[("files", ("f1.png", png_bytes, "image/png"))],
+            data={"durations": "[80]", "format": "mp4"},
+        )
+        self.assertEqual(bad_res.status_code, 400)
 
 
 if __name__ == "__main__":

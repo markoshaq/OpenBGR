@@ -95,6 +95,7 @@
                 <span class="tier-label" id="tierDropdownLabel">GENERAL</span>
                 <span class="tier-tech" id="tierDropdownTech">BiRefNet</span>
               </div>
+              <div class="tier-desc" id="tierDropdownDesc">All-rounder for everyday photos.</div>
               <span class="tier-caret" aria-hidden="true"></span>
             </button>
             <div class="model-list" id="tierSelector">
@@ -292,6 +293,48 @@
           </div>
         </div>
 
+        <div class="sidebar-section anim-only" id="animTrimSection">
+          <div class="section-header">FRAME RANGE</div>
+          <div class="px-grid anim-trim-grid">
+            <div class="px-field">
+              <label for="animStartFrameInput">START FRAME</label>
+              <div class="num-stepper">
+                <input
+                  type="number"
+                  class="px-input"
+                  id="animStartFrameInput"
+                  min="1"
+                  max="1"
+                  step="1"
+                  value="1"
+                />
+                <div class="num-stepper-btns">
+                  <button type="button" class="num-step-btn" id="animStartFrameUp" tabindex="-1" aria-label="Increase start frame"><svg viewBox="0 0 10 6" aria-hidden="true"><path d="M1 5.2 5 .8l4 4.4z"/></svg></button>
+                  <button type="button" class="num-step-btn" id="animStartFrameDown" tabindex="-1" aria-label="Decrease start frame"><svg viewBox="0 0 10 6" aria-hidden="true"><path d="M1 .8l4 4.4 4-4.4z"/></svg></button>
+                </div>
+              </div>
+            </div>
+            <div class="px-field">
+              <label for="animEndFrameInput">END FRAME</label>
+              <div class="num-stepper">
+                <input
+                  type="number"
+                  class="px-input"
+                  id="animEndFrameInput"
+                  min="1"
+                  max="1"
+                  step="1"
+                  value="1"
+                />
+                <div class="num-stepper-btns">
+                  <button type="button" class="num-step-btn" id="animEndFrameUp" tabindex="-1" aria-label="Increase end frame"><svg viewBox="0 0 10 6" aria-hidden="true"><path d="M1 5.2 5 .8l4 4.4z"/></svg></button>
+                  <button type="button" class="num-step-btn" id="animEndFrameDown" tabindex="-1" aria-label="Decrease end frame"><svg viewBox="0 0 10 6" aria-hidden="true"><path d="M1 .8l4 4.4 4-4.4z"/></svg></button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div class="sidebar-section batch-hide">
           <button type="button" class="action-btn primary full-width disabled" id="btnProcess">PROCESS IMAGE</button>
         </div>
@@ -369,6 +412,22 @@
             <button type="button" class="action-btn cancel-btn" id="btnCancel">CANCEL PROCESSING</button>
           </div>
         </main>
+
+        <!-- Animation Playback Bar + Horizontal Frame Filmstrip (shown when a multi-frame GIF/WebP is active) -->
+        <div class="anim-dock" id="animDock">
+          <div class="anim-playback-bar" id="animPlaybackBar">
+            <div class="anim-controls">
+              <button type="button" class="anim-ctrl-btn has-tooltip" id="btnAnimPrev" data-tooltip="Previous frame (←)" aria-label="Previous frame"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M8.75 2v8L3.75 6z"/><path d="M1.75 2h1.5v8h-1.5z"/></svg></button>
+              <button type="button" class="anim-ctrl-btn anim-play-btn has-tooltip" id="btnAnimPlay" data-tooltip="Play / Pause (Space)" aria-label="Play or pause animation"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3.5 2v8l5.5-4z"/></svg><span>PLAY</span></button>
+              <button type="button" class="anim-ctrl-btn has-tooltip" id="btnAnimNext" data-tooltip="Next frame (→)" aria-label="Next frame"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3.25 2v8l5-4z"/><path d="M8.75 2h1.5v8h-1.5z"/></svg></button>
+            </div>
+            <div class="anim-telemetry">
+              <span class="anim-readout" id="animFrameReadout">FRAME 1 / 1</span>
+              <span class="anim-trim-readout" id="animTrimReadout"></span>
+            </div>
+          </div>
+          <div class="anim-filmstrip" id="animFilmstrip" role="listbox" aria-label="Animation frames"></div>
+        </div>
       </div>
 
       <!-- Right Sidebar: Export Format, Resolution Slider, Custom PX & Download Actions -->
@@ -382,6 +441,9 @@
         <div class="sidebar-section">
           <div class="section-header">OUTPUT FORMAT</div>
           <div class="tier-row" id="formatRow">
+            <button type="button" class="tier-btn fmt-btn anim-only has-tooltip" data-format="gif" data-tooltip="Animated GIF with transparency (or backdrop color) across the trimmed frame range.">
+              <span class="tier-label">GIF</span>
+            </button>
             <button type="button" class="tier-btn fmt-btn has-tooltip active" data-format="png" data-tooltip="Lossless 32-bit RGBA with full transparency. Largest files, best compatibility.">
               <span class="tier-label">PNG</span>
             </button>
@@ -852,21 +914,13 @@
                 <div class="pref-row">
                   <div class="pref-text">
                     <span class="pref-label">IMPORT MODEL FOLDER</span>
-                    <span class="pref-desc">Point OpenBGR at a checkpoint folder you downloaded yourself, for example from huggingface.co or with `hf download ZhengPeng7/BiRefNet`. Files are copied into the cache shown above.</span>
+                    <span class="pref-desc">Point OpenBGR at a checkpoint folder you downloaded yourself, for example from huggingface.co or with `hf download ZhengPeng7/BiRefNet`. The model is detected automatically, and a folder holding several checkpoints imports them all. Files are copied into the cache shown above.</span>
                   </div>
                 </div>
                 <div class="pref-row import-row">
-                  <select class="studio-select pref-select" id="prefImportTier">
-                    <option value="lite">Lite (BiRefNet_lite)</option>
-                    <option value="general" selected>General (BiRefNet)</option>
-                    <option value="hr">Ultra HR (BiRefNet_HR)</option>
-                    <option value="portrait">Portrait (BiRefNet-portrait)</option>
-                    <option value="matting">Matting (BiRefNet_HR-matting)</option>
-                    <option value="dynamic">Dynamic (BiRefNet_dynamic)</option>
-                  </select>
                   <input class="import-path-input" id="importFolderPath" type="text" placeholder="Model folder path" spellcheck="false" autocomplete="off" />
-                  <button type="button" class="action-btn" id="btnChooseImportFolder">BROWSE</button>
-                  <button type="button" class="action-btn model-uninstall-btn" id="btnImportModel">IMPORT</button>
+                  <button type="button" class="action-btn" id="btnChooseImportFolder">CHOOSE FOLDER</button>
+                  <button type="button" class="action-btn model-uninstall-btn" id="btnImportModel" disabled>IMPORT</button>
                 </div>
               </div>
             </section>

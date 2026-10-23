@@ -195,6 +195,49 @@ class TestPipeline(unittest.TestCase):
                 asyncio.run(api_mod.api_remove_bg(file=empty_up))
             self.assertEqual(ctx.exception.status_code, 400)
 
+    def test_extract_and_encode_animation_frames(self) -> None:
+        """`extract_animation_frames` and `encode_animated_image` round-trip GIF and WebP animations."""
+        # Single-frame images report not animated.
+        static_img = Image.new("RGBA", (16, 12), (255, 0, 0, 255))
+        frames, truncated = pipeline_mod.extract_animation_frames(static_img)
+        static_img.close()
+        self.assertEqual(frames, [])
+        self.assertFalse(truncated)
+
+        # Build a 3-frame transparent RGBA sequence and encode as GIF.
+        raw_frames = []
+        for c in ((255, 0, 0), (0, 255, 0), (0, 0, 255)):
+            arr = np.zeros((16, 16, 4), dtype=np.uint8)
+            arr[4:12, 4:12, :3] = c
+            arr[4:12, 4:12, 3] = 255
+            raw_frames.append(Image.fromarray(arr))
+
+        gif_bytes = pipeline_mod.encode_animated_image(raw_frames, [60, 80, 120], fmt="gif")
+        webp_bytes = pipeline_mod.encode_animated_image(raw_frames, [60, 80, 120], fmt="webp")
+        for f in raw_frames:
+            f.close()
+
+        with Image.open(io.BytesIO(gif_bytes)) as gif_in:
+            self.assertEqual(gif_in.format, "GIF")
+            extracted, trunc = pipeline_mod.extract_animation_frames(gif_in)
+            self.assertFalse(trunc)
+            self.assertEqual(len(extracted), 3)
+            for frm, dur in extracted:
+                self.assertEqual(frm.mode, "RGBA")
+                self.assertEqual(frm.size, (16, 16))
+                self.assertGreaterEqual(dur, 20)
+                frm.close()
+
+            capped, trunc2 = pipeline_mod.extract_animation_frames(gif_in, max_frames=2)
+            self.assertTrue(trunc2)
+            self.assertEqual(len(capped), 2)
+            for frm, _ in capped:
+                frm.close()
+
+        with Image.open(io.BytesIO(webp_bytes)) as webp_in:
+            self.assertEqual(webp_in.format, "WEBP")
+            self.assertEqual(getattr(webp_in, "n_frames", 1), 3)
+
 
 if __name__ == "__main__":
     unittest.main()

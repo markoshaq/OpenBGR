@@ -110,7 +110,8 @@ body {
 
 .app-shell.is-processing .sidebar-left,
 .app-shell.is-processing .sidebar-right,
-.app-shell.is-processing .topbar-center {
+.app-shell.is-processing .topbar-center,
+.app-shell.is-processing .anim-dock {
   opacity: 0.45;
   pointer-events: none;
   user-select: none;
@@ -485,6 +486,11 @@ body {
 .tier-dropdown.open .model-list {
   display: flex;
   margin-top: 6px;
+}
+
+/* The selected model is mirrored on the trigger; listing it again is noise. */
+.tier-dropdown.open .model-list .tier-btn.active {
+  display: none;
 }
 
 .tier-dropdown-trigger {
@@ -1116,6 +1122,62 @@ body {
 
 .px-input:focus {
   border-color: var(--accent);
+}
+
+/* Compact number input with attached up/down steppers (FRAME RANGE). */
+.num-stepper {
+  display: flex;
+  align-items: stretch;
+}
+
+.num-stepper .px-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  font-size: 11px;
+  border-right: none;
+}
+
+.num-stepper-btns {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+}
+
+.num-stepper:focus-within .num-stepper-btns {
+  border-color: var(--accent);
+}
+
+.num-step-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  padding: 0;
+  background: var(--bg);
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.num-step-btn + .num-step-btn {
+  border-top: 1px solid var(--border);
+}
+
+.num-step-btn:hover {
+  color: var(--text);
+}
+
+.num-step-btn:active {
+  color: var(--accent);
+}
+
+.num-step-btn svg {
+  width: 8px;
+  height: 6px;
+  fill: currentColor;
+  display: block;
 }
 
 .aspect-lock-btn {
@@ -1880,7 +1942,7 @@ body {
   color: #065f46;
 }
 
-/* Inline action inside the toast (e.g. REVEAL after a successful export). */
+/* Inline action inside the toast (e.g. OPEN after a successful export). */
 .error-toast .toast-action {
   background: transparent;
   border: 1px solid currentColor;
@@ -1894,8 +1956,8 @@ body {
 }
 
 .error-toast .toast-action:hover {
-  background: currentColor;
-  color: var(--bg);
+  background: rgba(255, 255, 255, 0.14);
+  background: color-mix(in srgb, currentColor 20%, transparent);
 }
 
 /* -------------------------------------------------------------------------
@@ -2168,6 +2230,11 @@ input[type="file"] {
 
 .import-row {
   flex-wrap: nowrap;
+  align-items: stretch;
+}
+
+.import-row .action-btn {
+  white-space: nowrap;
 }
 
 .import-row .pref-select {
@@ -2228,6 +2295,12 @@ input[type="file"] {
 
 .pref-switch-row:hover {
   background: var(--surface-2);
+}
+
+/* border:none above is required to strip <button> chrome but also defeats the
+   .pref-card > * + * hairline, so restore it for non-first switch rows */
+.pref-card > * + .pref-switch-row {
+  border-top: 1px solid var(--border);
 }
 
 .pref-switch-text {
@@ -2750,6 +2823,193 @@ input[type="file"] {
 
 .app-shell.batch-active .batch-hide {
   display: none;
+}
+
+/* -------------------------------------------------------------------------
+ * Multi-Frame Animation Dock: Playback Bar + Horizontal Frame Filmstrip
+ * ------------------------------------------------------------------------- */
+.anim-only {
+  display: none !important;
+}
+
+.app-shell.is-animated:not(.batch-active) .sidebar-section.anim-only {
+  display: flex !important;
+}
+
+.app-shell.is-animated:not(.batch-active) .fmt-btn.anim-only {
+  display: flex !important;
+}
+
+/* Animated tabs: keep the real output path, drop the placeholder hint. */
+.app-shell.is-animated #fileDestPath:not(.rtl) {
+  display: none;
+}
+
+.anim-trim-grid {
+  grid-template-columns: 1fr 1fr;
+}
+
+.anim-dock {
+  display: none;
+  flex-direction: column;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.app-shell.is-animated:not(.batch-active):not(.no-image) .anim-dock {
+  display: flex;
+}
+
+.anim-playback-bar {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  column-gap: 12px;
+  padding: 5px 12px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  min-height: 32px;
+}
+
+.anim-controls {
+  grid-column: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.anim-ctrl-btn {
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 3px 9px;
+  min-width: 30px;
+  height: 22px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.1s, border-color 0.1s, color 0.1s;
+}
+
+.anim-ctrl-btn:hover {
+  background: var(--surface-2);
+  border-color: var(--text);
+}
+
+.anim-ctrl-btn svg {
+  display: block;
+  width: 9px;
+  height: 9px;
+  fill: currentColor;
+}
+
+.anim-play-btn {
+  width: 74px;
+  gap: 5px;
+}
+
+.anim-play-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.anim-telemetry {
+  grid-column: 3;
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  font-variant-numeric: tabular-nums;
+}
+
+.anim-readout {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.anim-trim-readout {
+  color: var(--muted);
+}
+
+.anim-trim-readout:empty {
+  display: none;
+}
+
+.anim-filmstrip {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  padding: 7px 12px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: var(--surface);
+}
+
+.anim-frame-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 3px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color 0.1s, color 0.1s, opacity 0.1s, background 0.1s;
+}
+
+.anim-frame-item:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.anim-frame-item.active {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.anim-frame-item.trimmed {
+  opacity: 0.32;
+}
+
+.anim-frame-thumb-wrap {
+  width: 54px;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.anim-frame-thumb {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+  pointer-events: none;
+}
+
+.anim-frame-num {
+  line-height: 1.1;
+  letter-spacing: 0.04em;
 }
 
 button:focus-visible,

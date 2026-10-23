@@ -19,9 +19,14 @@ globalThis.createImageBitmap = async () => ({
   close() {},
 });
 
-const { state, dom, prefs, createTabRecord, getActiveTab } = await import(
-  "../static/state.js"
-);
+const {
+  state,
+  dom,
+  prefs,
+  createTabRecord,
+  getActiveTab,
+  DEFAULT_CROP_PADDING,
+} = await import("../static/state.js");
 const {
   ingestImageFile,
   createBlankTab,
@@ -101,6 +106,82 @@ test("createBlankTab appends a fresh tab and activates it", () => {
   assert.equal(state.tabs.length, 1);
   assert.equal(getActiveTab().kind, "image");
   assert.equal(state.activeTabId, state.tabs[0].id);
+});
+
+test("createBlankTab resets sidebar settings instead of inheriting them", () => {
+  resetWorkspace();
+  Object.assign(state, {
+    defringe: false,
+    despill: false,
+    edgeShift: -3,
+    edgeFeather: 6,
+    shadowCutoff: 55,
+    exportScale: 4,
+    autoCrop: true,
+    cropPadding: 80,
+    aspectLocked: false,
+    canvasFit: "stretch",
+    activeBackdrop: "#123456",
+    backdropBlur: 10,
+    exportFormat: "jpg",
+  });
+  createBlankTab();
+  const tab = getActiveTab();
+  const expected = {
+    defringe: true,
+    despill: true,
+    edgeShift: 0,
+    edgeFeather: 0,
+    shadowCutoff: 0,
+    exportScale: 1,
+    autoCrop: false,
+    aspectLocked: true,
+    canvasFit: "fit",
+    backdropBlur: 50,
+  };
+  for (const [key, want] of Object.entries(expected)) {
+    assert.equal(tab[key], want, `tab.${key}`);
+    assert.equal(state[key], want, `state.${key}`);
+  }
+  assert.equal(tab.cropPadding, DEFAULT_CROP_PADDING);
+  assert.equal(tab.exportFormat, prefs.defaultFormat);
+  assert.equal(tab.activeBackdrop, prefs.defaultBackdrop);
+});
+
+test("ingestImageFile resets sidebar settings for the newly loaded image", () => {
+  resetWorkspace();
+  Object.assign(state, {
+    defringe: false,
+    despill: false,
+    edgeShift: 4,
+    edgeFeather: 2,
+    shadowCutoff: 40,
+    exportScale: 2,
+    autoCrop: true,
+    aspectLocked: false,
+    activeBackdrop: "#ff0000",
+    backdropBlur: 90,
+    exportFormat: "webp",
+  });
+  ingestImageFile(pngFile("fresh.png"));
+  const tab = getActiveTab();
+  const expected = {
+    defringe: true,
+    despill: true,
+    edgeShift: 0,
+    edgeFeather: 0,
+    shadowCutoff: 0,
+    exportScale: 1,
+    autoCrop: false,
+    aspectLocked: true,
+    backdropBlur: 50,
+  };
+  for (const [key, want] of Object.entries(expected)) {
+    assert.equal(state[key], want, `state.${key}`);
+    assert.equal(tab[key], want, `tab.${key}`);
+  }
+  assert.equal(state.exportFormat, prefs.defaultFormat);
+  assert.equal(state.activeBackdrop, prefs.defaultBackdrop);
 });
 
 test("switchToTab restores the target tab's mirrored fields", async () => {

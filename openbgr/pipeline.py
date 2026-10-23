@@ -5,6 +5,7 @@ suppression, RGBA composition) and neural foreground segmentation pipeline.
 
 from __future__ import annotations
 
+import io
 import itertools
 import threading
 import time
@@ -21,6 +22,7 @@ from .config import (
     DEVICE,
     DTYPE,
     RECOMMENDED_TIER,
+    SYSTEM_MEMORY_GB,
     TIERS,
     logger,
     normalize_tier_key,
@@ -225,8 +227,13 @@ def suppress_color_spill(rgb_np: np.ndarray, alpha_norm: np.ndarray) -> np.ndarr
 _JOB_ID_SEQ = itertools.count(1)
 _REFINE_JOBS: OrderedDict[int, dict[str, Any]] = OrderedDict()
 _LAST_JOB_LOCK = threading.Lock()
-_LAST_JOB_MAX_BYTES = 256 * 1024 * 1024
-_REFINE_MAX_ENTRIES = 16
+_LAST_JOB_MAX_BYTES = (64 if SYSTEM_MEMORY_GB < 14.0 else 256) * 1024 * 1024
+_REFINE_MAX_ENTRIES = 128
+MAX_ANIMATION_FRAMES = 120
+# Total decoded-RGBA budget for one animation: bounds the temporary frame
+# list (and the base64 PNG payload the API builds on top) so a large-dimension
+# animation cannot spike memory far beyond the upload cap.
+MAX_ANIMATION_PIXEL_BYTES = (128 if SYSTEM_MEMORY_GB < 14.0 else 512) * 1024 * 1024
 
 # Serializes compose_rgba across threads: segment_foreground runs it inside
 # inference_lock while /api/refine calls it standalone. Concurrent passes
@@ -352,7 +359,17 @@ def segment_foreground(
             preprocess = get_preprocess_transform((dyn_h, dyn_w))
             tier_cfg["sublabel"] = f"Dynamic / {dyn_w}x{dyn_h}"
         else:
-            preprocess = get_preprocess_transform(int(tier_cfg["resolution"]))
+            tier_res = int(tier_cfg["resolution"])
+            # Avoid upscaling small images (such as 480p GIF frames) to 1024x1024 or 2K:
+            # clamping to the next multiple of 32 (floor 512) cuts MPS/VRAM peak by ~1-3 GB
+            # and doubles frame throughput without sacrificing sub-pixel detail.
+            long_side = max(orig_w, orig_h)
+            eff_res = (
+                min(tier_res, max(512, ((long_side + 31) // 32) * 32))
+                if long_side < tier_res
+                else tier_res
+            )
+            preprocess = get_preprocess_transform(eff_res)
         input_tensor: torch.Tensor | None = None
         outputs: Any = None
         pred_logits: torch.Tensor | None = None
@@ -362,10 +379,16 @@ def segment_foreground(
             input_tensor = preprocess(rgb_image).unsqueeze(0).to(device=DEVICE, dtype=DTYPE)
             MANAGER.check_cancelled(job_epoch)
 
-            with torch.no_grad():
+            with torch.inference_mode():
                 outputs = model(input_tensor)
+                del input_tensor
+                input_tensor = None
                 pred_logits = outputs[-1] if isinstance(outputs, (list, tuple)) else outputs
+                del outputs
+                outputs = None
                 alpha_tensor = pred_logits.float().sigmoid().cpu()
+                del pred_logits
+                pred_logits = None
 
             MANAGER.check_cancelled(job_epoch)
 
@@ -400,3 +423,124 @@ def segment_foreground(
 
         elapsed_ms = (time.perf_counter() - start_time) * 1000.0
         return result_image, elapsed_ms, tier_cfg, job_id
+
+
+def extract_animation_frames(
+    raw_image: Image.Image,
+    max_frames: int = MAX_ANIMATION_FRAMES,
+) -> tuple[list[tuple[Image.Image, int]], bool]:
+    """
+    Extracts individual RGBA frames and per-frame durations (in milliseconds)
+    from a multi-frame image (GIF / animated WebP). Returns `([], False)` for
+    single-frame images, or `(frames, truncated)` when `n_frames > 1`.
+    """
+    n_frames = int(getattr(raw_image, "n_frames", 1) or 1)
+    if n_frames <= 1:
+        return [], False
+    width, height = raw_image.size
+    pixel_cap = max(1, MAX_ANIMATION_PIXEL_BYTES // max(1, width * height * 4))
+    limit = max(1, min(n_frames, max_frames, pixel_cap))
+    frames: list[tuple[Image.Image, int]] = []
+    for idx in range(limit):
+        raw_image.seek(idx)
+        raw_dur = int(raw_image.info.get("duration") or 0)
+        # Browsers map 0..10ms GIF delays to 100ms per the HTML/GIF de-facto spec.
+        duration_ms = 100 if raw_dur <= 10 else min(10_000, max(20, raw_dur))
+        frames.append((raw_image.convert("RGBA"), duration_ms))
+    return frames, n_frames > limit
+
+
+def _rgba_to_gif_frame(rgba: Image.Image) -> tuple[Image.Image, bool]:
+    """
+    Quantizes a 32-bit RGBA image to a palette (`P`) frame suitable for GIF
+    encoding, reserving palette index 255 for transparent pixels (`alpha < 128`)
+    so transparent cutouts never leave black halos or bleed across frames.
+    """
+    rgba_img = rgba.convert("RGBA") if rgba.mode != "RGBA" else rgba
+    alpha = np.asarray(rgba_img.getchannel("A"), dtype=np.uint8)
+    has_transparent = bool((alpha < 128).any())
+    rgb = rgba_img.convert("RGB")
+    try:
+        if not has_transparent:
+            p_img = rgb.quantize(colors=256, method=Image.Quantize.FASTOCTREE)
+            p_img.info["disposal"] = 2
+            return p_img, False
+
+        p_img = rgb.quantize(colors=255, method=Image.Quantize.FASTOCTREE)
+        raw_palette = p_img.getpalette() or []
+        palette = (raw_palette + [0] * 768)[:768]
+        idx_arr = np.asarray(p_img, dtype=np.uint8).copy()
+        idx_arr[alpha < 128] = 255
+        out = Image.fromarray(idx_arr, mode="P")
+        out.putpalette(palette)
+        out.info["transparency"] = 255
+        out.info["disposal"] = 2
+        return out, True
+    finally:
+        rgb.close()
+        if rgba_img is not rgba:
+            rgba_img.close()
+
+
+def encode_animated_image(
+    frames: list[Image.Image],
+    durations_ms: list[int],
+    fmt: str = "gif",
+) -> bytes:
+    """
+    Encodes a sequence of RGBA frames and per-frame durations (in ms) into an
+    animated GIF (`fmt='gif'`) or animated WebP (`fmt='webp'`).
+    """
+    if not frames:
+        raise ValueError("Cannot encode an empty animation.")
+    norm_durations = [
+        min(10_000, max(20, int(durations_ms[i]) if i < len(durations_ms) else 100))
+        for i in range(len(frames))
+    ]
+    fmt_clean = (fmt or "gif").strip().lower()
+    buf = io.BytesIO()
+    try:
+        if fmt_clean == "webp":
+            rgba_frames = [f.convert("RGBA") if f.mode != "RGBA" else f for f in frames]
+            try:
+                rgba_frames[0].save(
+                    buf,
+                    format="WEBP",
+                    save_all=True,
+                    append_images=rgba_frames[1:],
+                    duration=norm_durations,
+                    loop=0,
+                    quality=95,
+                    method=4,
+                )
+            finally:
+                for orig, conv in zip(frames, rgba_frames, strict=False):
+                    if conv is not orig:
+                        conv.close()
+            return buf.getvalue()
+
+        gif_frames: list[Image.Image] = []
+        any_transparent = False
+        try:
+            for frame in frames:
+                p_frame, is_trans = _rgba_to_gif_frame(frame)
+                gif_frames.append(p_frame)
+                any_transparent = any_transparent or is_trans
+            save_kwargs: dict[str, Any] = {
+                "format": "GIF",
+                "save_all": True,
+                "append_images": gif_frames[1:],
+                "duration": norm_durations,
+                "loop": 0,
+                "disposal": 2,
+                "optimize": False,
+            }
+            if any_transparent:
+                save_kwargs["transparency"] = 255
+            gif_frames[0].save(buf, **save_kwargs)
+        finally:
+            for p_frame in gif_frames:
+                p_frame.close()
+        return buf.getvalue()
+    finally:
+        buf.close()

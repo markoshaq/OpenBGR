@@ -53,8 +53,29 @@ function reset() {
   delete dom.errorToast.dataset.kind;
 }
 
-test("chooseOutputFolder is a no-op without the native bridge", async () => {
+test("chooseOutputFolder falls back to /api/choose-folder without the bridge", async () => {
   reset();
+  const tab = createTabRecord({ kind: "image", name: "IMG" });
+  state.tabs = [tab];
+  state.activeTabId = tab.id;
+
+  const calls = [];
+  globalThis.fetch = async (url) => {
+    calls.push(url);
+    return { ok: true, json: async () => ({ path: "/srv/dir" }) };
+  };
+  await chooseOutputFolder();
+  assert.deepEqual(calls, ["/api/choose-folder"]);
+  assert.equal(state.outputDir, "/srv/dir");
+  assert.equal(tab.outputDir, "/srv/dir");
+
+  // A failed or cancelled server-side pick leaves the state untouched.
+  state.outputDir = null;
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({}) });
+  await chooseOutputFolder();
+  assert.equal(state.outputDir, null);
+
+  globalThis.fetch = async () => ({ ok: false });
   await chooseOutputFolder();
   assert.equal(state.outputDir, null);
 });
@@ -232,4 +253,59 @@ test("copyOriginalImage re-encodes the source and copies via the bridge", async 
   await copyOriginalImage();
   assert.equal(sent.length, 1);
   assert.match(dom.errorToast.textContent, /COPIED: ORIGINAL IMAGE/);
+});
+
+test("exportActiveImage exports animated GIF or individual frames with auto-crop and scale", async () => {
+  reset();
+  state.isAnimated = true;
+  state.naturalWidth = 100;
+  state.naturalHeight = 80;
+  state.startFrame = 1;
+  state.endFrame = 2;
+  state.autoCrop = true;
+  state.cropPadding = 10;
+  state.exportScale = 0.5;
+  state.aspectLocked = true;
+  state.sourceFile = { name: "dance.gif" };
+  const f1 = new Blob([enc.encode("f1")], { type: "image/png" });
+  const f2 = new Blob([enc.encode("f2")], { type: "image/png" });
+  state.frames = [
+    { resultBlob: f1, resultObjectUrl: "blob:f1", durationMs: 80 },
+    { resultBlob: f2, resultObjectUrl: "blob:f2", durationMs: 90 },
+  ];
+  state.resultBlob = f1;
+
+  // 1) GIF export encodes via /api/encode-animation and saves a .gif file.
+  state.exportFormat = "gif";
+  state.outputDir = "/exports";
+  const postedUrls = [];
+  const savedNames = [];
+  globalThis.fetch = async (url, opts) => {
+    postedUrls.push(url);
+    if (String(url).includes("/api/encode-animation")) {
+      return {
+        ok: true,
+        blob: async () => new Blob([enc.encode("gif89a")], { type: "image/gif" }),
+      };
+    }
+    const name = opts?.body?.get?.("filename") || "out.gif";
+    savedNames.push(name);
+    return { ok: true, json: async () => ({ path: `/exports/${name}`, name }) };
+  };
+  await exportActiveImage();
+  assert.ok(postedUrls.includes("/api/encode-animation"));
+  assert.deepEqual(savedNames, ["dance-cutout-60x50.gif"]);
+
+  // 2) Selecting PNG exports each frame in the range individually.
+  postedUrls.length = 0;
+  savedNames.length = 0;
+  state.exportFormat = "png";
+  await exportActiveImage();
+  assert.equal(postedUrls.filter((u) => u === "/api/save").length, 2);
+  assert.deepEqual(savedNames, [
+    "dance-frame-1-cutout-60x50.png",
+    "dance-frame-2-cutout-60x50.png",
+  ]);
+  state.isAnimated = false;
+  state.frames = [];
 });

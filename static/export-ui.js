@@ -19,8 +19,10 @@ import {
   getExportBaseDims,
   exactExportBlob,
   exportAspectMismatch,
+  isAnimatedExport,
   updateLiveStagePreview,
 } from "./export.js";
+import { scheduleAnimatedExportSize } from "./anim-export.js";
 
 /** Updates the dashed crop-frame overlay on the stage when Auto-Crop is active. */
 export function updateCropGuide() {
@@ -62,7 +64,9 @@ export function syncFormatButtons() {
 export function updateDestUI() {
   const hasNativePicker = Boolean(window.pywebview?.api?.choose_output_dir);
   if (dom.btnFileDest) {
-    dom.btnFileDest.style.display = hasNativePicker ? "" : "none";
+    // The server-side `/api/choose-folder` fallback works without the
+    // pywebview bridge too, so the button stays visible in every mode.
+    dom.btnFileDest.style.display = "";
     dom.btnFileDest.textContent = state.outputDir
       ? "CHANGE FOLDER…"
       : "CHOOSE FOLDER…";
@@ -100,13 +104,62 @@ export function updateExportTelemetry() {
   dom.scalePctLabel.textContent = `${pct}%`;
 
   if (dom.exportSizeLabel) {
-    if (!state.resultBlob) {
+    const anyResult =
+      state.resultBlob ||
+      (state.isAnimated && state.frames.some((f) => f?.resultBlob));
+    if (!anyResult) {
       dom.exportSizeLabel.textContent = "--";
     } else {
       const exact = exactExportBlob();
-      dom.exportSizeLabel.textContent = exact
-        ? formatDiskBytes(exact.size)
-        : "...";
+      if (exact) {
+        dom.exportSizeLabel.textContent = formatDiskBytes(exact.size);
+      } else if (state.isAnimated && state.frames.length > 1) {
+        const total = state.frames.length;
+        const startIdx = Math.max(
+          0,
+          Math.min(total - 1, (state.startFrame || 1) - 1)
+        );
+        const endIdx = Math.max(
+          startIdx,
+          Math.min(total - 1, (state.endFrame || total) - 1)
+        );
+        let sumBytes = 0;
+        let rangeDone = true;
+        for (let i = startIdx; i <= endIdx; i++) {
+          const size = state.frames[i]?.resultBlob?.size || 0;
+          if (!size) rangeDone = false;
+          sumBytes += size;
+        }
+        if (!rangeDone) {
+          // Frames missing a cutout can't export; there is no honest number.
+          dom.exportSizeLabel.textContent = "--";
+        } else if (isAnimatedExport()) {
+          // A GIF's byte size needs a real encode; the debounced background
+          // pass lands the exact number on this label shortly.
+          dom.exportSizeLabel.textContent = "...";
+          scheduleAnimatedExportSize();
+        } else {
+          // Individual-frame exports: sum the encoded cutout bytes, scaled to
+          // the output resolution and adjusted per format.
+          const areaScale = Math.max(
+            0.05,
+            state.exportScale * state.exportScale
+          );
+          const fmtRatios = {
+            png: 1.0,
+            webp: 0.42,
+            jpg: 0.28,
+            mask: 0.18,
+          };
+          const estBytes = Math.max(
+            512,
+            Math.round(sumBytes * areaScale * (fmtRatios[state.exportFormat] || 1.0))
+          );
+          dom.exportSizeLabel.textContent = `~${formatDiskBytes(estBytes)}`;
+        }
+      } else {
+        dom.exportSizeLabel.textContent = "...";
+      }
     }
   }
 

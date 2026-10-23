@@ -9,8 +9,11 @@ Run with:
 
 from __future__ import annotations
 
+import json
+import tempfile
 import threading
 import unittest
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -35,6 +38,72 @@ class _FakeBackbone:
     def eval(self) -> _FakeBackbone:
         self.eval_called = True
         return self
+
+
+class TestModelImportDetection(unittest.TestCase):
+    """Covers `detect_model_tier` and `find_checkpoint_dirs` folder scanning."""
+
+    @staticmethod
+    def _make_checkpoint(folder: Path, name_or_path: str | None = None) -> Path:
+        """Writes the two marker files of a checkpoint into `folder`."""
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "model.safetensors").write_bytes(b"weights")
+        cfg = {"_name_or_path": name_or_path} if name_or_path else {}
+        (folder / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+        return folder
+
+    def test_detect_model_tier_from_config_name_or_path(self) -> None:
+        """`_name_or_path` matches repo ids, HF URLs, and local paths to a tier."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cases = {
+                "ZhengPeng7/BiRefNet_lite": "lite",
+                "https://huggingface.co/ZhengPeng7/BiRefNet_HR": "hr",
+                "/home/u/dl/BiRefNet-portrait": "portrait",
+                "ZhengPeng7/BiRefNet-matting": "matting",  # legacy repo name
+                "C:\\models\\BiRefNet_dynamic": "dynamic",
+            }
+            for i, (name_or_path, expected) in enumerate(cases.items()):
+                folder = self._make_checkpoint(root / f"case-{i}", name_or_path)
+                self.assertEqual(
+                    models_mod.detect_model_tier(folder),
+                    expected,
+                    f"_name_or_path {name_or_path!r}",
+                )
+
+    def test_detect_model_tier_folder_name_fallback_and_misses(self) -> None:
+        """Folder names match repo basenames; unrecognized folders return None."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            folder = self._make_checkpoint(root / "BiRefNet_dynamic")
+            self.assertEqual(models_mod.detect_model_tier(folder), "dynamic")
+            unknown = self._make_checkpoint(root / "some-model", "unrelated/repo")
+            self.assertIsNone(models_mod.detect_model_tier(unknown))
+            # A non-checkpoint directory still resolves by name alone.
+            bare = root / "BiRefNet_HR"
+            bare.mkdir()
+            self.assertEqual(models_mod.detect_model_tier(bare), "hr")
+
+    def test_find_checkpoint_dirs_flat_and_nested(self) -> None:
+        """Finds the folder itself or its immediate checkpoint children only."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            flat = self._make_checkpoint(root / "flat")
+            self.assertEqual(models_mod.find_checkpoint_dirs(flat), [flat])
+
+            container = root / "container"
+            child = self._make_checkpoint(container / "inner-model")
+            (container / "readme.txt").write_text("x", encoding="utf-8")
+            # A checkpoint two levels deep is not discovered by the shallow scan.
+            deep = self._make_checkpoint(container / "nest" / "deep-model")
+            found = models_mod.find_checkpoint_dirs(container)
+            self.assertEqual(found, [child])
+            self.assertNotIn(deep, found)
+
+            empty = root / "empty"
+            empty.mkdir()
+            self.assertEqual(models_mod.find_checkpoint_dirs(empty), [])
+            self.assertEqual(models_mod.find_checkpoint_dirs(root / "missing"), [])
 
 
 class TestModelManagerConcurrency(unittest.TestCase):

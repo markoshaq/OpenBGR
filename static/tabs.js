@@ -10,8 +10,8 @@ import {
   prefs,
   masterCutoutImg,
   getActiveTab,
-  defaultTierForNewTab,
   createTabRecord,
+  freshTabSettings,
   nextClipboardName,
   revokeTabUrls,
   saveStateToActiveTab,
@@ -44,6 +44,14 @@ import {
   showTabContextMenu,
 } from "./batch.js";
 import { renderBatchPanel, syncBatchPanelChrome } from "./batch-panel.js";
+import {
+  resetAnimationState,
+  renderAnimationFilmstrip,
+  selectAnimationFrame,
+  stopAnimationPlayback,
+  syncAnimationChrome,
+  probeAndLoadAnimationFrames,
+} from "./animation.js";
 
 let tabGhostEl = null;
 
@@ -238,17 +246,11 @@ export function requestSwitchToTab(tabId) {
   switchToTab(tab.id);
 }
 
-/** Creates and switches to an empty tab. */
+/** Creates and switches to an empty tab with default sidebar settings. */
 export function createBlankTab() {
   saveStateToActiveTab();
 
-  const blankTab = createTabRecord({
-    tier: defaultTierForNewTab(),
-    shadowCutoff: 0,
-    exportFormat: prefs.defaultFormat,
-    exportScale: 1,
-    activeBackdrop: prefs.defaultBackdrop,
-  });
+  const blankTab = createTabRecord(freshTabSettings());
 
   state.tabs.push(blankTab);
   switchToTab(blankTab.id);
@@ -361,6 +363,7 @@ export function reopenClosedTab() {
 /** Tears all tabs down and returns to the splash/dropzone state. */
 export function resetToEmptyWorkspace() {
   setError(null);
+  resetAnimationState();
   state.sourceFile = null;
   state.originalObjectUrl = null;
   clearResultState();
@@ -392,6 +395,7 @@ export function resetToEmptyWorkspace() {
 
 /** Copies a tab record's fields back into the live `state` object. */
 function restoreTabState(tab) {
+  stopAnimationPlayback();
   state.activeTabId = tab.id;
   state.sourceFile = tab.sourceFile;
   state.originalObjectUrl = tab.originalObjectUrl;
@@ -406,6 +410,11 @@ function restoreTabState(tab) {
   state.previewObjectUrl = tab.previewObjectUrl;
   state.naturalWidth = tab.naturalWidth;
   state.naturalHeight = tab.naturalHeight;
+  state.isAnimated = Boolean(tab.isAnimated);
+  state.frames = Array.isArray(tab.frames) ? tab.frames : [];
+  state.currentFrameIndex = tab.currentFrameIndex ?? 0;
+  state.startFrame = tab.startFrame ?? 1;
+  state.endFrame = tab.endFrame ?? Math.max(1, state.frames.length);
   state.tier = normalizeTierKey(tab.tier);
   state.defringe = tab.defringe;
   state.despill = tab.despill ?? true;
@@ -415,7 +424,10 @@ function restoreTabState(tab) {
   state.edgeFeather = tab.edgeFeather ?? 0;
   state.viewMode = tab.viewMode;
   state.splitPercent = tab.splitPercent;
-  state.exportFormat = tab.exportFormat;
+  state.exportFormat =
+    !state.isAnimated && tab.exportFormat === "gif"
+      ? prefs.defaultFormat || "png"
+      : tab.exportFormat;
   state.outputDir = tab.outputDir || null;
   state.autoCrop = Boolean(tab.autoCrop);
   state.cropPadding = tab.cropPadding ?? DEFAULT_CROP_PADDING;
@@ -485,6 +497,8 @@ function syncTabControls() {
 
 /** Renders a switched-to batch tab: queue panel, stats, and app-shell flags. */
 function switchToBatchTab(tab) {
+  stopAnimationPlayback();
+  syncAnimationChrome();
   updateExportTelemetry();
   renderBatchPanel(tab);
   dom.appShell?.classList.add("no-image");
@@ -557,6 +571,10 @@ async function switchToImageTab(tab) {
     dom.btnCopy.classList.add("disabled");
     setViewMode("original");
   }
+  renderAnimationFilmstrip();
+  if (state.isAnimated && state.frames.length > 1) {
+    selectAnimationFrame(state.currentFrameIndex, { scrollIntoView: false });
+  }
   syncMenuBarState();
 }
 
@@ -602,14 +620,22 @@ export function ingestImageFile(file) {
   const rawName = file.name || nextClipboardName();
   const objUrl = URL.createObjectURL(file);
   const currentTab = getActiveTab();
+  // A newly loaded image/GIF starts from default sidebar settings; the
+  // previous tab's values were already persisted by saveStateToActiveTab.
+  const fresh = freshTabSettings();
 
   if (currentTab && !currentTab.sourceFile && currentTab.kind !== "batch") {
+    if (currentTab.backdropImgUrl) {
+      URL.revokeObjectURL(currentTab.backdropImgUrl);
+    }
+    Object.assign(currentTab, fresh);
     currentTab.name = rawName;
     currentTab.sourceFile = file;
     currentTab.originalObjectUrl = objUrl;
     currentTab.elapsedText = "READY";
   } else {
     const targetTab = createTabRecord({
+      ...fresh,
       name: rawName,
       sourceFile: file,
       originalObjectUrl: objUrl,
@@ -620,8 +646,10 @@ export function ingestImageFile(file) {
     state.activeTabId = targetTab.id;
   }
 
+  Object.assign(state, fresh);
   state.sourceFile = file;
   state.originalObjectUrl = objUrl;
+  resetAnimationState();
   clearResultState();
   state.zoom = 1;
   state.panX = 0;
@@ -662,9 +690,12 @@ export function ingestImageFile(file) {
   dom.statTime.textContent = "READY";
 
   renderTabBar();
-  updateDestUI();
+  syncTabControls();
   setViewMode("original");
   syncMenuBarState();
+  if (ingestedTab) {
+    probeAndLoadAnimationFrames(file, ingestedTab.id);
+  }
 }
 
 /** Sets the active model key and syncs cards, menus, and the Settings default. */
@@ -750,12 +781,17 @@ export function syncMenuBarState() {
   dom.appShell?.classList.toggle("is-processing", isBusy);
 
   if (dom.btnProcess) {
+    const isAnim = state.isAnimated && state.frames.length > 1;
     dom.btnProcess.classList.toggle("disabled", !hasImage || isBusy);
     dom.btnProcess.textContent = isBusy
       ? "PROCESSING…"
-      : hasResult
-        ? "REPROCESS IMAGE"
-        : "PROCESS IMAGE";
+      : isAnim
+        ? hasResult
+          ? "REPROCESS GIF"
+          : "PROCESS GIF"
+        : hasResult
+          ? "REPROCESS IMAGE"
+          : "PROCESS IMAGE";
   }
 
   // Chrome only: counters/disabled flags, not a rebuild of every queue row.

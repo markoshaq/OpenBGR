@@ -54,7 +54,7 @@ Test coverage spans the pipeline, API contracts, the desktop bridge, CLI and Qui
 Layer map, bottom to top:
 
 1. **Primitives:** `dom.js`, `prefs.js`, `format.js`, `state.js`, `bus.js`, `zip.js`, `shortcuts.js`, `tooltips.js` (bottom layer).
-2. **Shared helpers:** `stage.js`, `preferences.js`, `export.js`, `export-ui.js`, `export-io.js` (export stack builds downward).
+2. **Shared helpers:** `stage.js`, `preferences.js`, `export.js`, `export-ui.js`, `export-io.js`, `animation.js`, `anim-preview.js`, `anim-export.js` (export and animation helpers build downward).
 3. **Workspace domains:** `segmentation.js`, `batch.js`, `batch-panel.js`, `batch-run.js` (batch/segmentation operations; their calls into the tab strip are injected, not imported).
 4. **Workspace coordinator:** `tabs.js` (tab lifecycle and workspace state; may call domain modules directly).
 5. **UI wiring:** `menubar.js`, `keyboard.js`, `modals.js`, `clipboard.js`, `open-files.js`, `recent.js`, `settings.js`, `controls.js`, `stage-input.js`, `backdrop.js`, `tier-dropdown.js`, `bridge.js` (event listeners and the `window.openBGR` command surface).
@@ -105,7 +105,10 @@ rm -rf dist build .mypy_cache .ruff_cache .coverage
 │   ├── stage.js            # Split view, pan/zoom & loupe rendering
 │   ├── export.js           # Canvas export pipeline, live preview & batch render
 │   ├── export-ui.js        # Export telemetry, backdrop/scale controls & dim sync
-│   ├── export-io.js        # Save/copy/reveal & output-folder actions
+│   ├── export-io.js        # Save/copy/reveal, animated export & output-folder actions
+│   ├── animation.js        # Multi-frame GIF/WebP extraction, filmstrip, playback & trim
+│   ├── anim-preview.js     # Background per-frame preview refresh for animated tabs
+│   ├── anim-export.js      # Debounced hidden animated encode for the exact size label
 │   ├── zip.js              # ZIP writer (store + stream)
 │   ├── preferences.js      # Hardware status, cache dots & preferences
 │   ├── batch.js            # Batch queue model, tab ops & context menu

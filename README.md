@@ -26,6 +26,7 @@
 - Pick a model **per machine and image**: weak hardware, everyday photos, 4K detail, portraits, glass and smoke, odd aspect ratios ([model table](#models)).
 - Zoom, pan, and inspect edges with gestures, view hotkeys, and a **4x loupe**.
 - **Preview exports live** at any scale, exact pixel size, or aspect preset, with Fit / Stretch canvas fill and a byte-exact size readout.
+- **Animated GIFs and WebP** get a frame filmstrip, playback controls, and a trim range; export an animated GIF or every frame as its own image.
 - **Auto-crop to the subject** with adjustable padding and a live crop guide.
 - Pick a backdrop: transparency grid, flat color, the original photo **blurred** behind the cutout, or a second photo.
 - Defringe, suppress color spill, **shift and feather the matte edge**, and cut shadow/reflection alpha, all **in real time** with no re-inference.
@@ -64,12 +65,13 @@ Wire OpenBGR into your file manager from **Preferences > Quick Action > Right-Cl
 - **macOS:** *Open With* and Dock drops work out of the box; the Finder Quick Action installs from Preferences or `python3 scripts/install_macos_quick_action.py`.
 - **Linux:** `./scripts/install_linux_integration.sh` installs `.desktop` and file-manager entries.
 
-Model, format, destination, and notifications are configurable in Preferences; cutouts land next to the original as `<name>-cutout.png`.
+Model, format, destination, and notifications are configurable in Preferences; cutouts land next to the original as `<name>-cutout.png` (animated inputs write `<name>-cutout.gif`).
 
 Or run it directly, no window:
 
 ```bash
 python app.py --cli photo.png                  # writes photo-cutout.png
+python app.py --cli clip.gif                   # animated input writes clip-cutout.gif
 python app.py --cli a.png b.png -o ~/cutouts   # batch to a directory
 python app.py --cli photo.png --tier portrait  # pick a model preset
 python app.py --quick-action photo.png         # run with saved Quick Action prefs
@@ -94,7 +96,7 @@ Each model downloads to the Hugging Face cache on first use only; FP32 checkpoin
 ### Install a model without internet
 
 1. Download a model folder, e.g. `hf download ZhengPeng7/BiRefNet` or the repo from huggingface.co, and copy it to the machine.
-2. In OpenBGR, open **Settings > Models > IMPORT MODEL FOLDER**, pick the model, choose the folder.
+2. In OpenBGR, open **Settings > Models > IMPORT MODEL FOLDER** and choose the folder. The model is detected automatically; a folder containing several checkpoint folders imports them all.
 3. Optionally enable **Settings > Block Internet Access** (or launch with `OPENBGR_OFFLINE=1`).
 
 > BiRefNet checkpoints ship custom model code loaded with `trust_remote_code=True`. Only import checkpoint folders obtained from trusted sources (`ZhengPeng7/BiRefNet*`).
@@ -116,10 +118,12 @@ curl -X POST "http://127.0.0.1:7860/api/remove-bg" \
 | :--- | :--- |
 | `POST /api/remove-bg` | Run a cutout (the call above) |
 | `POST /api/refine` | Re-apply edge filters and shift/feather geometry to the cached job, no re-inference |
+| `POST /api/extract-frames` | Split an animated GIF/WebP into PNG frames with per-frame durations |
+| `POST /api/encode-animation` | Reassemble processed frames into an animated GIF or WebP |
 | `GET /api/status` | Version, device, RAM, per-model cache state |
 | `GET /api/progress` | Pipeline phase + live download bytes |
 | `POST /api/cancel` | Abort the active job |
-| `POST /api/save` | Write the result to a folder picked via the app's folder dialog |
+| `POST /api/save` `/save-as` | Write the result to a granted folder or via a save dialog |
 | `POST /api/models/install` `/uninstall` | Manage checkpoints |
 | `POST /api/open-files` `/pending-files` | Queue/drain OS "Open With" paths |
 | `POST /api/open-cache-dir` `/open-logs-dir` | Reveal the HF cache or logs folder |

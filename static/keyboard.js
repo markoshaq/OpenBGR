@@ -14,6 +14,7 @@ import { isTextField, matchModShortcut } from "./shortcuts.js";
 import { closeAllMenus, isAnyMenuOpen } from "./menubar.js";
 import { isTierDropdownOpen, setTierDropdownOpen } from "./tier-dropdown.js";
 import { isRecentModalOpen, closeRecentModal } from "./recent.js";
+import { toggleAnimationPlayback, stepAnimationFrame } from "./animation.js";
 
 /** Bare number keys mapped to the stage view modes they select. */
 export const VIEW_KEYS = { "1": "split", "2": "cutout", "3": "original" };
@@ -86,6 +87,21 @@ export function handleKeydown(e) {
 
   if (e.code === "Space") {
     state.spacePressed = true;
+    if (
+      state.isAnimated &&
+      state.frames.length > 1 &&
+      !e.repeat &&
+      !state.isPanning
+    ) {
+      e.preventDefault?.();
+      toggleAnimationPlayback();
+    }
+  } else if (e.key === "ArrowLeft" && state.isAnimated && state.frames.length > 1) {
+    e.preventDefault?.();
+    stepAnimationFrame(-1);
+  } else if (e.key === "ArrowRight" && state.isAnimated && state.frames.length > 1) {
+    e.preventDefault?.();
+    stepAnimationFrame(1);
   } else if ((e.key === "z" || e.key === "Z") && state.sourceFile) {
     toggleLoupe();
   } else if (!e.altKey && ["1", "2", "3"].includes(e.key) && state.resultBlob) {

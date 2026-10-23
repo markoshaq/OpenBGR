@@ -50,6 +50,11 @@ def set_desktop_api(bridge: DesktopApi | None) -> None:
     _DESKTOP_API = bridge
 
 
+def get_desktop_api() -> DesktopApi | None:
+    """Returns the registered `DesktopApi` bridge instance, or None in headless mode."""
+    return _DESKTOP_API
+
+
 def get_open_files_received() -> int:
     """Returns the monotonic count of OS-delivered open-file events."""
     return _OPEN_FILES_RECEIVED
@@ -263,6 +268,15 @@ class DesktopApi(ClipboardMixin):
         # content decode while the clipboard is unchanged.
         self._clip_seq: Any = None
         self._clip_has_image: bool | None = None
+
+    def __dir__(self) -> list[str]:
+        """
+        Hides `window` and `native_menus` from `dir(self)` so pywebview's
+        `inject_pywebview` never recurses into `webview.window.Window` (whose
+        `@_loaded_event` properties block on `events.loaded.wait()`, deadlocking
+        the JS bridge injection thread before `window.pywebview.api` is built).
+        """
+        return [name for name in super().__dir__() if name not in ("window", "native_menus")]
 
     def native_menus_enabled(self) -> dict[str, Any]:
         """Reports whether a native OS menu bar is attached to the desktop window."""

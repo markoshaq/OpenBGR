@@ -12,9 +12,11 @@ import {
   saveStateToActiveTab,
   formatDiskBytes,
 } from "./state.js";
+import { emit } from "./bus.js";
 
 const ALPHA_BBOX_FLOOR = 4;
 let bboxCache = null;
+const blobBBoxCache = new WeakMap();
 
 /**
  * Scans an RGBA pixel buffer (`width * height * 4`) for the tight bounding box
@@ -65,29 +67,28 @@ export function scanAlphaBBoxFromPixels(
  * `(source, srcW, srcH)` so a cutoff change only costs a rescan, not another
  * drawImage + getImageData readback.
  */
-export function computeAlphaBBox(source, srcW, srcH, shadowCutoff = 0) {
+export function computeAlphaBBox(source, srcW, srcH, shadowCutoff = 0, blobKey = null) {
   const w = Math.max(1, srcW | 0);
   const h = Math.max(1, srcH | 0);
   const cutoff = Number(shadowCutoff) || 0;
-  const key = source?.currentSrc || source?.src || source;
-  const threshold = Math.max(
-    ALPHA_BBOX_FLOOR,
-    Math.round((cutoff / 100) * 255)
-  );
-
-  if (
-    bboxCache &&
-    bboxCache.key === key &&
-    bboxCache.w === w &&
-    bboxCache.h === h
-  ) {
-    if (bboxCache.cutoff === cutoff) return bboxCache.box;
-    const box = scanAlphaBBoxFromPixels(bboxCache.data, w, h, threshold);
-    bboxCache.cutoff = cutoff;
-    bboxCache.box = box;
-    return box;
+  const threshold = Math.max(ALPHA_BBOX_FLOOR, Math.round((cutoff / 100) * 255));
+  const tryHit = (e) => {
+    if (!e || e.w !== w || e.h !== h) return null;
+    if (e.cutoff !== cutoff) {
+      e.box = scanAlphaBBoxFromPixels(e.data, w, h, threshold);
+      e.cutoff = cutoff;
+    }
+    return e.box;
+  };
+  if (blobKey && typeof blobKey === "object") {
+    const hit = tryHit(blobBBoxCache.get(blobKey));
+    if (hit) return hit;
   }
-
+  const key = source?.currentSrc || source?.src || source;
+  if (bboxCache && bboxCache.key === key) {
+    const hit = tryHit(bboxCache);
+    if (hit) return hit;
+  }
   const canvas = document.createElement("canvas");
   canvas.width = w;
   canvas.height = h;
@@ -96,41 +97,58 @@ export function computeAlphaBBox(source, srcW, srcH, shadowCutoff = 0) {
   const { data } = ctx.getImageData(0, 0, w, h);
   canvas.width = 0;
   canvas.height = 0;
-
   const box = scanAlphaBBoxFromPixels(data, w, h, threshold);
-  bboxCache = { key, w, h, cutoff, box, data };
+  const entry = { key, w, h, cutoff, box, data };
+  bboxCache = entry;
+  if (blobKey && typeof blobKey === "object") blobBBoxCache.set(blobKey, entry);
   return box;
+}
+
+/** Pre-computes and caches the alpha bounding box for a cutout `Blob`. */
+export async function warmBlobAlphaBBox(blob, fallbackW = 0, fallbackH = 0, shadowCutoff = 0) {
+  if (!blob || typeof createImageBitmap !== "function") return null;
+  if (blobBBoxCache.has(blob)) {
+    const e = blobBBoxCache.get(blob);
+    return computeAlphaBBox(null, e.w, e.h, shadowCutoff, blob);
+  }
+  try {
+    const bmp = await createImageBitmap(blob);
+    try {
+      const w = fallbackW || bmp.width || state.naturalWidth || 1;
+      const h = fallbackH || bmp.height || state.naturalHeight || 1;
+      return computeAlphaBBox(bmp, w, h, shadowCutoff, blob);
+    } finally {
+      bmp.close?.();
+    }
+  } catch (_) {
+    return null;
+  }
 }
 
 /** Expands `{ x, y, w, h }` symmetrically by `paddingPct`% of `max(w, h)`. */
 export function expandCropBox(box, paddingPct = 0) {
-  const pad = Math.round(
-    Math.max(box.w, box.h) * (Math.max(0, Number(paddingPct) || 0) / 100)
-  );
-  return {
-    x: box.x - pad,
-    y: box.y - pad,
-    w: Math.max(1, box.w + 2 * pad),
-    h: Math.max(1, box.h + 2 * pad),
-  };
+  const pad = Math.round(Math.max(box.w, box.h) * (Math.max(0, Number(paddingPct) || 0) / 100));
+  return { x: box.x - pad, y: box.y - pad, w: Math.max(1, box.w + 2 * pad), h: Math.max(1, box.h + 2 * pad) };
 }
 
 /** Returns the active crop rectangle `{ x, y, w, h }` in source pixel coordinates. */
-export function getActiveCropRect() {
+export function getActiveCropRect(frameBlob = null) {
   const srcW = state.naturalWidth || masterCutoutImg.naturalWidth || 0;
   const srcH = state.naturalHeight || masterCutoutImg.naturalHeight || 0;
-  if (
-    !state.autoCrop ||
-    !state.resultBlob ||
-    srcW < 1 ||
-    srcH < 1 ||
-    !masterCutoutImg.complete ||
-    !masterCutoutImg.naturalWidth
-  ) {
-    return { x: 0, y: 0, w: srcW, h: srcH };
+  let targetBlob = frameBlob || state.resultBlob;
+  if (!targetBlob && state.isAnimated && state.frames.length > 1) {
+    const s = Math.max(0, (state.startFrame || 1) - 1);
+    const e = Math.min(state.frames.length - 1, (state.endFrame || state.frames.length) - 1);
+    for (let i = s; i <= e; i++) {
+      if (state.frames[i]?.resultBlob) { targetBlob = state.frames[i].resultBlob; break; }
+    }
   }
-  const tight = computeAlphaBBox(masterCutoutImg, srcW, srcH, state.shadowCutoff);
-  return expandCropBox(tight, state.cropPadding);
+  if (!state.autoCrop || !targetBlob || srcW < 1 || srcH < 1) return { x: 0, y: 0, w: srcW, h: srcH };
+  if (blobBBoxCache.has(targetBlob)) {
+    return expandCropBox(computeAlphaBBox(null, srcW, srcH, state.shadowCutoff, targetBlob), state.cropPadding);
+  }
+  if (!masterCutoutImg.complete || !masterCutoutImg.naturalWidth) return { x: 0, y: 0, w: srcW, h: srcH };
+  return expandCropBox(computeAlphaBBox(masterCutoutImg, srcW, srcH, state.shadowCutoff, targetBlob), state.cropPadding);
 }
 
 /** Returns the 100%-scale base `{ w, h }` of the active image (cropped when Auto-Crop is on). */
@@ -197,55 +215,33 @@ function boxBlurRGBA(data, w, h, radius) {
   for (let pass = 0; pass < 2; pass++) {
     for (let y = 0; y < h; y++) {
       const row = y * w;
-      let r = 0;
-      let g = 0;
-      let b = 0;
-      let a = 0;
+      let r = 0, g = 0, b = 0, a = 0;
       for (let x = -radius; x <= radius; x++) {
         const i = (row + Math.min(w - 1, Math.max(0, x))) * 4;
-        r += data[i];
-        g += data[i + 1];
-        b += data[i + 2];
-        a += data[i + 3];
+        r += data[i]; g += data[i + 1]; b += data[i + 2]; a += data[i + 3];
       }
       for (let x = 0; x < w; x++) {
         const o = (row + x) * 4;
-        tmp[o] = r / win;
-        tmp[o + 1] = g / win;
-        tmp[o + 2] = b / win;
-        tmp[o + 3] = a / win;
+        tmp[o] = r / win; tmp[o + 1] = g / win; tmp[o + 2] = b / win; tmp[o + 3] = a / win;
         const iA = (row + Math.min(w - 1, x + radius + 1)) * 4;
         const iS = (row + Math.max(0, x - radius)) * 4;
-        r += data[iA] - data[iS];
-        g += data[iA + 1] - data[iS + 1];
-        b += data[iA + 2] - data[iS + 2];
-        a += data[iA + 3] - data[iS + 3];
+        r += data[iA] - data[iS]; g += data[iA + 1] - data[iS + 1];
+        b += data[iA + 2] - data[iS + 2]; a += data[iA + 3] - data[iS + 3];
       }
     }
     for (let x = 0; x < w; x++) {
-      let r = 0;
-      let g = 0;
-      let b = 0;
-      let a = 0;
+      let r = 0, g = 0, b = 0, a = 0;
       for (let y = -radius; y <= radius; y++) {
         const i = (Math.min(h - 1, Math.max(0, y)) * w + x) * 4;
-        r += tmp[i];
-        g += tmp[i + 1];
-        b += tmp[i + 2];
-        a += tmp[i + 3];
+        r += tmp[i]; g += tmp[i + 1]; b += tmp[i + 2]; a += tmp[i + 3];
       }
       for (let y = 0; y < h; y++) {
         const o = (y * w + x) * 4;
-        data[o] = r / win;
-        data[o + 1] = g / win;
-        data[o + 2] = b / win;
-        data[o + 3] = a / win;
+        data[o] = r / win; data[o + 1] = g / win; data[o + 2] = b / win; data[o + 3] = a / win;
         const iA = (Math.min(h - 1, y + radius + 1) * w + x) * 4;
         const iS = (Math.max(0, y - radius) * w + x) * 4;
-        r += tmp[iA] - tmp[iS];
-        g += tmp[iA + 1] - tmp[iS + 1];
-        b += tmp[iA + 2] - tmp[iS + 2];
-        a += tmp[iA + 3] - tmp[iS + 3];
+        r += tmp[iA] - tmp[iS]; g += tmp[iA + 1] - tmp[iS + 1];
+        b += tmp[iA + 2] - tmp[iS + 2]; a += tmp[iA + 3] - tmp[iS + 3];
       }
     }
   }
@@ -329,7 +325,7 @@ function drawBlurred(ctx, src, srcRect, dstRect, strength) {
  * with `backdropSource`) when needed, and encodes to
  * `format` ("png" | "webp" | "jpg" | "mask").
  */
-async function renderExportBlob(source, srcW, srcH, opts) {
+export async function renderExportBlob(source, srcW, srcH, opts) {
   const {
     format,
     targetW,
@@ -669,8 +665,8 @@ function signatureFor({
   });
 }
 
-function exportSignature() {
-  return signatureFor({
+export function exportSignature() {
+  const sig = signatureFor({
     format: state.exportFormat,
     w: state.exportWidth,
     h: state.exportHeight,
@@ -679,14 +675,69 @@ function exportSignature() {
     autoCrop: state.autoCrop,
     cropPadding: state.autoCrop ? state.cropPadding : 0,
   });
+  if (!isAnimatedExport()) return sig;
+  return `${sig}:${state.startFrame || 1}-${state.endFrame || state.frames.length}`;
+}
+
+/**
+ * The signature a stage-preview render would carry under the current
+ * settings. Animated tabs use it to detect stale per-frame previews: every
+ * frame's `previewSignature` is compared against this value on selection and
+ * by the background refresh pass.
+ */
+export function expectedPreviewSignature() {
+  if (!previewNeedsRender()) {
+    return signatureFor({
+      format: "png",
+      w: state.naturalWidth || masterCutoutImg.naturalWidth,
+      h: state.naturalHeight || masterCutoutImg.naturalHeight,
+      cutoff: 0,
+      backdrop: "checker",
+      autoCrop: false,
+      cropPadding: 0,
+    });
+  }
+  const { w, h } = previewTargetSize();
+  const applyCrop = state.autoCrop && exportAspectMismatch();
+  return signatureFor({
+    format: state.exportFormat,
+    w,
+    h,
+    cutoff: state.shadowCutoff,
+    backdrop: state.activeBackdrop,
+    autoCrop: applyCrop,
+    cropPadding: applyCrop ? state.cropPadding : 0,
+  });
+}
+
+/** True when the active tab exports a multi-frame animation rather than individual frames. */
+export function isAnimatedExport() {
+  return (
+    state.isAnimated &&
+    state.frames.length > 1 &&
+    state.exportFormat === "gif"
+  );
+}
+
+let animatedExportBuilder = null;
+export function setAnimatedExportBuilder(fn) {
+  animatedExportBuilder = fn;
+}
+
+export function currentExportSource() {
+  if (!isAnimatedExport()) return state.resultBlob;
+  const startIdx = Math.max(0, (state.startFrame || 1) - 1);
+  return state.frames[startIdx]?.resultBlob || state.resultBlob;
 }
 
 /** True when the cached export blob is byte-exact for the current settings. */
-function exportCacheMatches() {
-  return (
-    state.exportCacheBlob &&
-    state.exportCacheSignature === exportSignature() &&
-    state.exportCacheSource === state.resultBlob
+export function exportCacheMatches() {
+  const src = currentExportSource();
+  return Boolean(
+    src &&
+      state.exportCacheBlob &&
+      state.exportCacheSignature === exportSignature() &&
+      state.exportCacheSource === src
   );
 }
 
@@ -698,6 +749,7 @@ function exportCacheMatches() {
 export function exactExportBlob() {
   if (exportCacheMatches()) return state.exportCacheBlob;
   if (
+    !isAnimatedExport() &&
     state.previewBlob &&
     state.previewSignature === exportSignature() &&
     state.previewSource === state.resultBlob
@@ -720,40 +772,46 @@ let exportCacheBusy = false;
  * export's, giving an honest size readout and a warm EXPORT button.
  */
 async function renderExportCache() {
-  if (exportCacheBusy) return;
+  // Multi-frame tabs encode on-demand when EXPORT is clicked so slider bursts
+  // and frame scrubbing do not trigger background multi-frame server encodes.
+  if (exportCacheBusy || (state.isAnimated && state.frames.length > 1)) return;
   exportCacheBusy = true;
   try {
     while (!exportCacheMatches()) {
-      const source = state.resultBlob;
-      if (
-        !source ||
-        !masterCutoutImg.complete ||
-        !masterCutoutImg.naturalWidth
-      ) {
-        return;
-      }
-      const srcW = state.naturalWidth || masterCutoutImg.naturalWidth;
-      const srcH = state.naturalHeight || masterCutoutImg.naturalHeight;
-      const baseDims = getExportBaseDims();
-      const targetW = Math.max(1, state.exportWidth || baseDims.w || srcW);
-      const targetH = Math.max(1, state.exportHeight || baseDims.h || srcH);
-      // Snapshot the signature alongside the render options so the stored
-      // signature describes the settings this blob was encoded under, even
-      // if they change while the encode is in flight.
+      const source = currentExportSource();
+      const imgReady =
+        masterCutoutImg.complete && masterCutoutImg.naturalWidth;
+      if (!source || !imgReady) return;
       const renderedSig = exportSignature();
-      const blob = await renderExportBlob(masterCutoutImg, srcW, srcH, {
-        format: state.exportFormat,
-        targetW,
-        targetH,
-        shadowCutoff: state.shadowCutoff,
-        backdrop: state.activeBackdrop,
-        backdropSource: resolveBackdropSource(),
-        backdropBlur: state.backdropBlur,
-        autoCrop: state.autoCrop,
-        cropPadding: state.cropPadding,
-        canvasFit: state.canvasFit,
-      });
-      if (source !== state.resultBlob) continue; // cutout swapped; re-evaluate
+      let blob;
+      if (isAnimatedExport()) {
+        blob = await animatedExportBuilder(state.exportFormat, {
+          showOverlay: false,
+        });
+        if (!blob) return;
+      } else {
+        const srcW = state.naturalWidth || masterCutoutImg.naturalWidth;
+        const srcH = state.naturalHeight || masterCutoutImg.naturalHeight;
+        const baseDims = getExportBaseDims();
+        const targetW = Math.max(1, state.exportWidth || baseDims.w || srcW);
+        const targetH = Math.max(1, state.exportHeight || baseDims.h || srcH);
+        // Snapshot the signature alongside the render options so the stored
+        // signature describes the settings this blob was encoded under, even
+        // if they change while the encode is in flight.
+        blob = await renderExportBlob(masterCutoutImg, srcW, srcH, {
+          format: state.exportFormat,
+          targetW,
+          targetH,
+          shadowCutoff: state.shadowCutoff,
+          backdrop: state.activeBackdrop,
+          backdropSource: resolveBackdropSource(),
+          backdropBlur: state.backdropBlur,
+          autoCrop: state.autoCrop,
+          cropPadding: state.cropPadding,
+          canvasFit: state.canvasFit,
+        });
+      }
+      if (source !== currentExportSource()) continue; // cutout swapped; re-evaluate
       state.exportCacheBlob = blob;
       state.exportCacheSignature = renderedSig;
       state.exportCacheSource = source;
@@ -769,6 +827,10 @@ async function renderExportCache() {
   }
 }
 
+/** Invokes the injected animated-export builder, or null before init. */
+export const callAnimatedExportBuilder = (format, opts) =>
+  animatedExportBuilder?.(format, opts) ?? null;
+
 // Longest-side cap for the live stage preview in pixels. Full-res canvas
 // work is only needed for the actual export; the stage just needs enough
 // pixels to stay crisp at display size with some zoom headroom.
@@ -780,12 +842,21 @@ let previewTimer = null;
 let previewLastStart = 0;
 
 /** Export dims clamped to the preview cap, never upscaled past the target. */
-function previewTargetSize() {
+export function previewTargetSize() {
   const srcW = state.naturalWidth || masterCutoutImg.naturalWidth;
   const srcH = state.naturalHeight || masterCutoutImg.naturalHeight;
   const uncroppedStage = state.autoCrop && !exportAspectMismatch();
-  const targetW = Math.max(1, uncroppedStage ? srcW : state.exportWidth || srcW);
-  const targetH = Math.max(1, uncroppedStage ? srcH : state.exportHeight || srcH);
+  const scale = state.exportScale || 1;
+  const scaledW = Math.max(1, Math.round(srcW * scale));
+  const scaledH = Math.max(1, Math.round(srcH * scale));
+  const targetW = Math.max(
+    1,
+    uncroppedStage ? scaledW : state.exportWidth || scaledW
+  );
+  const targetH = Math.max(
+    1,
+    uncroppedStage ? scaledH : state.exportHeight || scaledH
+  );
   const k = Math.min(1, PREVIEW_MAX_SIDE / Math.max(targetW, targetH));
   return {
     w: Math.max(1, Math.round(targetW * k)),
@@ -804,7 +875,7 @@ export function exportAspectMismatch() {
 }
 
 /** True when export settings change pixels or framing (cutoff, matte, mask, custom aspect); else the raw cutout is shown. */
-function previewNeedsRender() {
+export function previewNeedsRender() {
   if (
     state.shadowCutoff > 0 ||
     state.activeBackdrop !== "checker" ||
@@ -825,6 +896,10 @@ function previewNeedsRender() {
  * last event, so full-canvas encodes can't pile up on the main thread.
  */
 export function updateLiveStagePreview() {
+  // anim-preview.js listens for this and refreshes every processed frame,
+  // so backdrop/cutoff/dims changes reach the whole animation, not only the
+  // frame currently on stage.
+  emit("animation:previews-scheduled");
   if (
     !state.resultBlob ||
     !masterCutoutImg.complete ||
@@ -859,25 +934,18 @@ async function renderLivePreview(token) {
   }
   try {
     let blob;
-    let renderedSig;
+    const renderedSig = expectedPreviewSignature();
     if (!previewNeedsRender()) {
       blob = source;
-      renderedSig = signatureFor({
-        format: "png",
-        w: state.naturalWidth || masterCutoutImg.naturalWidth,
-        h: state.naturalHeight || masterCutoutImg.naturalHeight,
-        cutoff: 0,
-        backdrop: "checker",
-        autoCrop: false,
-        cropPadding: 0,
-      });
     } else {
       const srcW = state.naturalWidth || masterCutoutImg.naturalWidth;
       const srcH = state.naturalHeight || masterCutoutImg.naturalHeight;
       const { w, h } = previewTargetSize();
       const applyCrop = state.autoCrop && exportAspectMismatch();
+      const previewFmt =
+        state.exportFormat === "gif" ? "png" : state.exportFormat;
       blob = await renderExportBlob(masterCutoutImg, srcW, srcH, {
-        format: state.exportFormat,
+        format: previewFmt,
         targetW: w,
         targetH: h,
         shadowCutoff: state.shadowCutoff,
@@ -887,15 +955,6 @@ async function renderLivePreview(token) {
         autoCrop: applyCrop,
         cropPadding: applyCrop ? state.cropPadding : 0,
         canvasFit: state.canvasFit,
-      });
-      renderedSig = signatureFor({
-        format: state.exportFormat,
-        w,
-        h,
-        cutoff: state.shadowCutoff,
-        backdrop: state.activeBackdrop,
-        autoCrop: applyCrop,
-        cropPadding: applyCrop ? state.cropPadding : 0,
       });
     }
     if (token !== state.previewRenderToken) return;
@@ -919,7 +978,7 @@ async function renderLivePreview(token) {
     // export would produce (raw-passthrough or an uncapped render). When it
     // is not (auto-crop, capped preview dims), a background full-res encode
     // fills `exportCacheBlob` and updates the label itself.
-    if (dom.exportSizeLabel) {
+    if (dom.exportSizeLabel && !(state.isAnimated && state.frames.length > 1)) {
       dom.exportSizeLabel.textContent =
         renderedSig === exportSignature()
           ? formatDiskBytes(blob.size)

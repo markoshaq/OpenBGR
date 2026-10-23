@@ -39,6 +39,7 @@ import { initMenuBar } from "./menubar.js";
 import { initModals } from "./modals.js";
 import { initSettings } from "./settings.js";
 import { initControls } from "./controls.js";
+import { initAnimation } from "./animation.js";
 
 // Startup initialization (order mirrors the old top-level wiring sequence).
 // The workspace domain modules take their upward tab-strip calls as injected
@@ -64,6 +65,7 @@ bootInits([
   initSettings,
   initTierDropdown,
   initControls,
+  initAnimation,
   initBackdrop,
   initStageInput,
   initOpenFiles,

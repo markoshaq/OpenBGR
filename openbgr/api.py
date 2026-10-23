@@ -5,7 +5,9 @@ FastAPI application and HTTP endpoints for OpenBGR.
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
+import json
 import platform
 import secrets
 import shutil
@@ -51,7 +53,9 @@ from .models import (
     MANAGER,
     clear_model_disk_bytes_cache,
     compact_model_cache_fp16,
+    detect_model_tier,
     expected_model_bytes,
+    find_checkpoint_dirs,
     get_model_cache_dir,
     get_model_disk_bytes,
     import_model_from_dir,
@@ -64,7 +68,10 @@ from .models import (
     track_model_download,
 )
 from .pipeline import (
+    MAX_ANIMATION_FRAMES,
     compose_rgba,
+    encode_animated_image,
+    extract_animation_frames,
     get_last_job,
     segment_foreground,
 )
@@ -75,7 +82,7 @@ from .quick_action_config import (
     save_quick_action_config,
     set_quick_action_installed,
 )
-from .quick_action_native import choose_output_folder_native
+from .quick_action_native import choose_output_folder_native, choose_save_path_native
 from .settings import env_forces_offline, offline_mode_enabled, set_offline_mode
 
 
@@ -479,36 +486,107 @@ async def api_choose_folder() -> dict[str, Any]:
     return {"cancelled": False, "path": str(chosen)}
 
 
+@app.post("/api/save-as")
+async def api_save_as(
+    filename: str = Form(...),
+    file: UploadFile = File(...),
+) -> dict[str, Any]:
+    """
+    Opens the native OS Save dialog from the server process when `pywebview.api`
+    is not called directly. Uses the active desktop bridge window when present,
+    falling back to `choose_save_path_native`.
+    """
+    safe_name = Path(filename).name.strip() or "cutout.png"
+    data = await file.read(MAX_UPLOAD_BYTES + 1)
+    await file.close()
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail="File exceeds the 256 MB upload limit.",
+        )
+    bridge = desktop.get_desktop_api()
+    if bridge is not None and bridge.window is not None:
+        b64 = base64.b64encode(data).decode("ascii")
+        return await asyncio.to_thread(bridge.save_file, b64, safe_name)
+
+    def _native_save() -> dict[str, Any]:
+        dest = choose_save_path_native(safe_name, Path.home())
+        if dest is None:
+            return {"saved": False, "cancelled": True}
+        dest.write_bytes(data)
+        return {"saved": True, "path": str(dest)}
+
+    return await asyncio.to_thread(_native_save)
+
+
 @app.post("/api/models/import")
-async def api_import_model(target: str = Form(...), path: str = Form(...)) -> dict[str, Any]:
+async def api_import_model(path: str = Form(...), target: str = Form("")) -> dict[str, Any]:
     """
     Copies a user-provided checkpoint folder into the Hugging Face cache as a
     synthetic snapshot, so a model can be provisioned with zero network
     access (files fetched through a browser, another machine, or `hf download`).
     The folder must have been granted via the native folder dialog (see
     `desktop_bridge.grant_output_dir`).
+
+    When `target` is empty, the model is detected automatically from
+    `config.json` (`_name_or_path`) or the folder name. If the picked folder
+    is a container of several checkpoint directories, every recognized model
+    is imported in one pass.
     """
-    norm = normalize_tier_key(target)
-    if norm not in MODELS:
-        raise HTTPException(status_code=400, detail=f"Unknown model target '{target}'.")
     src_dir = Path(path).expanduser()
     if not desktop.is_output_dir_granted(src_dir):
         raise HTTPException(
             status_code=403,
             detail=(
                 "Model folder was not picked through the app's folder dialog. "
-                "Choose it with BROWSE before importing."
+                "Choose it with CHOOSE FOLDER before importing."
             ),
         )
-    repo_id = MODELS[norm]
 
-    def _import() -> int:
+    norm = normalize_tier_key(target) if target else ""
+    if norm:
+        if norm not in MODELS:
+            raise HTTPException(status_code=400, detail=f"Unknown model target '{target}'.")
+        jobs = [(norm, src_dir)]
+    else:
+        candidates = find_checkpoint_dirs(src_dir)
+        if not candidates:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{src_dir} does not contain a checkpoint folder "
+                    "(expected model.safetensors and config.json at the top "
+                    "level or one folder deep)."
+                ),
+            )
+        jobs = []
+        for candidate in candidates:
+            tier = detect_model_tier(candidate)
+            if tier is not None and tier not in {j[0] for j in jobs}:
+                jobs.append((tier, candidate))
+        if not jobs:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Could not identify an OpenBGR model inside {src_dir}. "
+                    "Expected a folder named after, or containing a "
+                    f"config.json _name_or_path matching, one of: "
+                    f"{', '.join(MODELS.values())}."
+                ),
+            )
+
+    def _import() -> list[dict[str, Any]]:
         # Serializes the cache write against in-flight downloads/uninstalls.
+        imported = []
         with model_download_guard(blocking=False):
-            return import_model_from_dir(repo_id, src_dir)
+            for tier, folder in jobs:
+                repo_id = MODELS[tier]
+                copied_bytes = import_model_from_dir(repo_id, folder)
+                imported.append({"target": tier, "repo_id": repo_id, "bytes": copied_bytes})
+        return imported
 
     try:
-        copied_bytes = await asyncio.to_thread(_import)
+        imported = await asyncio.to_thread(_import)
     except BlockingIOError:
         raise HTTPException(
             status_code=409,
@@ -517,18 +595,22 @@ async def api_import_model(target: str = Form(...), path: str = Form(...)) -> di
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        logger.exception("[API] Failed to import %s from %s.", repo_id, path)
-        raise HTTPException(status_code=500, detail=f"Failed to import {repo_id}: {exc}") from exc
+        logger.exception("[API] Failed to import model folder from %s.", path)
+        raise HTTPException(
+            status_code=500, detail=f"Failed to import model folder: {exc}"
+        ) from exc
 
-    compact_model_cache_fp16(repo_id)
-    logger.info(
-        "[API] Imported %s from %s (%.1f MB).",
-        repo_id,
-        path,
-        copied_bytes / 1024**2,
-    )
+    for entry in imported:
+        compact_model_cache_fp16(entry["repo_id"])
+        logger.info(
+            "[API] Imported %s from %s (%.1f MB).",
+            entry["repo_id"],
+            path,
+            entry["bytes"] / 1024**2,
+        )
     return {
         "ok": True,
+        "imported": imported,
         "status": api_status(),
     }
 
@@ -765,6 +847,141 @@ async def api_refine(
     )
 
 
+@app.post("/api/extract-frames")
+async def api_extract_frames(file: UploadFile = File(...)) -> dict[str, Any]:
+    """
+    Inspects an uploaded image and, when it contains multiple frames (animated
+    GIF or animated WebP), extracts up to `MAX_ANIMATION_FRAMES` full RGBA
+    frames as base64-encoded PNGs along with their frame durations in ms.
+    """
+    raw_bytes = await file.read(MAX_UPLOAD_BYTES + 1)
+    await file.close()
+    if len(raw_bytes) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Image exceeds the 256 MB upload limit.")
+    if not raw_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded image file is empty.")
+
+    def _extract() -> dict[str, Any]:
+        pil_img = Image.open(io.BytesIO(raw_bytes))
+        try:
+            total_frames = int(getattr(pil_img, "n_frames", 1) or 1)
+            width, height = pil_img.size
+            frames, truncated = extract_animation_frames(pil_img, MAX_ANIMATION_FRAMES)
+        finally:
+            pil_img.close()
+
+        if len(frames) <= 1:
+            for frm, _ in frames:
+                frm.close()
+            return {
+                "animated": False,
+                "width": width,
+                "height": height,
+                "frame_count": 1,
+                "total_frames": total_frames,
+                "truncated": False,
+                "frames": [],
+            }
+
+        encoded_frames: list[dict[str, Any]] = []
+        for idx, (frm, duration_ms) in enumerate(frames):
+            buf = io.BytesIO()
+            try:
+                frm.save(buf, format="PNG", compress_level=1)
+                b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+            finally:
+                buf.close()
+                frm.close()
+            encoded_frames.append(
+                {
+                    "index": idx,
+                    "duration_ms": duration_ms,
+                    "data_b64": b64,
+                }
+            )
+        return {
+            "animated": True,
+            "width": width,
+            "height": height,
+            "frame_count": len(encoded_frames),
+            "total_frames": total_frames,
+            "truncated": truncated,
+            "frames": encoded_frames,
+        }
+
+    try:
+        return await asyncio.to_thread(_extract)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Unable to decode animated image: {exc}"
+        ) from exc
+
+
+@app.post("/api/encode-animation")
+async def api_encode_animation(
+    files: list[UploadFile] = File(...),
+    durations: str = Form("[]"),
+    format: str = Form("gif"),
+) -> Response:
+    """
+    Assembles rendered RGBA frame images and per-frame durations (in ms) into
+    an animated GIF (`format='gif'`) or animated WebP (`format='webp'`).
+    """
+    fmt_clean = (format or "gif").strip().lower()
+    if fmt_clean not in ("gif", "webp"):
+        raise HTTPException(status_code=400, detail=f"Unsupported animation format '{format}'.")
+    if not files:
+        raise HTTPException(status_code=400, detail="No animation frames provided.")
+    if len(files) > MAX_ANIMATION_FRAMES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Animation exceeds the {MAX_ANIMATION_FRAMES}-frame limit.",
+        )
+
+    try:
+        parsed_durations = json.loads(durations) if durations else []
+        durations_ms = (
+            [int(d) for d in parsed_durations] if isinstance(parsed_durations, list) else []
+        )
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid frame durations JSON.") from exc
+
+    raw_frames: list[bytes] = []
+    total_read = 0
+    for upload in files:
+        chunk = await upload.read(MAX_UPLOAD_BYTES - total_read + 1)
+        await upload.close()
+        total_read += len(chunk)
+        if total_read > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413, detail="Animation frames exceed the 256 MB upload limit."
+            )
+        if not chunk:
+            raise HTTPException(status_code=400, detail="Animation contains an empty frame.")
+        raw_frames.append(chunk)
+
+    def _encode() -> bytes:
+        pil_frames: list[Image.Image] = []
+        try:
+            for data in raw_frames:
+                im = Image.open(io.BytesIO(data))
+                im.load()
+                pil_frames.append(im)
+            return encode_animated_image(pil_frames, durations_ms, fmt=fmt_clean)
+        finally:
+            for frm in pil_frames:
+                frm.close()
+
+    try:
+        anim_bytes = await asyncio.to_thread(_encode)
+    except Exception as exc:
+        logger.exception("[API] Failed to encode %s animation.", fmt_clean)
+        raise HTTPException(status_code=500, detail=f"Failed to encode animation: {exc}") from exc
+
+    media_type = "image/gif" if fmt_clean == "gif" else "image/webp"
+    return Response(content=anim_bytes, media_type=media_type)
+
+
 @app.middleware("http")
 async def no_cache_static(request, call_next):
     """Forces revalidation on the page shell so fresh edits reach the WebView."""
@@ -851,7 +1068,9 @@ app.add_middleware(
 
 _INDEX_CSP = (
     "default-src 'self'; "
-    "script-src 'self' 'unsafe-inline'; "
+    # pywebview's `window.pywebview._createApi` constructs every `window.pywebview.api.*`
+    # bridge method via `new Function(...)`, which WebKit blocks without 'unsafe-eval'.
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
     "style-src 'self' 'unsafe-inline'; "
     "img-src 'self' blob: data:; "
     "connect-src 'self'"

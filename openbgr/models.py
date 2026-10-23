@@ -8,6 +8,7 @@ from __future__ import annotations
 import functools
 import gc
 import importlib
+import json
 import os
 import shutil
 import threading
@@ -31,6 +32,7 @@ from .config import (
     DTYPE,
     IMAGENET_MEAN,
     IMAGENET_STD,
+    LEGACY_MATTING_REPO,
     MODELS,
     PRECISION_LABEL,
     logger,
@@ -433,6 +435,57 @@ def is_model_cached_locally(repo_id: str) -> bool:
         return False
 
 
+def detect_model_tier(source_dir: Path | str) -> str | None:
+    """
+    Best-effort identification of which `MODELS` tier a checkpoint folder
+    contains. Tries `config.json`'s `_name_or_path` (an HF repo id, URL, or
+    local path), then the folder name. Returns the tier key, or None when
+    nothing recognizable is found.
+    """
+    src = Path(source_dir).expanduser()
+    basenames = {repo.split("/")[-1].lower(): key for key, repo in MODELS.items()}
+    basenames[LEGACY_MATTING_REPO.split("/")[-1].lower()] = "matting"
+
+    names: list[str] = []
+    cfg = src / "config.json"
+    if cfg.is_file():
+        try:
+            raw = json.loads(cfg.read_text(encoding="utf-8")).get("_name_or_path")
+        except (OSError, ValueError):
+            raw = None
+        if isinstance(raw, str) and raw.strip():
+            names.append(raw)
+    names.append(src.name)
+
+    for raw in names:
+        base = raw.rstrip("/").replace("\\", "/").rsplit("/", 1)[-1].lower()
+        if base in basenames:
+            return basenames[base]
+    return None
+
+
+def find_checkpoint_dirs(source_dir: Path | str) -> list[Path]:
+    """
+    Returns checkpoint-looking directories inside `source_dir`: the folder
+    itself when `model.safetensors` and `config.json` sit at its top level,
+    otherwise its immediate subdirectories containing both. The scan stays
+    one level deep so picking a large folder (e.g. Downloads) stays cheap.
+    """
+    src = Path(source_dir).expanduser()
+    try:
+        entries = sorted(src.iterdir())
+    except OSError:
+        return []
+    top_names = {p.name for p in entries if p.is_file()}
+    if {"model.safetensors", "config.json"} <= top_names:
+        return [src]
+    return [
+        p
+        for p in entries
+        if p.is_dir() and (p / "model.safetensors").is_file() and (p / "config.json").is_file()
+    ]
+
+
 def import_model_from_dir(repo_id: str, source_dir: Path | str) -> int:
     """
     Copies a user-supplied checkpoint folder into the HF Hub cache as a
@@ -527,11 +580,34 @@ class ModelManager:
         gc.collect()
         if DEVICE.type == "mps":
             try:
+                torch.mps.synchronize()
                 torch.mps.empty_cache()
             except Exception:
                 pass
         elif DEVICE.type == "cuda":
             torch.cuda.empty_cache()
+
+    @staticmethod
+    def _from_pretrained(repo_id: str, *, local_files_only: bool) -> Any:
+        """
+        Loads `repo_id` directly in `DTYPE` with `low_cpu_mem_usage=True` so
+        CPU RAM does not spike by ~1.4 GB holding an intermediate FP32 copy
+        before `.to(device=DEVICE, dtype=DTYPE)`.
+        """
+        try:
+            return AutoModelForImageSegmentation.from_pretrained(
+                repo_id,
+                trust_remote_code=True,
+                local_files_only=local_files_only,
+                dtype=DTYPE,
+                low_cpu_mem_usage=True,
+            )
+        except TypeError:
+            return AutoModelForImageSegmentation.from_pretrained(
+                repo_id,
+                trust_remote_code=True,
+                local_files_only=local_files_only,
+            )
 
     def unload(self, *, wait: bool = True) -> bool:
         """
@@ -600,11 +676,7 @@ class ModelManager:
                 if owns_phase:
                     set_job_phase("load", model_key)
                 try:
-                    loaded_model = AutoModelForImageSegmentation.from_pretrained(
-                        repo_id,
-                        trust_remote_code=True,
-                        local_files_only=True,
-                    )
+                    loaded_model = self._from_pretrained(repo_id, local_files_only=True)
                     logger.info("[Model] Loaded %s from local offline cache.", repo_id)
                 except Exception as cache_exc:
                     if offline_mode_enabled():
@@ -636,18 +708,10 @@ class ModelManager:
                                 "falling back to the transformers downloader.",
                                 repo_id,
                             )
-                            loaded_model = AutoModelForImageSegmentation.from_pretrained(
-                                repo_id,
-                                trust_remote_code=True,
-                                local_files_only=False,
-                            )
+                            loaded_model = self._from_pretrained(repo_id, local_files_only=False)
                         else:
                             self.check_cancelled(load_epoch)
-                            loaded_model = AutoModelForImageSegmentation.from_pretrained(
-                                repo_id,
-                                trust_remote_code=True,
-                                local_files_only=True,
-                            )
+                            loaded_model = self._from_pretrained(repo_id, local_files_only=True)
                     logger.info("[Model] Download complete for %s.", repo_id)
                     if owns_phase:
                         set_job_phase("load", model_key)

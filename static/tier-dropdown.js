@@ -4,11 +4,11 @@
  * Importing this module has no side effects; app.js calls `initTierDropdown()`.
  */
 
-import { state, dom } from "./state.js";
+import { state, dom, setError, normalizeTierKey } from "./state.js";
 import { showModelContextMenu } from "./preferences.js";
 import { selectTier } from "./tabs.js";
 
-/** Copies the active (or first) tier card's label and tech line to the trigger. */
+/** Copies the active (or first) tier card's label, tech line, and usage line to the trigger. */
 export function syncTierDropdownTrigger() {
   const active =
     document.querySelector("#tierSelector .tier-btn.active") ||
@@ -21,6 +21,10 @@ export function syncTierDropdownTrigger() {
   if (dom.tierDropdownTech) {
     dom.tierDropdownTech.textContent =
       active.querySelector(".tier-tech")?.textContent || "";
+  }
+  if (dom.tierDropdownDesc) {
+    dom.tierDropdownDesc.textContent =
+      active.querySelector(".tier-desc")?.textContent || "";
   }
 }
 
@@ -45,9 +49,26 @@ export function handleTierDropdownOutsideClick(e) {
   }
 }
 
-/** Tier card click: switches models only when the card is not already active. */
+/**
+ * Tier card click: switches models only when the card is not already active,
+ * and warns immediately when the pick cannot run (offline + not cached).
+ */
 export function handleTierCardClick(tierKey) {
-  if (tierKey && tierKey !== state.tier) selectTier(tierKey);
+  if (!tierKey || tierKey === state.tier) return;
+  selectTier(tierKey);
+  const info = state.serverStatus?.tiers?.[normalizeTierKey(tierKey)];
+  if (info && !info.cached) {
+    if (state.serverStatus?.offline_mode) {
+      setError(
+        "Selected model is not cached and internet access is blocked. " +
+          "Import the checkpoint folder under Settings > Models."
+      );
+    } else if (!navigator.onLine) {
+      setError(
+        "Selected model is not cached on disk and device is currently offline."
+      );
+    }
+  }
 }
 
 /** Wires the trigger, the option cards, outside-click collapse, and the mirror observer. */

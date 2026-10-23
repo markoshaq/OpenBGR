@@ -261,6 +261,16 @@ class TestDesktopApi(unittest.TestCase):
         self.assertEqual(bridge_mod.get_open_files_received(), 1)
         self.assertEqual(bridge_mod.get_pending_open_files_count(), 1)
 
+    def test_dir_excludes_window_to_prevent_pywebview_introspection_deadlock(self) -> None:
+        """`dir(DesktopApi())` must omit `window` and `native_menus` so pywebview never recurses into `Window`."""
+        bridge = bridge_mod.DesktopApi()
+        bridge.window = MagicMock()
+        names = dir(bridge)
+        self.assertNotIn("window", names)
+        self.assertNotIn("native_menus", names)
+        self.assertIn("save_file", names)
+        self.assertIn("choose_output_dir", names)
+
 
 if __name__ == "__main__":
     unittest.main()

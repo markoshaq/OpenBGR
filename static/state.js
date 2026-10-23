@@ -170,6 +170,14 @@ export const state = {
   naturalWidth: 0,
   naturalHeight: 0,
 
+  // Multi-frame animation (GIF / animated WebP) state
+  isAnimated: false,
+  frames: [],
+  currentFrameIndex: 0,
+  animPlaying: false,
+  startFrame: 1,
+  endFrame: 1,
+
   // Stage view transform
   zoom: 1,
   panX: 0,
@@ -213,6 +221,37 @@ export function defaultTierForNewTab() {
     : state.serverStatus?.recommended_tier || state.tier;
 }
 
+/**
+ * Sidebar defaults for a brand-new tab or a freshly ingested image: every
+ * processing and export control starts clean instead of inheriting whatever
+ * the previous tab had dialed in. The chosen output folder is not a
+ * per-image setting and stays.
+ */
+export function freshTabSettings() {
+  return {
+    tier: defaultTierForNewTab(),
+    defringe: true,
+    despill: true,
+    edgeShift: 0,
+    edgeFeather: 0,
+    shadowCutoff: 0,
+    exportFormat: prefs.defaultFormat,
+    autoCrop: false,
+    cropPadding: DEFAULT_CROP_PADDING,
+    exportScale: 1,
+    aspectLocked: true,
+    canvasFit: "fit",
+    activeBackdrop: prefs.defaultBackdrop,
+    backdropColor: prefs.defaultBackdrop.startsWith("#")
+      ? prefs.defaultBackdrop
+      : "#ffffff",
+    backdropImg: null,
+    backdropImgUrl: null,
+    backdropSeq: 0,
+    backdropBlur: 50,
+  };
+}
+
 /** Allocates a fresh tab record (image, result, zoom, batch state) with optional overrides. */
 export function createTabRecord(overrides = {}) {
   return {
@@ -230,6 +269,11 @@ export function createTabRecord(overrides = {}) {
     previewSource: null,
     naturalWidth: 0,
     naturalHeight: 0,
+    isAnimated: false,
+    frames: [],
+    currentFrameIndex: 0,
+    startFrame: 1,
+    endFrame: 1,
     tier: state.tier,
     defringe: state.defringe,
     despill: state.despill,
@@ -299,12 +343,30 @@ export function revokeTabUrls(tab) {
   if (tab.previewObjectUrl && tab.previewObjectUrl !== tab.resultObjectUrl) {
     URL.revokeObjectURL(tab.previewObjectUrl);
   }
+  if (Array.isArray(tab.frames)) {
+    for (const f of tab.frames) {
+      if (f?.originalObjectUrl) URL.revokeObjectURL(f.originalObjectUrl);
+      if (f?.resultObjectUrl) URL.revokeObjectURL(f.resultObjectUrl);
+      if (f?.previewObjectUrl && f.previewObjectUrl !== f.resultObjectUrl) {
+        URL.revokeObjectURL(f.previewObjectUrl);
+      }
+    }
+  }
 }
 
 /** Snapshots the live global state (model, view, filters, result) back into the active tab record. */
 export function saveStateToActiveTab() {
   const tab = getActiveTab();
   if (!tab) return;
+  if (state.isAnimated && state.frames[state.currentFrameIndex]) {
+    const cur = state.frames[state.currentFrameIndex];
+    cur.resultBlob = state.resultBlob;
+    cur.resultObjectUrl = state.resultObjectUrl;
+    cur.previewBlob = state.previewBlob;
+    cur.previewObjectUrl = state.previewObjectUrl;
+    cur.previewSignature = state.previewSignature;
+    cur.refineJobId = state.refineJobId;
+  }
   tab.tier = state.tier;
   tab.defringe = state.defringe;
   tab.despill = state.despill;
@@ -325,6 +387,11 @@ export function saveStateToActiveTab() {
   tab.previewObjectUrl = state.previewObjectUrl;
   tab.naturalWidth = state.naturalWidth;
   tab.naturalHeight = state.naturalHeight;
+  tab.isAnimated = state.isAnimated;
+  tab.frames = state.frames;
+  tab.currentFrameIndex = state.currentFrameIndex;
+  tab.startFrame = state.startFrame;
+  tab.endFrame = state.endFrame;
   tab.exportFormat = state.exportFormat;
   tab.outputDir = state.outputDir;
   tab.autoCrop = state.autoCrop;

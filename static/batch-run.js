@@ -356,7 +356,7 @@ async function finishBatchRun(tab, batch, run) {
             : ".\nDownloaded as openbgr-cutouts.zip."),
       confirmText: "DONE",
       hideCancel: true,
-      altText: outputDir ? "REVEAL FOLDER" : undefined,
+      altText: outputDir ? "OPEN FOLDER" : undefined,
       altFn: outputDir ? () => revealSavedPath(outputDir) : null,
     },
     () => {}

@@ -46,6 +46,10 @@ function reset() {
   state.sourceFile = null;
   state.resultBlob = null;
   state.spacePressed = false;
+  state.isAnimated = false;
+  state.frames = [];
+  state.currentFrameIndex = 0;
+  state.animPlaying = false;
 }
 
 const key = (k, extra = {}) => {
@@ -168,3 +172,36 @@ test("1/2/3 switch view modes only with a result and no Alt", () => {
   handleKeydown(key("4"));
   assert.deepEqual(calls, ["setView:split", "setView:cutout", "setView:original"]);
 });
+
+test("Space and ArrowLeft/ArrowRight control animation playback and frame stepping", async () => {
+  const { stopAnimationPlayback } = await import("../static/animation.js");
+  reset();
+  state.isAnimated = true;
+  state.startFrame = 1;
+  state.endFrame = 3;
+  state.frames = [
+    { index: 0, durationMs: 80, originalObjectUrl: "blob:f0" },
+    { index: 1, durationMs: 80, originalObjectUrl: "blob:f1" },
+    { index: 2, durationMs: 80, originalObjectUrl: "blob:f2" },
+  ];
+
+  const spaceEv = key(" ", { code: "Space" });
+  handleKeydown(spaceEv);
+  assert.ok(spaceEv.defaultPrevented);
+  assert.equal(state.animPlaying, true);
+
+  const rightEv = key("ArrowRight");
+  handleKeydown(rightEv);
+  assert.ok(rightEv.defaultPrevented);
+  assert.equal(state.animPlaying, false);
+  assert.equal(state.currentFrameIndex, 1);
+
+  const leftEv = key("ArrowLeft");
+  handleKeydown(leftEv);
+  assert.ok(leftEv.defaultPrevented);
+  assert.equal(state.currentFrameIndex, 0);
+
+  stopAnimationPlayback();
+  reset();
+});
+

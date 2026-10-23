@@ -47,6 +47,7 @@ export const FORMAT_EXT = {
   webp: "webp",
   jpg: "jpg",
   mask: "png",
+  gif: "gif",
 };
 
 export const FORMAT_LABELS = {
@@ -54,6 +55,7 @@ export const FORMAT_LABELS = {
   webp: "WEBP",
   jpg: "JPG",
   mask: "MASK",
+  gif: "GIF",
 };
 
 /** Default Auto-Crop padding: percent of the tight box's longest side. */

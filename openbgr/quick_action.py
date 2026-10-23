@@ -20,7 +20,11 @@ from .config import (
     normalize_tier_key,
 )
 from .models import MANAGER, set_job_phase
-from .pipeline import segment_foreground
+from .pipeline import (
+    encode_animated_image,
+    extract_animation_frames,
+    segment_foreground,
+)
 from .quick_action_config import load_quick_action_config
 from .quick_action_native import (
     choose_output_folder_native,
@@ -45,7 +49,7 @@ def cutout_filename_for(fmt: str = "png") -> tuple[str, str]:
     fmt_clean = (fmt or "png").strip().lower()
     if fmt_clean == "mask":
         return "mask", "png"
-    if fmt_clean in ("webp", "jpg", "png"):
+    if fmt_clean in ("webp", "jpg", "png", "gif"):
         return "cutout", fmt_clean
     return "cutout", "png"
 
@@ -84,6 +88,8 @@ def encode_cutout_image(rgba_img: Image.Image, fmt: str = "png") -> bytes:
             finally:
                 alpha.close()
                 bg.close()
+        elif fmt_clean == "gif":
+            return encode_animated_image([rgba_img], [100], fmt="gif")
         else:
             rgba_img.save(buf, format="PNG", compress_level=1)
         return buf.getvalue()
@@ -113,6 +119,62 @@ def _resolve_cli_output(
         dest.mkdir(parents=True, exist_ok=True)
         return _default_output_path(src, fmt=fmt, dest_dir=dest)
     return _with_output_suffix(dest, ext)
+
+
+def _segment_image_or_animation(
+    pil_img: Image.Image,
+    tier_key: str,
+    defringe: bool,
+    despill: bool,
+    matting: bool,
+    fmt: str,
+) -> tuple[Image.Image, bytes, float, dict[str, Any], str]:
+    """
+    Segments a static or multi-frame image, returning `(first_cutout_img,
+    encoded_bytes, total_elapsed_ms, tier_cfg, effective_fmt)`. Multi-frame
+    images (animated GIF / WebP) segment every frame and encode to animated
+    WebP (when `fmt == 'webp'`) or animated GIF.
+    """
+    frames, truncated = extract_animation_frames(pil_img)
+    if truncated:
+        logger.warning(
+            "[QuickAction] Animation exceeds the frame/pixel limit; "
+            "processing only the first %d frames.",
+            len(frames),
+        )
+    if len(frames) <= 1:
+        for frm, _ in frames:
+            frm.close()
+        pil_img.load()
+        result_img, elapsed_ms, tier_cfg, _job_id = segment_foreground(
+            pil_img, tier_key, defringe, despill, matting
+        )
+        encoded = encode_cutout_image(result_img, fmt=fmt)
+        return result_img, encoded, elapsed_ms, tier_cfg, fmt
+
+    cutouts: list[Image.Image] = []
+    durations: list[int] = []
+    total_ms = 0.0
+    last_cfg: dict[str, Any] = {}
+    anim_fmt = "webp" if (fmt or "").strip().lower() == "webp" else "gif"
+    try:
+        for frm, dur_ms in frames:
+            try:
+                cut, ms, last_cfg, _ = segment_foreground(frm, tier_key, defringe, despill, matting)
+            finally:
+                frm.close()
+            cutouts.append(cut)
+            durations.append(dur_ms)
+            total_ms += ms
+        encoded = encode_animated_image(cutouts, durations, fmt=anim_fmt)
+        first = cutouts[0]
+        for extra in cutouts[1:]:
+            extra.close()
+        return first, encoded, total_ms, last_cfg, anim_fmt
+    except Exception:
+        for c in cutouts:
+            c.close()
+        raise
 
 
 def run_quick_action(inputs: list[str]) -> dict[str, Any]:
@@ -176,18 +238,20 @@ def run_quick_action(inputs: list[str]) -> dict[str, Any]:
         result_img: Image.Image | None = None
         try:
             pil_img = Image.open(src)
-            pil_img.load()
-            result_img, _elapsed_ms, _tier_cfg, _job_id = segment_foreground(
-                pil_img,
-                tier_key,
-                edge_refine,
-                edge_refine,
-                use_matting,
+            result_img, encoded_bytes, _elapsed_ms, _tier_cfg, eff_fmt = (
+                _segment_image_or_animation(
+                    pil_img,
+                    tier_key,
+                    edge_refine,
+                    edge_refine,
+                    use_matting,
+                    fmt,
+                )
             )
 
             if save_mode == "ask":
                 if len(valid_sources) == 1:
-                    tag, ext = cutout_filename_for(fmt)
+                    tag, ext = cutout_filename_for(eff_fmt)
                     chosen = choose_save_path_native(f"{src.stem}-{tag}.{ext}", src.parent)
                     if chosen is None:
                         return {
@@ -199,17 +263,18 @@ def run_quick_action(inputs: list[str]) -> dict[str, Any]:
                         }
                     out_path = _with_output_suffix(chosen, ext)
                 else:
-                    out_path = _default_output_path(src, fmt=fmt, dest_dir=batch_dest_dir)
+                    out_path = _default_output_path(src, fmt=eff_fmt, dest_dir=batch_dest_dir)
             else:
-                out_path = _default_output_path(src, fmt=fmt)
+                out_path = _default_output_path(src, fmt=eff_fmt)
 
-            encoded_bytes = encode_cutout_image(result_img, fmt=fmt)
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_bytes(encoded_bytes)
 
             if copy_clip and len(valid_sources) == 1:
                 clip_bytes = (
-                    encoded_bytes if fmt == "png" else encode_cutout_image(result_img, fmt="png")
+                    encoded_bytes
+                    if eff_fmt == "png"
+                    else encode_cutout_image(result_img, fmt="png")
                 )
                 copy_png_bytes_to_clipboard(clip_bytes)
 
@@ -282,21 +347,21 @@ def run_cli(
         pil_img: Image.Image | None = None
         try:
             pil_img = Image.open(src)
-            pil_img.load()
-            result_img, elapsed_ms, tier_cfg, _job_id = segment_foreground(
+            result_img, encoded_bytes, elapsed_ms, tier_cfg, eff_fmt = _segment_image_or_animation(
                 pil_img,
                 tier or RECOMMENDED_TIER,
                 defringe,
                 despill,
                 matting,
+                fmt,
             )
             try:
-                out_path = _resolve_cli_output(src, output, len(inputs), fmt=fmt)
+                out_path = _resolve_cli_output(src, output, len(inputs), fmt=eff_fmt)
                 if out_path is None:
                     logger.info("[CLI] Save cancelled for %s", src.name)
                     continue
                 out_path.parent.mkdir(parents=True, exist_ok=True)
-                out_path.write_bytes(encode_cutout_image(result_img, fmt=fmt))
+                out_path.write_bytes(encoded_bytes)
                 logger.info(
                     "[CLI] %s -> %s (%.0f ms, %s)",
                     src.name,

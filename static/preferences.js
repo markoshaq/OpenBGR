@@ -519,6 +519,16 @@ export async function toggleOfflineMode() {
   }
 }
 
+let importingModel = false;
+
+/** Keeps IMPORT clickable only while a folder path is entered and no import is running. */
+export function syncImportButton() {
+  if (dom.btnImportModel) {
+    dom.btnImportModel.disabled =
+      importingModel || !(dom.importFolderPath?.value || "").trim();
+  }
+}
+
 /** Opens the native folder picker (bridge or `/api/choose-folder`) and fills the import path field. */
 export async function chooseImportFolder() {
   try {
@@ -529,6 +539,7 @@ export async function chooseImportFolder() {
       } else if (res?.error) {
         setError(res.error);
       }
+      syncImportButton();
       return;
     }
     const res = await apiFetch("/api/choose-folder", { method: "POST" });
@@ -537,6 +548,7 @@ export async function chooseImportFolder() {
       if (payload?.path && dom.importFolderPath) {
         dom.importFolderPath.value = payload.path;
       }
+      syncImportButton();
       return;
     }
     setError("Could not open the folder picker.");
@@ -547,19 +559,18 @@ export async function chooseImportFolder() {
 
 /** Copies a user-downloaded checkpoint folder into the HF cache via `/api/models/import`. */
 export async function importModelFromFolder() {
-  const target = dom.prefImportTier?.value || "general";
   const path = (dom.importFolderPath?.value || "").trim();
   if (!path) {
     setError("Choose the folder containing the downloaded checkpoint first.");
     return;
   }
+  importingModel = true;
   if (dom.btnImportModel) {
     dom.btnImportModel.disabled = true;
     dom.btnImportModel.textContent = "IMPORTING…";
   }
   try {
     const fd = new FormData();
-    fd.append("target", target);
     fd.append("path", path);
     const res = await apiFetch("/api/models/import", {
       method: "POST",
@@ -574,15 +585,22 @@ export async function importModelFromFolder() {
     }
     if (dom.importFolderPath) dom.importFolderPath.value = "";
     updateCacheIndicator();
-    const name = MODEL_TECH_NAMES[target] || target;
-    setSuccess(`${name} imported and ready to use.`);
+    const names = (payload?.imported || []).map(
+      (i) => MODEL_TECH_NAMES[i.target] || i.target
+    );
+    setSuccess(
+      names.length
+        ? `${names.join(", ")} imported and ready to use.`
+        : "Model folder imported."
+    );
   } catch (err) {
     setError(err?.message || "Failed to import model folder.");
   } finally {
+    importingModel = false;
     if (dom.btnImportModel) {
-      dom.btnImportModel.disabled = false;
       dom.btnImportModel.textContent = "IMPORT";
     }
+    syncImportButton();
   }
 }
 
