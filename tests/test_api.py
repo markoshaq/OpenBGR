@@ -64,25 +64,29 @@ class TestApiContracts(unittest.TestCase):
         self.assertGreater(dyn_w, dyn_h)
 
     def test_api_refine_endpoint(self) -> None:
-        """`/api/refine` re-composes a cached job and rejects stale job ids with HTTP 409."""
+        """`/api/refine` re-composes cached multi-tab jobs, evicts over-budget entries, and 409s on misses."""
         rgb = np.full((24, 24, 3), (30, 180, 90), dtype=np.uint8)
         alpha = np.zeros((24, 24), dtype=np.uint8)
         alpha[6:18, 6:18] = 255
         alpha[5, 6:18] = 140
 
-        with pipeline_mod._LAST_JOB_LOCK:
-            pipeline_mod._LAST_JOB.clear()
-            pipeline_mod._LAST_JOB.update({"id": 42, "rgb": rgb, "alpha": alpha})
+        pipeline_mod.clear_refine_jobs()
+        self.assertTrue(pipeline_mod.cache_refine_job(41, rgb, alpha))
+        self.assertTrue(pipeline_mod.cache_refine_job(42, rgb, alpha))
 
-        res = asyncio.run(
-            api_mod.api_refine(job_id=42, defringe=True, despill=True, edge_shift=0, edge_feather=0)
-        )
-        self.assertEqual(res.media_type, "image/png")
-        self.assertEqual(res.headers["X-Refine-Job-Id"], "42")
-        out = Image.open(io.BytesIO(res.body))
-        self.assertEqual(out.mode, "RGBA")
-        self.assertEqual(out.size, (24, 24))
-        out.close()
+        # Both tab 41 and tab 42 stay refinable concurrently (multi-tab LRU cache).
+        for jid in (41, 42):
+            res = asyncio.run(
+                api_mod.api_refine(
+                    job_id=jid, defringe=True, despill=True, edge_shift=0, edge_feather=0
+                )
+            )
+            self.assertEqual(res.media_type, "image/png")
+            self.assertEqual(res.headers["X-Refine-Job-Id"], str(jid))
+            out = Image.open(io.BytesIO(res.body))
+            self.assertEqual(out.mode, "RGBA")
+            self.assertEqual(out.size, (24, 24))
+            out.close()
 
         # Edge geometry fields re-compose from the raw cached alpha
         res_shift = asyncio.run(
@@ -98,14 +102,22 @@ class TestApiContracts(unittest.TestCase):
         alpha_shift.close()
         out_shift.close()
 
-        # Stale job ids are rejected so an older tab can't refine a newer job
+        # Unknown or evicted job ids are rejected with HTTP 409
         with self.assertRaises(HTTPException) as ctx:
             asyncio.run(
                 api_mod.api_refine(
-                    job_id=41, defringe=True, despill=True, edge_shift=0, edge_feather=0
+                    job_id=999, defringe=True, despill=True, edge_shift=0, edge_feather=0
                 )
             )
         self.assertEqual(ctx.exception.status_code, 409)
+
+        # LRU eviction under byte budget evicts the oldest entry (41) when a new one is cached
+        single_bytes = int(rgb.nbytes + alpha.nbytes)
+        with patch.object(pipeline_mod, "_LAST_JOB_MAX_BYTES", single_bytes * 2):
+            pipeline_mod.cache_refine_job(43, rgb, alpha)
+        self.assertIsNone(pipeline_mod.get_last_job(41))
+        self.assertIsNotNone(pipeline_mod.get_last_job(42))
+        self.assertIsNotNone(pipeline_mod.get_last_job(43))
 
     def test_api_save_sanitizes_and_renames_collisions(self) -> None:
         """`/api/save` strips path traversal and de-duplicates colliding filenames."""
@@ -290,31 +302,35 @@ class TestApiContracts(unittest.TestCase):
 
         import huggingface_hub.constants as hf_constants
 
-        with tempfile.TemporaryDirectory() as tmp:
-            with patch.object(settings_mod, "SETTINGS_PATH", Path(tmp) / "settings.json"):
-                try:
-                    self.assertFalse(settings_mod.offline_mode_enabled())
-                    self.assertTrue(settings_mod.set_offline_mode(True))
-                    self.assertTrue(settings_mod.offline_mode_enabled())
-                    self.assertEqual(os.environ.get("HF_HUB_OFFLINE"), "1")
-                    self.assertTrue(hf_constants.HF_HUB_OFFLINE)
-                    self.assertFalse(settings_mod.set_offline_mode(False))
-                    self.assertNotIn("HF_HUB_OFFLINE", os.environ)
-                    self.assertFalse(hf_constants.HF_HUB_OFFLINE)
-                finally:
-                    settings_mod.apply_offline_mode(False)
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.object(settings_mod, "SETTINGS_PATH", Path(tmp) / "settings.json"),
+        ):
+            try:
+                self.assertFalse(settings_mod.offline_mode_enabled())
+                self.assertTrue(settings_mod.set_offline_mode(True))
+                self.assertTrue(settings_mod.offline_mode_enabled())
+                self.assertEqual(os.environ.get("HF_HUB_OFFLINE"), "1")
+                self.assertTrue(hf_constants.HF_HUB_OFFLINE)
+                self.assertFalse(settings_mod.set_offline_mode(False))
+                self.assertNotIn("HF_HUB_OFFLINE", os.environ)
+                self.assertFalse(hf_constants.HF_HUB_OFFLINE)
+            finally:
+                settings_mod.apply_offline_mode(False)
 
     def test_offline_mode_blocks_model_install(self) -> None:
         """`/api/models/install` rejects downloads while offline mode is on."""
-        with tempfile.TemporaryDirectory() as tmp:
-            with patch.object(settings_mod, "SETTINGS_PATH", Path(tmp) / "settings.json"):
-                try:
-                    settings_mod.set_offline_mode(True)
-                    with self.assertRaises(HTTPException) as ctx:
-                        asyncio.run(api_mod.api_install_model(target="general"))
-                    self.assertEqual(ctx.exception.status_code, 409)
-                finally:
-                    settings_mod.set_offline_mode(False)
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.object(settings_mod, "SETTINGS_PATH", Path(tmp) / "settings.json"),
+        ):
+            try:
+                settings_mod.set_offline_mode(True)
+                with self.assertRaises(HTTPException) as ctx:
+                    asyncio.run(api_mod.api_install_model(target="general"))
+                self.assertEqual(ctx.exception.status_code, 409)
+            finally:
+                settings_mod.set_offline_mode(False)
 
     def test_import_model_from_dir_layout(self) -> None:
         """`import_model_from_dir` builds a refs/main-resolvable synthetic snapshot."""
@@ -346,6 +362,17 @@ class TestApiContracts(unittest.TestCase):
                 models_mod.import_model_from_dir(repo_id, empty)
             with self.assertRaises(FileNotFoundError):
                 models_mod.import_model_from_dir(repo_id, src_dir / "missing")
+
+            # Nested folders with duplicate basenames fail loudly instead of overwriting.
+            dup_dir = src_dir / "dup"
+            (dup_dir / "a").mkdir(parents=True)
+            (dup_dir / "b").mkdir(parents=True)
+            (dup_dir / "model.safetensors").write_bytes(b"weights")
+            (dup_dir / "config.json").write_text("{}", encoding="utf-8")
+            (dup_dir / "a" / "modeling.py").write_text("# 1", encoding="utf-8")
+            (dup_dir / "b" / "modeling.py").write_text("# 2", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                models_mod.import_model_from_dir(repo_id, dup_dir)
 
     def test_job_progress_phase_transitions(self) -> None:
         """`/api/progress` exposes a valid phase and resets byte counters off-download."""
@@ -382,9 +409,11 @@ class TestApiContracts(unittest.TestCase):
             # Moved/broken huggingface_hub internals warn instead of silently
             # degrading, and still yield the outer-bar class.
             models_mod._HF_TQDM_MODULE = None
-            with self.assertLogs("openbgr", level="WARNING") as logs:
-                with models_mod.track_model_download("general") as bar_cls:
-                    self.assertIs(bar_cls, models_mod._JobOuterBarTqdm)
+            with (
+                self.assertLogs("openbgr", level="WARNING") as logs,
+                models_mod.track_model_download("general") as bar_cls,
+            ):
+                self.assertIs(bar_cls, models_mod._JobOuterBarTqdm)
             self.assertTrue(any("tqdm" in out for out in logs.output))
         finally:
             models_mod._HF_TQDM_MODULE = original_mod
@@ -453,12 +482,32 @@ class TestApiEndpoints(unittest.TestCase):
             ).status_code,
             403,
         )
-        # Read-only endpoints stay open, and the page carries the token.
+        # Read-only endpoints stay open, and the page carries the browser-scoped token.
         self.assertEqual(bare.get("/api/progress").status_code, 200)
         home = bare.get("/")
         self.assertEqual(home.status_code, 200)
         self.assertIn('name="openbgr-api-token"', home.text)
-        self.assertIn(config_mod.API_TOKEN, home.text)
+        self.assertIn(config_mod.WEB_API_TOKEN, home.text)
+        self.assertNotIn(config_mod.API_TOKEN, home.text)
+        self.assertIn("default-src 'self'", home.headers.get("content-security-policy", ""))
+
+        # The browser token works on UI endpoints, but raw-path local-IPC
+        # endpoints (/api/open-files, /api/quick-action) refuse it and require
+        # the 0600 ~/.openbgr/session_token local token.
+        web_headers = {config_mod.API_TOKEN_HEADER: config_mod.WEB_API_TOKEN}
+        self.assertEqual(bare.post("/api/cancel", headers=web_headers).status_code, 200)
+        self.assertEqual(
+            bare.post(
+                "/api/open-files", data={"files": ["/tmp/a.png"]}, headers=web_headers
+            ).status_code,
+            403,
+        )
+        self.assertEqual(
+            bare.post(
+                "/api/quick-action", data={"files": ["/tmp/a.png"]}, headers=web_headers
+            ).status_code,
+            403,
+        )
 
     def test_foreign_host_header_rejected(self) -> None:
         """Non-loopback Host headers get HTTP 400 and never receive the token page."""
@@ -485,6 +534,7 @@ class TestApiEndpoints(unittest.TestCase):
         res = self.client.get("/api/status")
         self.assertEqual(res.status_code, 200)
         data = res.json()
+        self.assertEqual(data["app"], "openbgr")
         self.assertEqual(data["version"], config_mod.APP_VERSION)
         self.assertIn("tiers", data)
         self.assertIn("device", data)
@@ -672,23 +722,39 @@ class TestApiEndpoints(unittest.TestCase):
         self.assertIn("offline_mode", res.json())
         self.assertIn("offline_forced", res.json())
 
-        with tempfile.TemporaryDirectory() as tmp:
-            with patch.object(settings_mod, "SETTINGS_PATH", Path(tmp) / "settings.json"):
-                try:
-                    res = self.client.post("/api/settings", data={"offline_mode": "true"})
-                    self.assertEqual(res.status_code, 200)
-                    self.assertTrue(res.json()["offline_mode"])
-                    res = self.client.post("/api/settings", data={"offline_mode": "false"})
-                    self.assertFalse(res.json()["offline_mode"])
-                finally:
-                    settings_mod.apply_offline_mode(False)
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.object(settings_mod, "SETTINGS_PATH", Path(tmp) / "settings.json"),
+        ):
+            try:
+                res = self.client.post("/api/settings", data={"offline_mode": "true"})
+                self.assertEqual(res.status_code, 200)
+                self.assertTrue(res.json()["offline_mode"])
+                res = self.client.post("/api/settings", data={"offline_mode": "false"})
+                self.assertFalse(res.json()["offline_mode"])
+            finally:
+                settings_mod.apply_offline_mode(False)
 
     def test_models_import_over_http(self) -> None:
-        """`POST /api/models/import` copies a checkpoint folder into the cache."""
+        """`POST /api/models/import` requires a dialog-granted folder and copies checkpoints."""
         with tempfile.TemporaryDirectory() as src, tempfile.TemporaryDirectory() as cache:
             src_dir = Path(src)
             (src_dir / "model.safetensors").write_bytes(b"weights")
             (src_dir / "config.json").write_text("{}", encoding="utf-8")
+
+            # Ungranted directories are rejected with HTTP 403 before touching disk.
+            res = self.client.post(
+                "/api/models/import",
+                data={"target": "general", "path": src},
+            )
+            self.assertEqual(res.status_code, 403)
+
+            # `/api/choose-folder` grants the native-dialog pick for subsequent imports.
+            with patch.object(api_mod, "choose_output_folder_native", return_value=src_dir):
+                pick_res = self.client.post("/api/choose-folder")
+            self.assertEqual(pick_res.status_code, 200)
+            self.assertFalse(pick_res.json()["cancelled"])
+            self.assertTrue(bridge_mod.is_output_dir_granted(src_dir))
 
             with (
                 patch.object(models_mod, "HF_HUB_CACHE", cache),
@@ -707,9 +773,11 @@ class TestApiEndpoints(unittest.TestCase):
                 data={"target": "bogus-model", "path": src},
             )
             self.assertEqual(res.status_code, 400)
+            missing_dir = src_dir / "missing"
+            bridge_mod.grant_output_dir(missing_dir)
             res = self.client.post(
                 "/api/models/import",
-                data={"target": "general", "path": str(src_dir / "missing")},
+                data={"target": "general", "path": str(missing_dir)},
             )
             self.assertEqual(res.status_code, 400)
 

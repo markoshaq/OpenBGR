@@ -519,7 +519,7 @@ export async function toggleOfflineMode() {
   }
 }
 
-/** Opens the native folder picker (desktop only) and fills the import path field. */
+/** Opens the native folder picker (bridge or `/api/choose-folder`) and fills the import path field. */
 export async function chooseImportFolder() {
   try {
     if (window.pywebview?.api?.choose_output_dir) {
@@ -531,8 +531,15 @@ export async function chooseImportFolder() {
       }
       return;
     }
-    dom.importFolderPath?.focus();
-    setError("Paste the model folder path into the field, then click IMPORT.");
+    const res = await apiFetch("/api/choose-folder", { method: "POST" });
+    if (res.ok) {
+      const payload = await res.json();
+      if (payload?.path && dom.importFolderPath) {
+        dom.importFolderPath.value = payload.path;
+      }
+      return;
+    }
+    setError("Could not open the folder picker.");
   } catch {
     setError("Could not open the folder picker.");
   }

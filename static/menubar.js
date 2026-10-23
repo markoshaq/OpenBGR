@@ -1,8 +1,9 @@
 /**
- * In-app menu bar: dropdown open/close behavior, the `data-cmd` dispatch
- * table, non-Apple shortcut labels, and hiding the bar when the desktop
- * window has native OS menus. Commands defer to `window.openBGR`, so the
- * in-app and native menus share one implementation.
+ * In-app menu bar: declarative `MENUS` definition, DOM rendering, dropdown
+ * open/close behavior, the `data-cmd` dispatch table, non-Apple shortcut
+ * labels, and hiding the bar when the desktop window has native OS menus.
+ * Commands defer to `window.openBGR`, so the in-app and native menus share
+ * one implementation.
  * Importing this module has no side effects; app.js calls `initMenuBar()`.
  */
 
@@ -14,6 +15,223 @@ import {
   menuShortcutLabel,
   chipShortcutLabel,
 } from "./shortcuts.js";
+
+/** Declarative specification of the top-level menus and their items (`null` = separator). */
+export const MENUS = [
+  {
+    id: "file",
+    label: "FILE",
+    items: [
+      { cmd: "newTab", label: "New Tab", shortcut: "Mod+T", kbd: "⌘T", requires: "tab" },
+      { cmd: "openImage", label: "Open Image…", shortcut: "Mod+O", kbd: "⌘O" },
+      { cmd: "openRecent", label: "Open Recent…", requires: "native" },
+      {
+        cmd: "batchProcess",
+        label: "Batch Process Images…",
+        shortcut: "Mod+B",
+        kbd: "⌘B",
+      },
+      null,
+      {
+        cmd: "exportImage",
+        label: "Export Image…",
+        shortcut: "Mod+E",
+        kbd: "⌘E",
+        requires: "result",
+      },
+      null,
+      {
+        cmd: "closeActiveTab",
+        label: "Close Tab",
+        shortcut: "Mod+W",
+        kbd: "⌘W",
+        requires: "tab",
+      },
+      {
+        cmd: "reopenClosedTab",
+        label: "Reopen Closed Tab",
+        shortcut: "Shift+Mod+T",
+        kbd: "⇧⌘T",
+        requires: "closed-tab",
+      },
+      null,
+      { cmd: "preferences", label: "Preferences…", shortcut: "Mod+,", kbd: "⌘," },
+      null,
+      { cmd: "restartApp", label: "Restart OpenBGR", requires: "native" },
+      null,
+      { cmd: "quitApp", label: "Quit OpenBGR", shortcut: "Mod+Q", kbd: "⌘Q" },
+    ],
+  },
+  {
+    id: "edit",
+    label: "EDIT",
+    items: [
+      {
+        cmd: "copyImage",
+        label: "Copy Cutout to Clipboard",
+        shortcut: "Shift+Mod+C",
+        kbd: "⇧⌘C",
+        requires: "result",
+      },
+      { cmd: "copyOriginal", label: "Copy Original Image", requires: "image" },
+      {
+        cmd: "pasteImage",
+        label: "Paste Image from Clipboard",
+        shortcut: "Mod+V",
+        kbd: "⌘V",
+        requires: "paste-image",
+      },
+      null,
+      {
+        cmd: "cancelProcessing",
+        label: "Cancel Processing",
+        kbd: "ESC",
+        requires: "processing",
+      },
+    ],
+  },
+  {
+    id: "view",
+    label: "VIEW",
+    items: [
+      {
+        cmd: "viewSplit",
+        label: "Split Comparison",
+        shortcut: "1",
+        kbd: "1",
+        check: "view:split",
+        checked: true,
+        requires: "result",
+      },
+      {
+        cmd: "viewCutout",
+        label: "Cutout Only",
+        shortcut: "2",
+        kbd: "2",
+        check: "view:cutout",
+        requires: "result",
+      },
+      {
+        cmd: "viewOriginal",
+        label: "Original Only",
+        shortcut: "3",
+        kbd: "3",
+        check: "view:original",
+        requires: "result",
+      },
+      null,
+      { cmd: "zoomIn", label: "Zoom In", shortcut: "Mod++", kbd: "⌘+", requires: "image" },
+      { cmd: "zoomOut", label: "Zoom Out", shortcut: "Mod+-", kbd: "⌘−", requires: "image" },
+      {
+        cmd: "zoomReset",
+        label: "Actual Size",
+        shortcut: "Mod+0",
+        kbd: "⌘0",
+        requires: "image",
+      },
+      null,
+      {
+        cmd: "toggleLoupe",
+        label: "Toggle 4x Loupe",
+        kbd: "Z",
+        check: "loupe",
+        requires: "image",
+      },
+      null,
+      { cmd: "toggleTheme", label: "Light Mode", check: "theme:light" },
+      {
+        cmd: "toggleFullscreen",
+        label: "Toggle Full Screen",
+        shortcut: "Fullscreen",
+        kbd: "⌃⌘F",
+      },
+    ],
+  },
+  {
+    id: "model",
+    label: "MODEL",
+    items: [
+      {
+        cmd: "presetLite",
+        label: "Lite - 1K Fast (BiRefNet_lite)",
+        requires: "model-controls",
+        check: "tier:lite",
+      },
+      {
+        cmd: "presetGeneral",
+        label: "General - 1K Studio (BiRefNet)",
+        requires: "model-controls",
+        check: "tier:general",
+        checked: true,
+      },
+      {
+        cmd: "presetHr",
+        label: "Ultra HR - 2K Detail (BiRefNet_HR)",
+        requires: "model-controls",
+        check: "tier:hr",
+      },
+      {
+        cmd: "presetPortrait",
+        label: "Portrait - 1K People (BiRefNet-portrait)",
+        requires: "model-controls",
+        check: "tier:portrait",
+      },
+      {
+        cmd: "presetMatting",
+        label: "Matting - 2K Soft Alpha (BiRefNet_HR-matting)",
+        requires: "model-controls",
+        check: "tier:matting",
+      },
+      {
+        cmd: "presetDynamic",
+        label: "Dynamic - Native Ratio (BiRefNet_dynamic)",
+        requires: "model-controls",
+        check: "tier:dynamic",
+      },
+      null,
+      {
+        cmd: "toggleDefringe",
+        label: "Defringe Edges",
+        requires: "model-controls",
+        check: "defringe",
+        checked: true,
+      },
+      {
+        cmd: "toggleDespill",
+        label: "Suppress Color Spill",
+        requires: "model-controls",
+        check: "despill",
+        checked: true,
+      },
+      null,
+      {
+        cmd: "rerun",
+        label: "Re-Run Segmentation",
+        shortcut: "Mod+R",
+        kbd: "⌘R",
+        requires: "image-idle",
+      },
+      null,
+      { cmd: "manageModels", label: "Manage Model Storage…" },
+    ],
+  },
+  {
+    id: "help",
+    label: "HELP",
+    items: [
+      { cmd: "shortcuts", label: "Keyboard Shortcuts…" },
+      {
+        cmd: "preferences",
+        label: "Preferences & System Info…",
+        shortcut: "Mod+,",
+        kbd: "⌘,",
+      },
+      { cmd: "about", label: "About OpenBGR…" },
+      null,
+      { cmd: "openGithub", label: "OpenBGR on GitHub ↗" },
+    ],
+  },
+];
 
 /** Menu item `data-cmd` values mapped to their `window.openBGR` commands. */
 export const MENU_COMMANDS = {
@@ -54,6 +272,62 @@ export const MENU_COMMANDS = {
   shortcuts: () => window.openBGR.openSettings("shortcuts"),
   openGithub: () => window.openBGR.openGithub(),
 };
+
+/** Builds the menu bar DOM inside `container` from the declarative `MENUS` table. */
+export function renderMenuBar(container = dom.menuBar) {
+  if (!container) return;
+  container.innerHTML = "";
+  for (const menu of MENUS) {
+    const root = document.createElement("div");
+    root.className = "menu-root";
+    root.setAttribute("data-menu", menu.id);
+
+    const trigger = document.createElement("button");
+    trigger.type = "button";
+    trigger.className = "menu-trigger";
+    trigger.textContent = menu.label;
+    root.appendChild(trigger);
+
+    const dropdown = document.createElement("div");
+    dropdown.className = "menu-dropdown";
+
+    for (const spec of menu.items) {
+      if (!spec) {
+        const sep = document.createElement("div");
+        sep.className = "menu-sep";
+        dropdown.appendChild(sep);
+        continue;
+      }
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "menu-item";
+      btn.setAttribute("data-cmd", spec.cmd);
+      if (spec.requires) btn.setAttribute("data-requires", spec.requires);
+      if (spec.check) btn.setAttribute("data-check", spec.check);
+
+      const checkSpan = document.createElement("span");
+      checkSpan.className = "menu-check";
+      if (spec.checked) checkSpan.textContent = "✓";
+
+      const labelSpan = document.createElement("span");
+      labelSpan.className = "menu-label";
+      labelSpan.textContent = spec.label;
+
+      const kbdSpan = document.createElement("span");
+      kbdSpan.className = "menu-kbd";
+      if (spec.shortcut) kbdSpan.setAttribute("data-shortcut", spec.shortcut);
+      if (spec.kbd) kbdSpan.textContent = spec.kbd;
+
+      btn.appendChild(checkSpan);
+      btn.appendChild(labelSpan);
+      btn.appendChild(kbdSpan);
+      dropdown.appendChild(btn);
+    }
+
+    root.appendChild(dropdown);
+    container.appendChild(root);
+  }
+}
 
 /** Closes every open in-app menu dropdown. */
 export function closeAllMenus() {
@@ -118,12 +392,15 @@ export function handleMenuItemClick(item) {
   MENU_COMMANDS[cmd]?.();
 }
 
-/** Wires the native-menus probe, shortcut labels, triggers, items, and outside-click close. */
+/** Wires the native-menus probe, menu DOM rendering, shortcut labels, triggers, items, and outside-click close. */
 export function initMenuBar() {
   syncNativeMenusMode();
   window.addEventListener("pywebviewready", syncNativeMenusMode);
 
   if (!dom.menuBar) return;
+  if (!dom.menuBar.querySelector(".menu-root")) {
+    renderMenuBar(dom.menuBar);
+  }
   localizeShortcutLabels();
 
   dom.menuBar.querySelectorAll(".menu-root").forEach((root) => {

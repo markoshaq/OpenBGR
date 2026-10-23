@@ -8,6 +8,7 @@ from __future__ import annotations
 import itertools
 import threading
 import time
+from collections import OrderedDict
 from typing import Any
 
 import numpy as np
@@ -217,16 +218,15 @@ def suppress_color_spill(rgb_np: np.ndarray, alpha_norm: np.ndarray) -> np.ndarr
     return despilled
 
 
-# Cached raw outputs of the most recent segmentation job. Storing the
-# pre-refinement RGB and alpha lets /api/refine re-apply the edge filters
-# (defringe/despill) in ~20ms without re-running the neural network.
+# Bounded LRU cache of raw pre-refinement outputs (`rgb`, `alpha`) keyed by
+# `job_id`. Caching per job_id lets multi-tab workspaces tweak edge filters
+# (defringe/despill/shift/feather) across tabs in ~20ms without re-running the
+# neural network, while the total-byte and entry caps bound memory usage.
 _JOB_ID_SEQ = itertools.count(1)
-_LAST_JOB: dict[str, Any] = {}
+_REFINE_JOBS: OrderedDict[int, dict[str, Any]] = OrderedDict()
 _LAST_JOB_LOCK = threading.Lock()
-# Ceiling on the cached raw RGB + alpha pair (4 bytes/pixel). Above ~64MP a
-# job would pin hundreds of MB between requests, so refine support is skipped
-# and the user re-processes instead.
 _LAST_JOB_MAX_BYTES = 256 * 1024 * 1024
+_REFINE_MAX_ENTRIES = 16
 
 # Serializes compose_rgba across threads: segment_foreground runs it inside
 # inference_lock while /api/refine calls it standalone. Concurrent passes
@@ -234,16 +234,54 @@ _LAST_JOB_MAX_BYTES = 256 * 1024 * 1024
 _COMPOSE_LOCK = threading.Lock()
 
 
+def clear_refine_jobs() -> None:
+    """Clears all cached raw job buffers."""
+    with _LAST_JOB_LOCK:
+        _REFINE_JOBS.clear()
+
+
+def cache_refine_job(job_id: int, rgb: np.ndarray, alpha: np.ndarray) -> bool:
+    """
+    Stores `(rgb, alpha)` in the bounded LRU refine cache under `job_id`,
+    evicting oldest entries to stay within `_LAST_JOB_MAX_BYTES` and
+    `_REFINE_MAX_ENTRIES`. Returns False when a single job exceeds the budget.
+    """
+    entry_bytes = int(rgb.nbytes + alpha.nbytes)
+    with _LAST_JOB_LOCK:
+        _REFINE_JOBS.pop(job_id, None)
+        if entry_bytes > _LAST_JOB_MAX_BYTES:
+            logger.info(
+                "[Pipeline] Job over %dMB refine cache cap; skipping buffers.",
+                _LAST_JOB_MAX_BYTES // (1024 * 1024),
+            )
+            return False
+        total_bytes = sum(int(v.get("bytes", 0)) for v in _REFINE_JOBS.values())
+        while _REFINE_JOBS and (
+            len(_REFINE_JOBS) >= _REFINE_MAX_ENTRIES
+            or total_bytes + entry_bytes > _LAST_JOB_MAX_BYTES
+        ):
+            _, evicted = _REFINE_JOBS.popitem(last=False)
+            total_bytes -= int(evicted.get("bytes", 0))
+        _REFINE_JOBS[job_id] = {
+            "id": job_id,
+            "rgb": rgb,
+            "alpha": alpha,
+            "bytes": entry_bytes,
+        }
+        return True
+
+
 def get_last_job(job_id: int) -> dict[str, Any] | None:
     """
-    Returns a snapshot of the cached last-job raw RGB/alpha iff `job_id`
-    matches the latest completed job, else None. Keeps `_LAST_JOB` and its
-    lock private to this module. Jobs over `_LAST_JOB_MAX_BYTES` store no
-    pixel buffers, so they fail the `"rgb" in job` check like an id miss.
+    Returns a snapshot of the cached raw RGB/alpha for `job_id` (marking it
+    most-recently-used), or None when `job_id` is unknown or was evicted.
     """
     with _LAST_JOB_LOCK:
-        job = dict(_LAST_JOB)
-    return job if job.get("id") == job_id and "rgb" in job else None
+        entry = _REFINE_JOBS.get(job_id)
+        if entry is None or "rgb" not in entry:
+            return None
+        _REFINE_JOBS.move_to_end(job_id)
+        return dict(entry)
 
 
 def compose_rgba(
@@ -262,10 +300,7 @@ def compose_rgba(
     """
     with _COMPOSE_LOCK:
         alpha_out = adjust_alpha_geometry(alpha_np, edge_shift, edge_feather)
-        if defringe:
-            rgb_np = decontaminate_edge_colors(rgb_raw, alpha_out)
-        else:
-            rgb_np = rgb_raw
+        rgb_np = decontaminate_edge_colors(rgb_raw, alpha_out) if defringe else rgb_raw
         if despill:
             alpha_norm = alpha_out.astype(np.float32) / 255.0
             rgb_np = suppress_color_spill(rgb_np, alpha_norm)
@@ -351,19 +386,9 @@ def segment_foreground(
             alpha_np = np.array(mask_pil, dtype=np.uint8)
             rgb_np_raw = np.array(rgb_image, dtype=np.uint8)
 
-            # Snapshot the raw RGB + alpha so /api/refine can re-apply the
-            # edge filters later without re-running inference.
-            with _LAST_JOB_LOCK:
-                _LAST_JOB.clear()
-                _LAST_JOB["id"] = job_id
-                if rgb_np_raw.nbytes + alpha_np.nbytes <= _LAST_JOB_MAX_BYTES:
-                    _LAST_JOB["rgb"] = rgb_np_raw
-                    _LAST_JOB["alpha"] = alpha_np
-                else:
-                    logger.info(
-                        "[Pipeline] Job over %dMB refine cache cap; skipping buffers.",
-                        _LAST_JOB_MAX_BYTES // (1024 * 1024),
-                    )
+            # Snapshot the raw RGB + alpha in the bounded LRU refine cache so
+            # /api/refine can re-apply edge filters across tabs without re-running inference.
+            cache_refine_job(job_id, rgb_np_raw, alpha_np)
 
             MANAGER.check_cancelled(job_epoch)
             result_image = compose_rgba(

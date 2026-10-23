@@ -12,11 +12,106 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
+import secrets
 from pathlib import Path
 from typing import Any
 
+BASE_DIR = Path(__file__).resolve().parent.parent
 APP_CONFIG_DIR = Path.home() / ".openbgr"
 SETTINGS_PATH = APP_CONFIG_DIR / "settings.json"
+
+
+def _read_project_version() -> str:
+    """
+    Reads `version` from `pyproject.toml` via `tomllib` (3.11+) or regex
+    fallback so the version is defined in one place without pulling in third-
+    party packages. Returns "0.0.0-dev" when `pyproject.toml` is missing.
+    """
+    pyproject_path = BASE_DIR / "pyproject.toml"
+    try:
+        raw_text = pyproject_path.read_text(encoding="utf-8")
+        try:
+            import tomllib  # type: ignore[import-not-found]
+
+            parsed = tomllib.loads(raw_text)
+            ver = parsed.get("project", {}).get("version")
+            if isinstance(ver, str) and ver:
+                return ver
+        except Exception:
+            pass
+        m = re.search(r'^version\s*=\s*"([^"]+)"', raw_text, re.MULTILINE)
+        if m:
+            return m.group(1)
+    except OSError:
+        pass
+    try:
+        from importlib.metadata import version as pkg_version
+
+        return pkg_version("openbgr")
+    except Exception:
+        return "0.0.0-dev"
+
+
+APP_VERSION = _read_project_version()
+
+# Per-session tokens guarding mutating `/api/*` endpoints:
+# - `WEB_API_TOKEN` is injected into the served `index.html` (`GET /`) so the
+#   studio UI can call browser-facing endpoints, while raw-path IPC endpoints
+#   (`/api/open-files`, `/api/quick-action`) refuse it.
+# - `API_TOKEN` is persisted to `~/.openbgr/session_token` (0600) so local OS
+#   processes with filesystem access (Quick Action delegation, open-files
+#   forwarding, local CLI/curl scripts) can authenticate to all endpoints.
+API_TOKEN_HEADER = "x-openbgr-token"
+API_TOKEN_PATH = APP_CONFIG_DIR / "session_token"
+API_TOKEN = secrets.token_urlsafe(32)
+WEB_API_TOKEN = secrets.token_urlsafe(32)
+
+TIER_KEYS: tuple[str, ...] = (
+    "lite",
+    "general",
+    "hr",
+    "portrait",
+    "matting",
+    "dynamic",
+)
+
+TIER_ALIASES: dict[str, str] = {
+    "low": "lite",
+    "mid": "general",
+    "full": "general",
+    "high": "hr",
+}
+
+
+def normalize_tier_key(tier: str) -> str:
+    """Resolves legacy preset names (`low`, `mid`, `high`) to canonical model keys."""
+    cleaned = (tier or "").strip().lower()
+    return TIER_ALIASES.get(cleaned, cleaned)
+
+
+def persist_api_token() -> None:
+    """Writes the session token to `~/.openbgr/` (0600) for trusted local clients."""
+    try:
+        APP_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        API_TOKEN_PATH.write_text(API_TOKEN, encoding="utf-8")
+        os.chmod(API_TOKEN_PATH, 0o600)
+    except OSError as exc:
+        logging.getLogger("openbgr").warning(
+            "[Config] Failed to persist the session token to %s (%s); Quick "
+            "Action and open-files delegation will not authenticate.",
+            API_TOKEN_PATH,
+            exc,
+        )
+
+
+def read_api_token() -> str:
+    """Reads the running server's session token; empty when none is available."""
+    try:
+        return API_TOKEN_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
 
 # Launch-time environment flags that force offline mode regardless of the
 # persisted setting. Evaluated once at import: `set_offline_mode` itself

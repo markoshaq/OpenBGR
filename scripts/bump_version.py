@@ -1,19 +1,17 @@
 #!/usr/bin/env python3
 """
-Bump the project version in every file that pins it.
+Bump the project version in `pyproject.toml`.
 
 Usage:
     python3 scripts/bump_version.py 0.11.3
 
-`pyproject.toml` stays the canonical source (read at runtime by
-`openbgr.config.APP_VERSION` and `build_release.APP_VERSION`); this script
-keeps `package.json` and `package-lock.json` in lockstep so the
-`test_version_single_sourced_from_pyproject` integrity test never drifts.
+`pyproject.toml` is the single canonical version source (read at runtime by
+`openbgr.settings.APP_VERSION` / `openbgr.config.APP_VERSION` and by
+`scripts/build_release.py`).
 """
 
 from __future__ import annotations
 
-import json
 import re
 import sys
 from pathlib import Path
@@ -40,17 +38,7 @@ def main() -> int:
         return 1
     pyproject.write_text(text, encoding="utf-8")
 
-    for name in ("package.json", "package-lock.json"):
-        path = ROOT_DIR / name
-        data = json.loads(path.read_text(encoding="utf-8"))
-        data["version"] = version
-        if name == "package-lock.json":
-            root_pkg = data.get("packages", {}).get("")
-            if isinstance(root_pkg, dict):
-                root_pkg["version"] = version
-        path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-
-    print(f"Bumped to {version}: pyproject.toml, package.json, package-lock.json")
+    print(f"Bumped to {version} in pyproject.toml")
     print(f"Next: add a CHANGELOG.md section, then `git tag v{version}` to release.")
     return 0
 

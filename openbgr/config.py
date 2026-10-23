@@ -8,8 +8,6 @@ from __future__ import annotations
 import logging
 import os
 import platform
-import re
-import secrets
 import shutil
 import subprocess
 import sys
@@ -20,10 +18,29 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
+from .settings import (
+    API_TOKEN,
+    API_TOKEN_HEADER,
+    API_TOKEN_PATH,
+    APP_CONFIG_DIR,
+    APP_VERSION,
+    BASE_DIR,
+    TIER_ALIASES,
+    TIER_KEYS,
+    WEB_API_TOKEN,
+    normalize_tier_key,
+    persist_api_token,
+    read_api_token,
+)
+
 # Must be set before importing PyTorch so any non-native Apple Silicon MPS operator
 # transparently falls back to CPU execution without raising a runtime error.
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
-warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings(
+    "ignore",
+    category=FutureWarning,
+    module=r"^(transformers|timm|kornia|torch)(\.|$)",
+)
 
 import torch
 
@@ -31,72 +48,15 @@ import torch
 # Path & Runtime Configuration
 # ---------------------------------------------------------------------------
 
-BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
-STATIC_DIR.mkdir(exist_ok=True)
-
-
-def _read_project_version() -> str:
-    """
-    Reads `version` from `pyproject.toml` so the version is defined in one
-    place. Returns the unmistakable sentinel "0.0.0-dev" when pyproject is
-    missing or unparsable: a wrong pinned version is worse than an obviously
-    absent one.
-    """
-    try:
-        text = (BASE_DIR / "pyproject.toml").read_text(encoding="utf-8")
-        m = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
-        if m:
-            return m.group(1)
-    except OSError:
-        pass
-    return "0.0.0-dev"
-
-
-APP_VERSION = _read_project_version()
 
 # Per-user desktop preferences dir; survives app updates and keeps the repo clean.
-APP_CONFIG_DIR = Path.home() / ".openbgr"
 WINDOW_STATE_PATH = APP_CONFIG_DIR / "window.json"
 APP_ICON_PATH = APP_CONFIG_DIR / "icon.png"
 QUICK_ACTION_CONFIG_PATH = APP_CONFIG_DIR / "quick_action.json"
 NOTIFIER_APP_PATH = APP_CONFIG_DIR / "OpenBGRNotifier.app"
 NOTIFIER_ICNS_PATH = APP_CONFIG_DIR / "OpenBGR.icns"
 LOG_FILE_PATH = APP_CONFIG_DIR / "openbgr.log"
-
-# Per-session token guarding mutating `/api/*` endpoints against cross-origin
-# (drive-by) requests from arbitrary web pages. It is generated fresh per
-# process and injected into the served `index.html`, so only a page loaded
-# from the real server can read it. The token is persisted to
-# `~/.openbgr/session_token` (0600) by the process that actually serves HTTP,
-# letting trusted local clients (Quick Action delegation, open-files
-# forwarding) authenticate without ever exposing it to other origins.
-API_TOKEN_HEADER = "x-openbgr-token"
-API_TOKEN_PATH = APP_CONFIG_DIR / "session_token"
-API_TOKEN = secrets.token_urlsafe(32)
-
-
-def persist_api_token() -> None:
-    """Writes the session token to `~/.openbgr/` (0600) for trusted local clients."""
-    try:
-        APP_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        API_TOKEN_PATH.write_text(API_TOKEN, encoding="utf-8")
-        os.chmod(API_TOKEN_PATH, 0o600)
-    except OSError as exc:
-        logger.warning(
-            "[Config] Failed to persist the session token to %s (%s); Quick "
-            "Action and open-files delegation will not authenticate.",
-            API_TOKEN_PATH,
-            exc,
-        )
-
-
-def read_api_token() -> str:
-    """Reads the running server's session token; empty when none is available."""
-    try:
-        return API_TOKEN_PATH.read_text(encoding="utf-8").strip()
-    except OSError:
-        return ""
 
 
 def _stderr_is_log_file() -> bool:
@@ -245,18 +205,20 @@ MODELS: dict[str, str] = {
 
 LEGACY_MATTING_REPO = "ZhengPeng7/BiRefNet-matting"
 
-TIER_ALIASES: dict[str, str] = {
-    "low": "lite",
-    "mid": "general",
-    "full": "general",
-    "high": "hr",
-}
-
-
-def normalize_tier_key(tier: str) -> str:
-    """Resolves legacy preset names (`low`, `mid`, `high`) to canonical model keys."""
-    cleaned = (tier or "").strip().lower()
-    return TIER_ALIASES.get(cleaned, cleaned)
+__all__ = [
+    "API_TOKEN",
+    "API_TOKEN_HEADER",
+    "API_TOKEN_PATH",
+    "APP_CONFIG_DIR",
+    "APP_VERSION",
+    "BASE_DIR",
+    "TIER_ALIASES",
+    "TIER_KEYS",
+    "WEB_API_TOKEN",
+    "normalize_tier_key",
+    "persist_api_token",
+    "read_api_token",
+]
 
 
 # Selectable BiRefNet models exposed in the UI and `/api/status`.

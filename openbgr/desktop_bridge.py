@@ -5,8 +5,6 @@ plus the pending open-files queue fed by OS 'open with' events.
 
 from __future__ import annotations
 
-import base64
-import io
 import json
 import os
 import platform
@@ -21,7 +19,6 @@ from pathlib import Path
 from typing import Any
 
 from huggingface_hub.constants import HF_HUB_CACHE
-from PIL import Image
 
 from .config import (
     APP_CONFIG_DIR,
@@ -29,34 +26,22 @@ from .config import (
     open_folder_in_file_manager,
     reveal_in_file_manager,
 )
+from .desktop_clipboard import ClipboardMixin
 from .models import MANAGER
 from .quick_action_native import copy_png_bytes_to_clipboard
 
 # File types accepted from OS open-file events and clipboard path drops.
 _IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"})
 
-# Common image-data UTI types on the macOS pasteboard. Anything outside this
-# set falls back to NSImage.canInitWithPasteboard_ for fringe formats.
-_PASTEBOARD_IMAGE_UTIS = frozenset(
-    {
-        "public.png",
-        "public.tiff",
-        "public.jpeg",
-        "public.webp",
-        "public.heic",
-        "public.heif",
-        "com.compuserve.gif",
-        "com.microsoft.bmp",
-    }
-)
-_PASTEBOARD_FILE_TYPES = frozenset({"NSFilenamesPboardType", "public.file-url"})
-
 # Image paths handed to the app by the OS (argv / macOS 'odoc' AppleEvent) that
 # the frontend should ingest into tabs once the window is ready.
 _PENDING_OPEN_LOCK = threading.Lock()
 _PENDING_OPEN_FILES: list[str] = []
+_MAX_PENDING_OPEN_FILES = 128
 _DESKTOP_API: DesktopApi | None = None
 _OPEN_FILES_RECEIVED = 0
+
+__all__ = ["ClipboardMixin", "copy_png_bytes_to_clipboard", "shutil"]
 
 
 def set_desktop_api(bridge: DesktopApi | None) -> None:
@@ -235,6 +220,8 @@ def queue_open_files(paths: Any) -> None:
     add_recent_files(file_list)
     with _PENDING_OPEN_LOCK:
         _PENDING_OPEN_FILES.extend(file_list)
+        if len(_PENDING_OPEN_FILES) > _MAX_PENDING_OPEN_FILES:
+            del _PENDING_OPEN_FILES[:-_MAX_PENDING_OPEN_FILES]
         _OPEN_FILES_RECEIVED += len(file_list)
     bridge = _DESKTOP_API
     if bridge is not None and bridge.window is not None:
@@ -254,15 +241,16 @@ def queue_open_files(paths: Any) -> None:
         threading.Thread(target=_push, daemon=True).start()
 
 
-class DesktopApi:
+class DesktopApi(ClipboardMixin):
     """
     JavaScript-to-Python bridge exposed as `window.pywebview.api` when running
     inside the native pywebview desktop window. Provides native OS file dialogs
-    (Open / Save As), native OS clipboard image copy/paste, window fullscreen
-    and theme synchronization, external browser links, and clean Quit.
+    (Open / Save As), native OS clipboard image copy/paste (via `ClipboardMixin`),
+    window fullscreen and theme synchronization, external browser links, and
+    clean Quit.
     """
 
-    # Safety cap for the base64 bridge payload used by clipboard image reads.
+    # Safety cap for base64 bridge payloads (clipboard reads and Save-As writes).
     # File picks use file_id grants streamed over HTTP, so they are uncapped.
     OPEN_DIALOG_MAX_BYTES = 48 * 1024 * 1024
 
@@ -310,24 +298,6 @@ class DesktopApi:
             return {"revealed": False, "error": str(exc)}
 
     @staticmethod
-    def _macos_clipboard_paths() -> list[str]:
-        """Returns file paths on the macOS pasteboard (Finder copies), or []."""
-        try:
-            import AppKit
-
-            pb = AppKit.NSPasteboard.generalPasteboard()
-            paths = [str(p) for p in (pb.propertyListForType_("NSFilenamesPboardType") or [])]
-            if not paths:
-                url_str = pb.stringForType_("public.file-url")
-                if url_str:
-                    from urllib.parse import unquote, urlparse
-
-                    paths = [unquote(urlparse(url_str).path)]
-            return paths
-        except Exception:
-            return []
-
-    @staticmethod
     def _dialog_mode(webview_mod: Any, kind: str) -> Any:
         """Resolves the open/save dialog constant across pywebview API versions."""
         file_dialog = getattr(webview_mod, "FileDialog", None)
@@ -370,6 +340,7 @@ class DesktopApi:
                 "error": "Desktop window is not initialized.",
             }
         try:
+            raw_bytes = self._decode_bounded_base64(data_base64)
             import webview
 
             dest = self.window.create_file_dialog(
@@ -380,7 +351,6 @@ class DesktopApi:
                 return {"saved": False, "cancelled": True}
 
             target_path = dest[0] if isinstance(dest, (list, tuple)) else str(dest)
-            raw_bytes = base64.b64decode(data_base64)
             Path(target_path).write_bytes(raw_bytes)
             return {"saved": True, "path": target_path}
         except Exception as exc:
@@ -425,186 +395,6 @@ class DesktopApi:
             return {"cancelled": False, "path": str(path)}
         except Exception as exc:
             return {"cancelled": True, "error": str(exc)}
-
-    def copy_image(self, data_base64: str) -> dict[str, Any]:
-        """
-        Writes a base64-encoded 32-bit RGBA PNG directly to the native OS clipboard
-        across macOS (NSPasteboard), Windows (.NET Clipboard), and Linux (wl-copy/xclip).
-        """
-        try:
-            raw_bytes = base64.b64decode(data_base64)
-            return copy_png_bytes_to_clipboard(raw_bytes)
-        except Exception as exc:
-            return {"copied": False, "error": str(exc)}
-
-    def has_clipboard_image(self) -> dict[str, Any]:
-        """
-        Probes whether the native OS clipboard currently holds an image or an
-        image file path, without triggering browser clipboard permission prompts.
-        On macOS the pasteboard's change counter and UTI list answer in
-        microseconds, while PIL's ImageGrab would spawn an osascript subprocess
-        and decode the data on every call (this runs on every window focus);
-        on Windows the clipboard sequence number gates the same PIL probe so
-        an unchanged clipboard costs nothing.
-        """
-        sys_name = platform.system()
-
-        if sys_name == "Darwin":
-            try:
-                import AppKit
-
-                pb = AppKit.NSPasteboard.generalPasteboard()
-                seq: Any = pb.changeCount()
-                if seq == self._clip_seq:
-                    return {"has_image": self._clip_has_image}
-                types = set(pb.types() or [])
-                if types & _PASTEBOARD_IMAGE_UTIS:
-                    has_image: bool | None = True
-                elif types & _PASTEBOARD_FILE_TYPES:
-                    has_image = any(
-                        Path(str(p)).is_file() and Path(str(p)).suffix.lower() in _IMAGE_EXTENSIONS
-                        for p in self._macos_clipboard_paths()
-                    )
-                else:
-                    # Fringe image UTIs (Photoshop, camera RAW, ...) that
-                    # NSImage/PNGf translation can still serve.
-                    has_image = bool(AppKit.NSImage.canInitWithPasteboard_(pb))
-                self._clip_seq, self._clip_has_image = seq, has_image
-                return {"has_image": has_image}
-            except Exception:
-                pass
-
-        seq = None
-        if sys_name == "Windows":
-            try:
-                import ctypes
-
-                windll = getattr(ctypes, "windll", None)
-                seq = windll.user32.GetClipboardSequenceNumber() if windll is not None else None
-                if seq is not None and seq == self._clip_seq:
-                    return {"has_image": self._clip_has_image}
-            except Exception:
-                seq = None
-
-        try:
-            from PIL import ImageGrab
-
-            grabbed = ImageGrab.grabclipboard()
-            if isinstance(grabbed, Image.Image):
-                grabbed.close()
-                has_result: bool | None = True
-            elif isinstance(grabbed, (list, tuple)):
-                has_result = any(
-                    Path(str(item)).is_file()
-                    and Path(str(item)).suffix.lower() in _IMAGE_EXTENSIONS
-                    for item in grabbed
-                )
-            elif sys_name in ("Darwin", "Windows"):
-                has_result = False
-            else:
-                has_result = None
-            if has_result is not None:
-                if seq is not None:
-                    self._clip_seq, self._clip_has_image = seq, has_result
-                return {"has_image": has_result}
-        except Exception:
-            pass
-
-        if platform.system() == "Linux":
-            for cmd in (
-                ["wl-paste", "--list-types"],
-                ["xclip", "-selection", "clipboard", "-t", "TARGETS", "-o"],
-            ):
-                if shutil.which(cmd[0]):
-                    try:
-                        proc = subprocess.run(
-                            cmd,
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.DEVNULL,
-                            text=True,
-                            timeout=2,
-                        )
-                        if proc.returncode == 0 and proc.stdout:
-                            return {"has_image": "image/png" in proc.stdout.lower()}
-                    except Exception:
-                        pass
-
-        return {"has_image": None}
-
-    def read_clipboard_image(self) -> dict[str, Any]:
-        """
-        Reads an image (or an image file copied in Finder / File Explorer) from
-        the native OS clipboard and returns it as base64 PNG bytes.
-        """
-        try:
-            from PIL import ImageGrab
-
-            grabbed = ImageGrab.grabclipboard()
-            if isinstance(grabbed, Image.Image):
-                buf = io.BytesIO()
-                try:
-                    grabbed.save(buf, format="PNG")
-                    return {
-                        "has_image": True,
-                        "name": "CLIPBOARD.PNG",
-                        "data_b64": base64.b64encode(buf.getvalue()).decode("ascii"),
-                    }
-                finally:
-                    buf.close()
-                    grabbed.close()
-
-            if isinstance(grabbed, (list, tuple)):
-                for item in grabbed:
-                    p = Path(str(item))
-                    if p.is_file() and p.suffix.lower() in _IMAGE_EXTENSIONS:
-                        data = p.read_bytes()
-                        if len(data) <= self.OPEN_DIALOG_MAX_BYTES:
-                            return {
-                                "has_image": True,
-                                "name": p.name,
-                                "data_b64": base64.b64encode(data).decode("ascii"),
-                            }
-        except Exception:
-            pass
-
-        # PIL's macOS grabclipboard only yields PNG data; a file copied in
-        # Finder shows up as NSFilenamesPboardType paths on the pasteboard.
-        if platform.system() == "Darwin":
-            for item in self._macos_clipboard_paths():
-                p = Path(str(item))
-                if p.is_file() and p.suffix.lower() in _IMAGE_EXTENSIONS:
-                    data = p.read_bytes()
-                    if len(data) <= self.OPEN_DIALOG_MAX_BYTES:
-                        return {
-                            "has_image": True,
-                            "name": p.name,
-                            "data_b64": base64.b64encode(data).decode("ascii"),
-                        }
-
-        # Linux fallback via wl-paste or xclip
-        if platform.system() == "Linux":
-            for cmd in (
-                ["wl-paste", "--type", "image/png"],
-                ["xclip", "-selection", "clipboard", "-t", "image/png", "-o"],
-            ):
-                if shutil.which(cmd[0]):
-                    try:
-                        proc = subprocess.run(
-                            cmd,
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.DEVNULL,
-                            timeout=3,
-                        )
-                        if proc.returncode == 0 and proc.stdout:
-                            return {
-                                "has_image": True,
-                                "name": "CLIPBOARD.PNG",
-                                "data_b64": base64.b64encode(proc.stdout).decode("ascii"),
-                            }
-                    except Exception:
-                        pass
-
-        return {"has_image": False}
 
     def toggle_fullscreen(self) -> dict[str, Any]:
         """Toggles native OS fullscreen mode on the desktop window."""

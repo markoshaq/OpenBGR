@@ -10,6 +10,7 @@ Submodules:
 - `openbgr.quick_action_config` : Persisted Quick Action settings + OS integration install.
 - `openbgr.quick_action_native` : Native clipboard, dialogs, and notification dispatch.
 - `openbgr.desktop_bridge`  : `pywebview` JS↔Python bridge (`DesktopApi`), pending open-files.
+- `openbgr.desktop_clipboard`: Native OS clipboard image probe, read, and write mixin.
 - `openbgr.desktop_window`  : Window geometry persistence and chromeless browser fallback.
 - `openbgr.desktop_menus`   : Native OS menu bar construction (macOS / Linux GTK).
 - `openbgr.desktop_cocoa`   : macOS-only Cocoa integration (app name, menus, 'odoc' handlers).

@@ -28,7 +28,7 @@ jobs:
           grep -Ev '^[[:space:]]*torch' requirements.txt > "$RUNNER_TEMP/requirements-runtime.txt"
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
           pip install -r "$RUNNER_TEMP/requirements-runtime.txt"
-          pip install "ruff>=0.8.0,<1.0.0" "mypy>=1.13.0,<2.0.0" "httpx>=0.27.0,<1.0.0"
+          pip install "ruff>=0.8.0,<1.0.0" "mypy>=1.13.0,<2.0.0" "httpx>=0.27.0,<1.0.0" "coverage>=7.6.0,<8.0.0"
       - name: Lint & type-check
         run: |
           ruff check .
@@ -42,9 +42,10 @@ jobs:
         run: |
           npm ci
           npx eslint static
-      - name: Run test suite
+      - name: Run test suite with coverage floor
         run: |
-          python -m unittest discover -s tests -v
+          coverage run --source=app,openbgr -m unittest discover -s tests -v
+          coverage report --fail-under=60
           node --test "tests/*.test.mjs"
 
   build-macos:
@@ -58,11 +59,15 @@ jobs:
           python-version: "3.12"
       - name: Install Pillow for icon generation
         run: pip install pillow
-      - name: Build OpenBGR-macOS.dmg
+      - name: Build & smoke-check OpenBGR-macOS.dmg
         run: |
           python -m compileall -q app.py openbgr scripts
           bash -n start.sh "start_mac.command" scripts/context_process.sh scripts/install_linux_integration.sh
+          python app.py --version
+          python -m unittest discover -s tests -p "test_quick_action.py" -v
+          python -m unittest discover -s tests -p "test_repo_integrity.py" -v
           python scripts/build_release.py
+          test -s dist/OpenBGR-macOS.dmg
       - uses: actions/upload-artifact@v4
         with:
           name: OpenBGR-macOS-dmg

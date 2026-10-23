@@ -30,9 +30,11 @@ const {
   closeTabImmediate,
   switchToTab,
 } = await import("../static/tabs.js");
-const { cancelProcessing, runSegmentation } = await import(
-  "../static/segmentation.js"
-);
+const {
+  cancelProcessing,
+  runSegmentation,
+  applyEdgeRefinement,
+} = await import("../static/segmentation.js");
 
 const enc = new TextEncoder();
 
@@ -244,4 +246,37 @@ test("runSegmentation surfaces the server detail on HTTP errors", async () => {
   assert.equal(state.resultBlob, null);
   assert.match(dom.errorToast.textContent, /empty/i);
   assert.equal(dom.statTime.textContent, "ERROR");
+});
+
+test("applyEdgeRefinement auto-reprocesses when /api/refine returns 409", async () => {
+  resetWorkspace();
+  ingestImageFile(pngFile("stale.png"));
+  state.resultBlob = new Blob(["old"], { type: "image/png" });
+  state.refineJobId = 99;
+
+  const calls = [];
+  globalThis.fetch = async (url) => {
+    calls.push(String(url));
+    if (String(url).includes("/api/refine")) {
+      return { ok: false, status: 409, json: async () => ({ detail: "stale" }) };
+    }
+    if (String(url).includes("/api/remove-bg")) {
+      return {
+        ok: true,
+        headers: new Headers({
+          "X-Inference-Time-Ms": "15",
+          "X-Image-Width": "8",
+          "X-Image-Height": "4",
+          "X-Refine-Job-Id": "100",
+        }),
+        blob: async () => new Blob([new Uint8Array(9)], { type: "image/png" }),
+      };
+    }
+    return { ok: true, json: async () => ({}), headers: new Headers() };
+  };
+
+  await applyEdgeRefinement();
+  assert.ok(calls.some((u) => u.includes("/api/refine")));
+  assert.ok(calls.some((u) => u.includes("/api/remove-bg")));
+  assert.equal(state.refineJobId, 100);
 });

@@ -1,6 +1,5 @@
 {
   "name": "openbgr",
-  "version": "0.11.3",
   "private": true,
   "type": "module",
   "description": "Dev-only frontend tooling for OpenBGR (eslint + node:test). Not shipped to users.",

@@ -406,6 +406,7 @@ export async function applyEdgeRefinement() {
     state.refinePending = true;
     return;
   }
+  let needsReprocess = false;
   state.refineInFlight = true;
   try {
     do {
@@ -433,6 +434,11 @@ export async function applyEdgeRefinement() {
         });
         if (!response.ok) {
           if (response.status === 409 && token === state.refineToken) {
+            state.refineJobId = null;
+            if (state.sourceFile && !state.isProcessing) {
+              needsReprocess = true;
+              break;
+            }
             dom.statTime.textContent = "REPROCESS TO APPLY";
           }
           continue;
@@ -474,5 +480,8 @@ export async function applyEdgeRefinement() {
     } while (state.refinePending);
   } finally {
     state.refineInFlight = false;
+  }
+  if (needsReprocess) {
+    await runSegmentation();
   }
 }

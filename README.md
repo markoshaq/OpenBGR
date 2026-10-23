@@ -7,12 +7,13 @@
 </p>
 
 <p align="center">
-  Local background removal studio powered by <a href="https://github.com/ZhengPeng7/BiRefNet">BiRefNet</a>.<br>
+  Open-source background remover powered by <a href="https://github.com/ZhengPeng7/BiRefNet">BiRefNet</a>.<br>
+  Runs fully local and offline: a free, private alternative to hosted services like remove.bg.<br>
   Exports full-resolution images in multiple formats with no telemetry, watermarks, or compression.
 </p>
 
 <p align="center">
-  <img src="docs/demo.gif" alt="OpenBGR demo"><br>
+  <img src="docs/demo.gif" alt="OpenBGR open-source background removal demo"><br>
   <em>Removing a background using <code>BiRefNet_lite</code> on an 8 GB M1 MacBook Air.</em>
 </p>
 
@@ -95,6 +96,8 @@ Each model downloads to the Hugging Face cache on first use only; FP32 checkpoin
 1. Download a model folder, e.g. `hf download ZhengPeng7/BiRefNet` or the repo from huggingface.co, and copy it to the machine.
 2. In OpenBGR, open **Settings > Models > IMPORT MODEL FOLDER**, pick the model, choose the folder.
 3. Optionally enable **Settings > Block Internet Access** (or launch with `OPENBGR_OFFLINE=1`).
+
+> BiRefNet checkpoints ship custom model code loaded with `trust_remote_code=True`. Only import checkpoint folders obtained from trusted sources (`ZhengPeng7/BiRefNet*`).
 
 ## API
 

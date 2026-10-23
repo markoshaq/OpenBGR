@@ -37,6 +37,7 @@ from .config import (
     RECOMMENDED_TIER,
     STATIC_DIR,
     TIERS,
+    WEB_API_TOKEN,
     ensure_app_icon,
     get_app_disk_bytes,
     logger,
@@ -55,6 +56,7 @@ from .models import (
     get_model_disk_bytes,
     import_model_from_dir,
     is_model_cached_locally,
+    maybe_refresh_expected_sizes,
     model_download_active,
     model_download_guard,
     refresh_expected_sizes,
@@ -73,6 +75,7 @@ from .quick_action_config import (
     save_quick_action_config,
     set_quick_action_installed,
 )
+from .quick_action_native import choose_output_folder_native
 from .settings import env_forces_offline, offline_mode_enabled, set_offline_mode
 
 
@@ -83,6 +86,7 @@ async def lifespan(_app: FastAPI):
     on disk, and ensures all device memory is flushed on server shutdown.
     """
     timer: threading.Timer | None = None
+    STATIC_DIR.mkdir(exist_ok=True)
     persist_api_token()
     default_model_key = TIERS[RECOMMENDED_TIER]["model_key"]
     if is_model_cached_locally(MODELS[default_model_key]):
@@ -96,6 +100,7 @@ async def lifespan(_app: FastAPI):
     finally:
         if timer is not None:
             timer.cancel()
+        MANAGER.request_cancel()
         MANAGER.unload()
 
 
@@ -129,6 +134,7 @@ def api_status() -> dict[str, Any]:
     Returns detected compute hardware, floating-point precision mode, system RAM,
     recommended model, and local offline cache availability and disk usage for each model.
     """
+    maybe_refresh_expected_sizes()
     tiers_status = {}
     total_cache_bytes = 0
     for key, cfg in TIERS.items():
@@ -158,6 +164,7 @@ def api_status() -> dict[str, Any]:
 
     ram_gb_int = max(1, int(round(HOST_RAM_GB)))
     return {
+        "app": "openbgr",
         "device": DEVICE.type,
         "device_label": DEVICE_LABEL,
         "precision": PRECISION_LABEL,
@@ -458,22 +465,47 @@ async def api_install_model(target: str = Form(...)) -> dict[str, Any]:
     }
 
 
+@app.post("/api/choose-folder")
+async def api_choose_folder() -> dict[str, Any]:
+    """
+    Opens the native OS folder dialog from the server process and grants the
+    picked folder via `desktop_bridge.grant_output_dir`. Used as the browser-
+    mode fallback when `window.pywebview.api.choose_output_dir` is unavailable.
+    """
+    chosen = await asyncio.to_thread(choose_output_folder_native, Path.home(), 1)
+    if chosen is None:
+        return {"cancelled": True}
+    desktop.grant_output_dir(chosen)
+    return {"cancelled": False, "path": str(chosen)}
+
+
 @app.post("/api/models/import")
 async def api_import_model(target: str = Form(...), path: str = Form(...)) -> dict[str, Any]:
     """
     Copies a user-provided checkpoint folder into the Hugging Face cache as a
     synthetic snapshot, so a model can be provisioned with zero network
     access (files fetched through a browser, another machine, or `hf download`).
+    The folder must have been granted via the native folder dialog (see
+    `desktop_bridge.grant_output_dir`).
     """
     norm = normalize_tier_key(target)
     if norm not in MODELS:
         raise HTTPException(status_code=400, detail=f"Unknown model target '{target}'.")
+    src_dir = Path(path).expanduser()
+    if not desktop.is_output_dir_granted(src_dir):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Model folder was not picked through the app's folder dialog. "
+                "Choose it with BROWSE before importing."
+            ),
+        )
     repo_id = MODELS[norm]
 
     def _import() -> int:
         # Serializes the cache write against in-flight downloads/uninstalls.
         with model_download_guard(blocking=False):
-            return import_model_from_dir(repo_id, Path(path))
+            return import_model_from_dir(repo_id, src_dir)
 
     try:
         copied_bytes = await asyncio.to_thread(_import)
@@ -747,6 +779,11 @@ _MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 # The token check alone already blocks drive-by POSTs; rejecting explicitly
 # cross-site fetch metadata is a second layer in case the token ever leaks.
 _CROSS_SITE_FETCH = {"cross-site", "same-site"}
+# Raw-path IPC endpoints used only by local OS clients (Quick Action delegation
+# and Open With forwarding). They require `API_TOKEN` from `0600 ~/.openbgr/session_token`
+# and refuse the browser `WEB_API_TOKEN` injected into `GET /`, so a web page
+# cannot turn arbitrary paths into readable file grants or write beside them.
+_LOCAL_ONLY_PATHS = {"/api/open-files", "/api/quick-action"}
 
 # Uploads are buffered whole before decode/write, so request bodies are
 # hard-capped to keep a bad client from pinning gigabytes of RAM. Generous
@@ -760,16 +797,24 @@ _MULTIPART_OVERHEAD_BYTES = 64 * 1024
 @app.middleware("http")
 async def api_token_guard(request, call_next):
     """
-    Requires the per-session token on mutating `/api/*` calls so arbitrary
+    Requires a per-session token on mutating `/api/*` calls so arbitrary
     websites cannot trigger file writes, model deletions, or job control via
-    cross-origin form posts (drive-by localhost CSRF). Read-only GETs stay
-    open since cross-origin pages cannot read their responses anyway.
+    cross-origin form posts (drive-by localhost CSRF). Browser-facing endpoints
+    accept either `WEB_API_TOKEN` (injected into `GET /`) or `API_TOKEN`
+    (`0600 ~/.openbgr/session_token`); raw-path IPC endpoints (`/api/open-files`,
+    `/api/quick-action`) require `API_TOKEN` so a browser page cannot supply
+    ungranted filesystem paths.
     """
     if request.method in _MUTATING_METHODS and request.url.path.startswith("/api/"):
         if request.headers.get("sec-fetch-site") in _CROSS_SITE_FETCH:
             return JSONResponse({"detail": "Forbidden"}, status_code=403)
         token = request.headers.get(API_TOKEN_HEADER, "")
-        if not secrets.compare_digest(token, API_TOKEN):
+        is_local = secrets.compare_digest(token, API_TOKEN)
+        is_web = secrets.compare_digest(token, WEB_API_TOKEN)
+        if request.url.path in _LOCAL_ONLY_PATHS:
+            if not is_local:
+                return JSONResponse({"detail": "Forbidden"}, status_code=403)
+        elif not (is_local or is_web):
             return JSONResponse({"detail": "Forbidden"}, status_code=403)
     return await call_next(request)
 
@@ -804,16 +849,25 @@ app.add_middleware(
 )
 
 
+_INDEX_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' blob: data:; "
+    "connect-src 'self'"
+)
+
+
 @app.get("/")
 def serve_index() -> Response:
-    """Serves the studio interface with the per-session API token injected."""
+    """Serves the studio interface with the browser-scoped session token injected."""
     html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
-    token_meta = f'<meta name="openbgr-api-token" content="{API_TOKEN}" />'
+    token_meta = f'<meta name="openbgr-api-token" content="{WEB_API_TOKEN}" />'
     if "</head>" in html:
         html = html.replace("</head>", f"  {token_meta}\n</head>", 1)
     else:
         html = token_meta + html
-    return HTMLResponse(html)
+    return HTMLResponse(html, headers={"Content-Security-Policy": _INDEX_CSP})
 
 
 @app.get("/favicon.ico")

@@ -1,0 +1,152 @@
+/**
+ * Lazy DOM element registry (`dom.<id>` resolves `document.getElementById(id)`
+ * on property access, with zero DOM lookups at module import time).
+ * `DOM_IDS` lists every registered element id so `test_repo_integrity.py`
+ * verifies each one exists in `static/index.html`.
+ */
+
+export const DOM_IDS = Object.freeze([
+  "appShell",
+  "menuBar",
+  "tabBar",
+  "viewport",
+  "emptyState",
+  "stage",
+  "stageSizerImg",
+  "beforeImg",
+  "afterImg",
+  "beforeClip",
+  "cropGuide",
+  "splitLine",
+  "lblLeft",
+  "lblRight",
+  "loupeCanvas",
+
+  "btnZoomOut",
+  "btnZoomReset",
+  "btnZoomIn",
+  "btnLoupe",
+
+  "busyOverlay",
+  "busyProgressFill",
+  "busyTitle",
+  "busySub",
+  "btnCancel",
+  "errorToast",
+
+  "confirmModal",
+  "modalTitle",
+  "modalDesc",
+  "btnModalCancel",
+  "btnModalAlt",
+  "btnModalConfirm",
+  "recentModal",
+  "recentList",
+  "recentClear",
+  "recentClose",
+
+  "infoModal",
+  "btnInfo",
+  "btnInfoClose",
+  "btnResetPrefs",
+  "btnToggleConfirmClose",
+  "btnToggleOfflineMode",
+  "offlineModeDesc",
+  "prefImportTier",
+  "importFolderPath",
+  "btnChooseImportFolder",
+  "btnImportModel",
+  "prefThemeDark",
+  "prefThemeLight",
+  "accentSwatches",
+  "prefDefaultTier",
+  "prefDefaultFormat",
+  "prefDefaultBackdrop",
+  "prefQaTier",
+  "prefQaSaveMode",
+  "prefQaFormat",
+  "btnToggleQaEdgeRefine",
+  "btnToggleQaClipboard",
+  "btnToggleQaNotify",
+  "qaInstallStatusDesc",
+  "btnQaInstallToggle",
+  "btnOpenCacheDir",
+  "btnOpenLogsDir",
+
+  "fileInput",
+  "backdropInput",
+  "btnOpen",
+  "btnProcess",
+  "tierDropdown",
+  "tierDropdownBtn",
+  "tierDropdownLabel",
+  "tierDropdownTech",
+  "batchPanel",
+  "batchList",
+  "batchSub",
+  "batchCheckAll",
+  "btnBatchAdd",
+  "btnBatchRetry",
+  "tabContextMenu",
+  "btnCopy",
+  "btnDownload",
+  "btnDefringe",
+  "btnDespill",
+  "shadowCutoffSlider",
+  "shadowCutoffLabel",
+  "edgeShiftSlider",
+  "edgeShiftLabel",
+  "edgeFeatherSlider",
+  "edgeFeatherLabel",
+  "btnFileDest",
+  "btnAutoCrop",
+  "cropPaddingWrap",
+  "cropPaddingSlider",
+  "cropPaddingLabel",
+
+  "exportScaleSlider",
+  "scalePctLabel",
+  "exportWidthInput",
+  "exportHeightInput",
+  "aspectLockBtn",
+  "presetReset",
+  "canvasFitChips",
+  "matteSwatches",
+  "colorPicker",
+  "backdropPhotoWrap",
+  "backdropPhotoThumb",
+  "btnBackdropPhoto",
+  "btnBackdropPhotoRemove",
+  "backdropBlurWrap",
+  "backdropBlurSlider",
+  "backdropBlurLabel",
+  "fileDestPath",
+  "exportSizeLabel",
+
+  "hwCompute",
+  "hwPrecision",
+  "hwMemory",
+  "aboutVersion",
+  "statusVersion",
+  "btnPrefsCloseX",
+  "statFile",
+  "statDim",
+  "statTime",
+]);
+
+export const dom = new Proxy(
+  {},
+  {
+    get(target, prop) {
+      if (typeof prop !== "string") return undefined;
+      if (Object.prototype.hasOwnProperty.call(target, prop)) {
+        return target[prop];
+      }
+      return globalThis.document?.getElementById?.(prop) ?? null;
+    },
+    set(target, prop, value) {
+      target[prop] = value;
+      return true;
+    },
+  }
+);

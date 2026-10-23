@@ -13,51 +13,56 @@ for the module map). This file serves as the CLI / desktop / Uvicorn entrypoint
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import platform
 import signal
+import sys
 import threading
 from typing import Any
 
-import uvicorn
-
-from openbgr.api import app
-from openbgr.config import (
-    DEVICE_LABEL,
-    LOG_FILE_PATH,
-    PRECISION_LABEL,
-    RECOMMENDED_TIER,
-    TIERS,
-    ensure_app_icon,
-    logger,
-    normalize_tier_key,
-)
-from openbgr.desktop_bridge import DesktopApi, queue_open_files, set_desktop_api
-from openbgr.desktop_cocoa import (
-    configure_macos_native_window_and_menus,
-    install_macos_open_documents_handler,
-    install_macos_open_files_delegate,
-    set_macos_app_name,
-)
-from openbgr.desktop_menus import build_native_menus
-from openbgr.desktop_window import (
-    attach_window_state_persistence,
-    ensure_window_on_screen,
-    load_window_state,
-    open_fallback_app_window,
-)
-from openbgr.models import MANAGER
-from openbgr.quick_action import (
-    delegate_quick_action_to_server,
-    run_cli,
-    run_quick_action,
-)
 from openbgr.server_probe import (
+    delegate_quick_action_to_server,
     forward_open_files_to_server,
     is_openbgr_server,
     wait_for_port_free,
     wait_for_server,
 )
+from openbgr.settings import APP_VERSION, TIER_KEYS, normalize_tier_key
+
+
+def __getattr__(name: str) -> Any:
+    """
+    Resolves `app` (`uvicorn app:app`) lazily so `--help`, warm-server Quick
+    Action delegation, and `Open With` file forwarding exit before importing
+    PyTorch, torchvision, transformers, or FastAPI.
+    """
+    if name == "app":
+        from openbgr.api import app as _fastapi_app
+
+        return _fastapi_app
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def run_cli(*args: Any, **kwargs: Any) -> int:
+    """Lazy wrapper around `openbgr.quick_action.run_cli`."""
+    from openbgr.quick_action import run_cli as _run_cli
+
+    return _run_cli(*args, **kwargs)
+
+
+def run_quick_action(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    """Lazy wrapper around `openbgr.quick_action.run_quick_action`."""
+    from openbgr.quick_action import run_quick_action as _run_quick_action
+
+    return _run_quick_action(*args, **kwargs)
+
+
+def _cancel_if_loaded() -> None:
+    """Requests cancellation only when `openbgr.models` has already been imported."""
+    models_mod = sys.modules.get("openbgr.models")
+    if models_mod is not None:
+        models_mod.MANAGER.request_cancel()
 
 
 def _graceful_exit(signum: int, _frame: Any) -> None:
@@ -69,7 +74,7 @@ def _graceful_exit(signum: int, _frame: Any) -> None:
     entire first-run download. `os._exit` lets the OS reclaim device memory
     instantly.
     """
-    MANAGER.request_cancel()
+    _cancel_if_loaded()
     os._exit(128 + signum)
 
 
@@ -82,6 +87,7 @@ def _start_signal_watchdog() -> None:
     on the pipe and hard-exits on SIGINT/SIGTERM/SIGHUP regardless of what
     the main thread is doing.
     """
+    log = logging.getLogger("openbgr")
     try:
         import select
 
@@ -103,17 +109,17 @@ def _start_signal_watchdog() -> None:
                         return  # pipe closed; stop instead of spinning
                     sig = next((b for b in data if b in lethal), None)
                     if sig is not None:
-                        MANAGER.request_cancel()
+                        _cancel_if_loaded()
                         os._exit(128 + sig)
             except Exception as exc:
                 # A broken pipe must not kill the app: headless mode still has
                 # the Python-level handlers, and desktop mode degrades to the
                 # pre-watchdog behavior (signals swallowed), not data loss.
-                logger.warning("[Desktop] Signal watchdog stopped (%s).", exc)
+                log.warning("[Desktop] Signal watchdog stopped (%s).", exc)
 
         threading.Thread(target=_watch, daemon=True).start()
     except Exception as exc:
-        logger.warning(
+        log.warning(
             "[Desktop] Signal watchdog unavailable (%s); SIGINT/SIGTERM may be "
             "swallowed while the native window is open.",
             exc,
@@ -129,6 +135,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "OS 'Open With' mechanism) the app opens and loads the images; with "
             "--cli it processes them headlessly and exits."
         ),
+    )
+    parser.add_argument(
+        "-V",
+        "--version",
+        action="version",
+        version=f"OpenBGR {APP_VERSION}",
     )
     parser.add_argument(
         "files",
@@ -164,13 +176,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         metavar="TIER",
         help=(
             "Model preset for --cli: "
-            + ", ".join(sorted(TIERS.keys()))
+            + ", ".join(sorted(TIER_KEYS))
             + " (legacy aliases accepted; default: hardware-recommended tier)."
         ),
     )
     parser.add_argument(
         "--format",
-        default="png",
+        default=None,
         choices=["png", "webp", "jpg", "mask"],
         help="Output format for --cli (png, webp, jpg, mask).",
     )
@@ -209,14 +221,26 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.tier is not None:
         norm_tier = normalize_tier_key(args.tier)
-        if norm_tier not in TIERS:
+        if norm_tier not in TIER_KEYS:
             parser.error(
-                f"invalid --tier value '{args.tier}' "
-                f"(choose from: {', '.join(sorted(TIERS.keys()))})"
+                f"invalid --tier value '{args.tier}' (choose from: {', '.join(sorted(TIER_KEYS))})"
             )
         args.tier = norm_tier
 
     if args.quick_action:
+        cli_only_passed = (
+            args.tier is not None
+            or args.output is not None
+            or args.format is not None
+            or args.matting
+            or not args.defringe
+            or not args.despill
+        )
+        if cli_only_passed:
+            parser.error(
+                "--quick-action uses saved Quick Action preferences; "
+                "do not combine it with --cli processing flags (use --cli instead)."
+            )
         delegated = delegate_quick_action_to_server(args.files)
         res = delegated if delegated is not None else run_quick_action(args.files)
         raise SystemExit(0 if res.get("ok") or res.get("cancelled") else 1)
@@ -230,7 +254,7 @@ def main(argv: list[str] | None = None) -> None:
                 args.defringe,
                 args.despill,
                 args.matting,
-                fmt=args.format,
+                fmt=args.format or "png",
             )
         )
 
@@ -241,13 +265,31 @@ def main(argv: list[str] | None = None) -> None:
     if os.environ.pop("OPENBGR_RESTARTING", None) == "1":
         wait_for_port_free(host, port, timeout_s=5.0)
 
+    # If an OpenBGR instance is already running, forward 'Open With' files
+    # to it over localhost and exit cleanly before importing the ML stack.
+    if (
+        args.files
+        and wait_for_server(host, port, timeout_s=1.0)
+        and is_openbgr_server(url, timeout_s=2.0)
+        and forward_open_files_to_server(url, args.files)
+    ):
+        raise SystemExit(0)
+
+    import uvicorn
+
+    from openbgr.api import app as fastapi_app
+    from openbgr.config import (
+        DEVICE_LABEL,
+        LOG_FILE_PATH,
+        PRECISION_LABEL,
+        RECOMMENDED_TIER,
+        TIERS,
+        logger,
+    )
+    from openbgr.desktop_bridge import queue_open_files
+    from openbgr.desktop_window import open_fallback_app_window
+
     if args.files:
-        # If an OpenBGR instance is already running, forward 'Open With' files
-        # to it over localhost and exit cleanly instead of colliding on the port.
-        if wait_for_server(host, port, timeout_s=0.15) and is_openbgr_server(url, timeout_s=2.0):
-            if forward_open_files_to_server(url, args.files):
-                logger.info("[Desktop] Forwarded %d file(s) to running instance.", len(args.files))
-                raise SystemExit(0)
         queue_open_files(args.files)
 
     signal.signal(signal.SIGINT, _graceful_exit)
@@ -270,10 +312,10 @@ def main(argv: list[str] | None = None) -> None:
 
     # Headless / server-only mode when NO_BROWSER=1 or OPENBGR_BROWSER=1 is set
     if os.environ.get("NO_BROWSER") == "1":
-        uvicorn.run(app, host=host, port=port, log_level="warning", log_config=None)
+        uvicorn.run(fastapi_app, host=host, port=port, log_level="warning", log_config=None)
     elif os.environ.get("OPENBGR_BROWSER") == "1":
         threading.Timer(1.0, lambda: open_fallback_app_window(url)).start()
-        uvicorn.run(app, host=host, port=port, log_level="warning", log_config=None)
+        uvicorn.run(fastapi_app, host=host, port=port, log_level="warning", log_config=None)
     else:
         _run_desktop_window(url, _ensure_server(host, port, url))
 
@@ -285,6 +327,11 @@ def _ensure_server(host: str, port: int, url: str) -> threading.Thread | None:
     reused; raises SystemExit when the port is held by another application or
     the server fails to start.
     """
+    import uvicorn
+
+    from openbgr.api import app as fastapi_app
+    from openbgr.config import logger
+
     if wait_for_server(host, port, timeout_s=0.15):
         if not is_openbgr_server(url, timeout_s=3.0):
             logger.error("[Server] Port %s is already in use by another application.", port)
@@ -295,7 +342,9 @@ def _ensure_server(host: str, port: int, url: str) -> threading.Thread | None:
 
     # Start FastAPI server in a background daemon thread and open native desktop window
     server_thread = threading.Thread(
-        target=lambda: uvicorn.run(app, host=host, port=port, log_level="warning", log_config=None),
+        target=lambda: uvicorn.run(
+            fastapi_app, host=host, port=port, log_level="warning", log_config=None
+        ),
         daemon=True,
     )
     server_thread.start()
@@ -316,6 +365,23 @@ def _run_desktop_window(url: str, server_thread: threading.Thread | None) -> Non
     handlers) and blocks in its run loop until the user closes it. Falls back
     to a plain browser window when the native window cannot be created.
     """
+    from openbgr.config import ensure_app_icon, logger
+    from openbgr.desktop_bridge import DesktopApi, set_desktop_api
+    from openbgr.desktop_cocoa import (
+        configure_macos_native_window_and_menus,
+        install_macos_open_documents_handler,
+        install_macos_open_files_delegate,
+        set_macos_app_name,
+    )
+    from openbgr.desktop_menus import build_native_menus
+    from openbgr.desktop_window import (
+        attach_window_state_persistence,
+        ensure_window_on_screen,
+        load_window_state,
+        open_fallback_app_window,
+    )
+    from openbgr.models import MANAGER
+
     try:
         set_macos_app_name("OpenBGR")
         import webview

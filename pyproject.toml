@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68.0"]
+requires = ["setuptools>=77.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,7 +8,8 @@ version = "0.11.3"
 description = "Self-hosted, zero-telemetry background removal studio powered by BiRefNet"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 dynamic = ["dependencies"]
 
 [project.optional-dependencies]
@@ -16,6 +17,7 @@ dev = [
     "ruff>=0.8.0,<1.0.0",
     "mypy>=1.13.0,<2.0.0",
     "httpx>=0.27.0,<1.0.0",
+    "coverage>=7.6.0,<8.0.0",
     "tomli>=2.0.0,<3.0.0; python_version<'3.11'",
 ]
 
@@ -34,18 +36,26 @@ line-length = 100
 extend-exclude = [".venv", "dist", "__pycache__"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "B", "UP"]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RET"]
 ignore = [
-    "E501",  # line length handled by formatter
-    "E402",  # env var PYTORCH_ENABLE_MPS_FALLBACK must precede torch import
-    "B008",  # FastAPI Form(...) / File(...) in argument defaults
+    "E501",    # line length handled by formatter
+    "E402",    # env var PYTORCH_ENABLE_MPS_FALLBACK must precede torch import
+    "B008",    # FastAPI Form(...) / File(...) in argument defaults
+    "SIM105",  # try/except pass is clearer than contextlib.suppress for multi-line platform probes
+    "SIM118",  # safetensors safe_open exposes .keys() without implementing __iter__
+    "SIM300",  # uppercase module constants (DTYPE == torch.float16) are not Yoda conditions
 ]
 
+[tool.coverage.run]
+# Platform-native modules cannot execute under unit tests: desktop_cocoa needs
+# pyobjc on macOS, desktop_window only runs inside a live native window.
+omit = ["openbgr/desktop_cocoa.py", "openbgr/desktop_window.py"]
+
 [tool.mypy]
+# Kept at 3.12 because numpy 2.2+ `.pyi` stubs use PEP 695 `type` statements
+# that fail mypy's stub parser under python_version < 3.12; Ruff's py310 target
+# enforces 3.10 compatibility on our source files.
 python_version = "3.12"
 ignore_missing_imports = true
 check_untyped_defs = true
 warn_unused_ignores = false
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]

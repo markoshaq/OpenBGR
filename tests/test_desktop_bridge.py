@@ -119,6 +119,17 @@ class TestDesktopApi(unittest.TestCase):
         self.assertFalse(res["copied"])
         self.assertIn("error", res)
 
+        # Oversized base64 payloads are rejected before decoding in both copy_image and save_file.
+        bridge.window = MagicMock()
+        with patch.object(bridge, "OPEN_DIALOG_MAX_BYTES", 12):
+            oversized = base64.b64encode(b"x" * 64).decode("ascii")
+            res_copy = bridge.copy_image(oversized)
+            self.assertFalse(res_copy["copied"])
+            self.assertIn("limit", res_copy["error"])
+            res_save = bridge.save_file(oversized, "out.png")
+            self.assertFalse(res_save["saved"])
+            self.assertIn("limit", res_save["error"])
+
     def test_read_clipboard_image_pil_image(self) -> None:
         """A PIL image on the clipboard is re-encoded as base64 PNG."""
         bridge = bridge_mod.DesktopApi()

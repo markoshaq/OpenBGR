@@ -5,7 +5,12 @@
  * Importing this module has no side effects; app.js calls `initModals()`.
  */
 
-import { state, dom, closeConfirmModal } from "./state.js";
+import {
+  state,
+  dom,
+  closeConfirmModal,
+  handleErrorToastCopy,
+} from "./state.js";
 import { cancelProcessing } from "./segmentation.js";
 import { emit } from "./bus.js";
 
@@ -38,12 +43,19 @@ export function dismissConfirmOnBackdropClick(e) {
   if (e.target === dom.confirmModal) closeConfirmModal();
 }
 
-/** Wires the busy cancel button, confirm modal controls, and context menu dismiss. */
+/** Wires the busy cancel button, confirm modal controls, toast copy, and context menu dismiss. */
 export function initModals() {
   dom.btnCancel.addEventListener("click", cancelProcessing);
   dom.btnModalCancel.addEventListener("click", closeConfirmModal);
   dom.btnModalConfirm.addEventListener("click", runPendingConfirm);
   dom.btnModalAlt?.addEventListener("click", runPendingAlt);
   dom.confirmModal.addEventListener("click", dismissConfirmOnBackdropClick);
+  dom.errorToast?.addEventListener("click", handleErrorToastCopy);
+  dom.errorToast?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      handleErrorToastCopy();
+    }
+  });
   window.addEventListener("click", dismissContextMenuOnOutsideClick);
 }

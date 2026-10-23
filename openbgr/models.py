@@ -140,24 +140,29 @@ JOB_PROGRESS: dict[str, Any] = {
 
 _VALID_PHASES = {"idle", "download", "load", "inference"}
 
-# Serializes model downloads so the shared progress state (and the module-
-# level tqdm patch below) is only ever driven by one download at a time.
+# Serializes model downloads and cache mutations (uninstall/import) so the
+# shared progress state, the module-level tqdm patch below, and the HF cache
+# directory are only ever mutated by one operation at a time.
 _MODEL_DOWNLOAD_LOCK = threading.Lock()
+# True only while `track_model_download` is actively transferring weights,
+# so `model_download_guard` critical sections (uninstall/import) do not cause
+# `/api/progress` to misreport `phase: "download"`.
+_DOWNLOAD_IN_FLIGHT = False
 
 
 def model_download_active() -> bool:
-    """True while a model download holds the serialization lock."""
-    return _MODEL_DOWNLOAD_LOCK.locked()
+    """True while a model download is actively transferring weights."""
+    return _DOWNLOAD_IN_FLIGHT
 
 
 @contextmanager
 def model_download_guard(blocking: bool = True) -> Iterator[None]:
     """
     Serializes an arbitrary critical section against in-flight model
-    downloads (and blocks new ones while held). Used by the uninstall
-    endpoint so a download cannot start between its fast-fail checks and
-    the cache deletion itself. With `blocking=False`, raises
-    `BlockingIOError` instead of waiting when a download is active.
+    downloads (and blocks new ones while held). Used by the uninstall and
+    import endpoints so a download cannot start between fast-fail checks and
+    the cache mutation itself. With `blocking=False`, raises
+    `BlockingIOError` instead of waiting when the lock is held.
     """
     if not _MODEL_DOWNLOAD_LOCK.acquire(blocking):
         raise BlockingIOError("a model download is in progress")
@@ -180,8 +185,8 @@ def set_job_phase(phase: str, model_key: str | None = None) -> None:
             JOB_PROGRESS["model_key"] = model_key
         # When a download owned by another operation is in flight, its byte
         # counters must survive this operation's phase transitions (the
-        # /api/progress endpoint derives the download phase from the lock).
-        if phase != "download" and not _MODEL_DOWNLOAD_LOCK.locked():
+        # /api/progress endpoint derives the download phase from _DOWNLOAD_IN_FLIGHT).
+        if phase != "download" and not _DOWNLOAD_IN_FLIGHT:
             JOB_PROGRESS["downloaded_bytes"] = 0
             JOB_PROGRESS["total_bytes"] = 0
 
@@ -268,9 +273,11 @@ def track_model_download(model_key: str | None = None) -> Iterator[type]:
     while the download is active, the patched tqdm bars raise
     `InterruptedError` mid-transfer.
     """
+    global _DOWNLOAD_IN_FLIGHT
     # Serialize: a second tracked download waits for the current one so the
     # shared tqdm patch and JOB_PROGRESS bytes never interleave.
     _MODEL_DOWNLOAD_LOCK.acquire()
+    _DOWNLOAD_IN_FLIGHT = True
     try:
         with JOB_PROGRESS_LOCK:
             JOB_PROGRESS["_dl_key"] = model_key
@@ -301,12 +308,15 @@ def track_model_download(model_key: str | None = None) -> Iterator[type]:
                 JOB_PROGRESS["_dl_key"] = None
                 JOB_PROGRESS["_dl_epoch"] = None
     finally:
+        _DOWNLOAD_IN_FLIGHT = False
         clear_model_disk_bytes_cache()
         _MODEL_DOWNLOAD_LOCK.release()
 
 
 _EXPECTED_BYTES_LOCK = threading.Lock()
 _EXPECTED_BYTES_LIVE: dict[str, int] = {}
+_EXPECTED_BYTES_LAST_ATTEMPT: float = 0.0
+_EXPECTED_BYTES_RETRY_S = 60.0
 
 
 def expected_model_bytes(repo_id: str, fallback: int = 0) -> int:
@@ -321,8 +331,11 @@ def refresh_expected_sizes() -> None:
     background so `/api/status` can report accurate figures instead of
     relying solely on the bundled `expected_bytes` constants.
     """
+    global _EXPECTED_BYTES_LAST_ATTEMPT
     if offline_mode_enabled():
         return
+    with _EXPECTED_BYTES_LOCK:
+        _EXPECTED_BYTES_LAST_ATTEMPT = time.monotonic()
     api = HfApi()
     for repo_id in MODELS.values():
         try:
@@ -333,6 +346,23 @@ def refresh_expected_sizes() -> None:
         if total > 0:
             with _EXPECTED_BYTES_LOCK:
                 _EXPECTED_BYTES_LIVE[repo_id] = total
+
+
+def maybe_refresh_expected_sizes() -> None:
+    """
+    Triggers a background `refresh_expected_sizes` if live sizes are still
+    empty and at least `_EXPECTED_BYTES_RETRY_S` has elapsed since the last
+    attempt (e.g. when the machine started offline and came online later).
+    """
+    global _EXPECTED_BYTES_LAST_ATTEMPT
+    if offline_mode_enabled():
+        return
+    now = time.monotonic()
+    with _EXPECTED_BYTES_LOCK:
+        if _EXPECTED_BYTES_LIVE or (now - _EXPECTED_BYTES_LAST_ATTEMPT) < _EXPECTED_BYTES_RETRY_S:
+            return
+        _EXPECTED_BYTES_LAST_ATTEMPT = now
+    threading.Thread(target=refresh_expected_sizes, daemon=True).start()
 
 
 def compact_model_cache_fp16(repo_id: str) -> int:
@@ -352,13 +382,11 @@ def compact_model_cache_fp16(repo_id: str) -> int:
         if not blob_path.is_file():
             return 0
 
-        needs_fp16 = False
         with safe_open(str(blob_path), framework="pt", device="cpu") as f:
             metadata = f.metadata() or {}
-            for k in list(f.keys())[:8]:
-                if f.get_slice(k).get_dtype() == "F32":
-                    needs_fp16 = True
-                    break
+            # get_slice reads only the JSON header metadata, so checking every
+            # key is sub-millisecond and catches mixed-dtype checkpoints past key 8.
+            needs_fp16 = any(f.get_slice(k).get_dtype() == "F32" for k in f.keys())
         if not needs_fp16:
             return 0
 
@@ -421,7 +449,15 @@ def import_model_from_dir(repo_id: str, source_dir: Path | str) -> int:
         for p in src.rglob("*")
         if p.is_file() and not p.name.startswith(".") and ".git" not in p.relative_to(src).parts
     ]
-    names = {p.name for p in files}
+    seen_names: dict[str, Path] = {}
+    for file_path in files:
+        if file_path.name in seen_names:
+            raise ValueError(
+                f"Model folder {src} contains duplicate file name '{file_path.name}' "
+                f"({seen_names[file_path.name]} and {file_path})."
+            )
+        seen_names[file_path.name] = file_path
+    names = set(seen_names.keys())
     missing = {"model.safetensors", "config.json"} - names
     if missing:
         raise ValueError(
@@ -523,11 +559,23 @@ class ModelManager:
 
         Attempts an offline cache load (`local_files_only=True`) first so that
         zero external network calls are made once weights are cached locally.
+
+        Concurrency & cancellation contract:
+        - Holds `self._lock` for the full eviction + download + device-transfer
+          sequence so two threads never race to allocate weights or interleave
+          downloads. Callers that cannot wait behind a first-run download must
+          use `unload(wait=False)` or call `request_cancel()` first.
+        - Snapshots `cancel_epoch` on entry: if `request_cancel()` fires during
+          a download or checkpoint load, `_JobDownloadTqdm.update` or the post-
+          load checkpoint raises `InterruptedError` before moving weights to
+          `DEVICE`, leaving `self.model` clean (`None`).
         """
         if model_key not in MODELS:
             raise ValueError(f"Unsupported model key: {model_key}")
 
+        load_epoch = self.cancel_epoch
         with self._lock:
+            self.check_cancelled(load_epoch)
             # Fast path: requested backbone is already resident in memory.
             if self.active_model_key == model_key and self.model is not None:
                 return self.model
@@ -547,6 +595,7 @@ class ModelManager:
             # "inference" phase or reset it on exit.
             with JOB_PROGRESS_LOCK:
                 owns_phase = JOB_PROGRESS["phase"] != "inference"
+            loaded_model: Any = None
             try:
                 if owns_phase:
                     set_job_phase("load", model_key)
@@ -579,6 +628,7 @@ class ModelManager:
                             # transformers downloader.
                             raise
                         except Exception:
+                            self.check_cancelled(load_epoch)
                             # Fall back to transformers' own downloader (no byte
                             # progress) so unusual repo layouts still work.
                             logger.warning(
@@ -592,6 +642,7 @@ class ModelManager:
                                 local_files_only=False,
                             )
                         else:
+                            self.check_cancelled(load_epoch)
                             loaded_model = AutoModelForImageSegmentation.from_pretrained(
                                 repo_id,
                                 trust_remote_code=True,
@@ -602,11 +653,17 @@ class ModelManager:
                         set_job_phase("load", model_key)
                     compact_model_cache_fp16(repo_id)
 
+                self.check_cancelled(load_epoch)
                 loaded_model.to(device=DEVICE, dtype=DTYPE)
                 loaded_model.eval()
 
                 self.model = loaded_model
                 self.active_model_key = model_key
+            except BaseException:
+                if loaded_model is not None and self.model is not loaded_model:
+                    del loaded_model
+                    self.flush_device_memory()
+                raise
             finally:
                 # This function owns the `download`/`load` phases it set;
                 # callers like the startup preload or Quick Action have no

@@ -53,7 +53,7 @@ Test coverage spans the pipeline, API contracts, the desktop bridge, CLI and Qui
 
 Layer map, bottom to top:
 
-1. **Primitives:** `state.js`, `bus.js`, `zip.js`, `shortcuts.js`, `tooltips.js` (no internal imports).
+1. **Primitives:** `dom.js`, `prefs.js`, `format.js`, `state.js`, `bus.js`, `zip.js`, `shortcuts.js`, `tooltips.js` (bottom layer).
 2. **Shared helpers:** `stage.js`, `preferences.js`, `export.js`, `export-ui.js`, `export-io.js` (export stack builds downward).
 3. **Workspace domains:** `segmentation.js`, `batch.js`, `batch-panel.js`, `batch-run.js` (batch/segmentation operations; their calls into the tab strip are injected, not imported).
 4. **Workspace coordinator:** `tabs.js` (tab lifecycle and workspace state; may call domain modules directly).
@@ -62,12 +62,23 @@ Layer map, bottom to top:
 
 New module checklist: a `tests/<name>.test.mjs`, an entry in `expected_modules` and the archive set in `tests/test_repo_integrity.py`, and a line in the layout below.
 
+## Desktop signal and shutdown design
+
+On macOS, `webview.start()` parks the main thread inside Cocoa's native `CFRunLoop`. While that loop runs, Python's bytecode interpreter never regains control on the main thread, so standard `signal.signal(SIGINT/SIGTERM, ...)` handlers do not fire until the window closes. `app.py` installs `signal.set_wakeup_fd` writing raw signal numbers into a non-blocking pipe watched by a daemon thread (`_start_signal_watchdog`), which cancels active jobs and calls `os._exit(128 + sig)`. `ModelManager.unload()` is intentionally skipped in signal/window-close teardown because `get_or_load` holds the model lock across first-run downloads; process exit lets the OS reclaim device memory immediately without risking a hung Ctrl+C.
+
+To clean local build and tool caches:
+
+```bash
+rm -rf dist build .mypy_cache .ruff_cache .coverage
+```
+
 ## Project layout
 
 ```text
 ├── app.py                  # Entrypoint (CLI / Quick Action / desktop launcher)
 ├── openbgr/
 │   ├── config.py           # Runtime paths, hardware auto-detection & model tier registry
+│   ├── settings.py         # Stdlib-only version, tokens, tier aliases & offline-mode switch
 │   ├── models.py           # Thread-safe ModelManager, HF cache inspection & FP16 compaction
 │   ├── pipeline.py         # Defringe, color-spill suppression, RGBA composition & segmentation
 │   ├── icon_render.py      # Shared macOS squircle icon renderer (Pillow-only)
@@ -75,6 +86,7 @@ New module checklist: a `tests/<name>.test.mjs`, an entry in `expected_modules` 
 │   ├── quick_action_config.py # Persisted Quick Action settings & OS integration install
 │   ├── quick_action_native.py # Native clipboard, dialogs & notification dispatch
 │   ├── desktop_bridge.py   # JS↔Python bridge (DesktopApi) & pending open-files queue
+│   ├── desktop_clipboard.py # Native OS clipboard probe, read & write mixin
 │   ├── desktop_window.py   # Window geometry persistence & chromeless browser fallback
 │   ├── desktop_menus.py    # Native menu bar (macOS / Linux GTK)
 │   ├── desktop_cocoa.py    # macOS-only: app name, NSMenu/appearance & 'odoc' handlers
@@ -86,7 +98,10 @@ New module checklist: a `tests/<name>.test.mjs`, an entry in `expected_modules` 
 ├── static/
 │   ├── index.html          # 3-column studio workspace
 │   ├── styles.css          # Stylesheet
-│   ├── state.js            # Shared state, tab model & helpers
+│   ├── dom.js              # Lazy Proxy-backed DOM element registry
+│   ├── prefs.js            # Shared constants, preference schema & localStorage persistence
+│   ├── format.js           # Byte/duration formatting & per-tier download progress UI
+│   ├── state.js            # Shared workspace state, tab model & helpers
 │   ├── stage.js            # Split view, pan/zoom & loupe rendering
 │   ├── export.js           # Canvas export pipeline, live preview & batch render
 │   ├── export-ui.js        # Export telemetry, backdrop/scale controls & dim sync
@@ -100,7 +115,7 @@ New module checklist: a `tests/<name>.test.mjs`, an entry in `expected_modules` 
 │   ├── segmentation.js     # Segmentation run, progress polling & refinement
 │   ├── shortcuts.js        # Shortcut table, text-field gate & platform labels
 │   ├── bridge.js           # window.openBGR command bridge (menus, shortcuts, native)
-│   ├── menubar.js          # In-app menu bar & native-menus mode
+│   ├── menubar.js          # Declarative in-app menu bar & native-menus mode
 │   ├── keyboard.js         # Escape cascade & key handlers
 │   ├── open-files.js       # Open dialog, drag-and-drop & OS-delivered files
 │   ├── clipboard.js        # Paste ingest & clipboard probe
@@ -119,7 +134,7 @@ New module checklist: a `tests/<name>.test.mjs`, an entry in `expected_modules` 
 │   ├── OpenBGR.iss         # Thin Inno Setup 6 definition for OpenBGR-Setup.exe
 │   ├── OpenBGR.cs          # C# first-run bootstrapper compiled into OpenBGR.exe
 │   ├── make_dev_bundle.py  # Generates the venv-local OpenBGR.app for dev runs
-│   ├── bump_version.py     # Bumps the version in pyproject/package*.json together
+│   ├── bump_version.py     # Bumps the version in pyproject.toml
 │   ├── browser_smoke.mjs   # Headless-browser smoke test for the frontend
 │   ├── context_process.sh  # Headless cutout helper (server fast-path > --cli fallback)
 │   ├── install_macos_quick_action.py      # Finder "Remove Background" Quick Action
@@ -128,6 +143,7 @@ New module checklist: a `tests/<name>.test.mjs`, an entry in `expected_modules` 
 │   └── install_linux_integration.sh       # .desktop / KDE / Nautilus entries
 ├── tests/
 │   ├── test_api.py             # HTTP endpoint contracts & pending-file queueing
+│   ├── test_models.py          # ModelManager concurrency, eviction, cancel & lock guards
 │   ├── test_pipeline.py        # Icon render, edge refinement, FP16 compaction, segmentation
 │   ├── test_quick_action.py    # Quick Action config, dialogs, runner & notifier bundle
 │   ├── test_desktop_bridge.py  # DesktopApi bridge: dialogs, clipboard, window actions
@@ -147,7 +163,7 @@ New module checklist: a `tests/<name>.test.mjs`, an entry in `expected_modules` 
 
 Maintainer-only: pushing a `v*` tag triggers `.github/workflows/release.yml` to build the Windows installer/portable ZIP, macOS DMG, Linux archive, and `SHA256SUMS.txt`, then attach them to a GitHub Release. To build the bundles locally into `dist/`, run `python3 scripts/build_release.py`.
 
-To bump the version, run `python3 scripts/bump_version.py X.Y.Z`. It updates `pyproject.toml`, `package.json`, and `package-lock.json` together. `pyproject.toml` is the canonical source; `test_version_single_sourced_from_pyproject` fails CI if any file drifts. The same applies to `requirements.txt` for dependencies: `pyproject.toml` reads them dynamically, so edit the txt file only.
+To bump the version, run `python3 scripts/bump_version.py X.Y.Z`. It updates `pyproject.toml`, which is the single canonical source; `test_version_single_sourced_from_pyproject` fails CI if any consumer drifts. The same applies to `requirements.txt` for dependencies: `pyproject.toml` reads them dynamically, so edit the txt file only.
 
 Tag a release when `main` has soaked for a few days and the checklist below passes, not on a schedule.
 

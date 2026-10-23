@@ -1,7 +1,8 @@
 /**
- * Node unit tests for the pure helpers in static/state.js. The module reads
- * `localStorage`, `document`, and `Image` at import time, so minimal shims
- * are installed before the dynamic import below.
+ * Node unit tests for the pure helpers in static/state.js, static/prefs.js,
+ * static/format.js, and static/dom.js. Because `dom` is a lazy Proxy and
+ * `getApiToken` resolves on demand, importing these modules requires no
+ * `document` or `Image` global at import time.
  *
  * Run with: node --test tests/
  */
@@ -15,12 +16,6 @@ globalThis.localStorage = {
   setItem: (k, v) => store.set(k, String(v)),
   removeItem: (k) => store.delete(k),
 };
-globalThis.document = {
-  getElementById: () => null,
-  querySelector: () => null,
-  createElement: () => ({ style: {}, classList: { add() {}, remove() {} } }),
-};
-globalThis.Image = class {};
 
 const {
   normalizeTierKey,
@@ -31,8 +26,11 @@ const {
   clearResultState,
   createTabRecord,
   defaultTierForNewTab,
+  getApiToken,
+  dom,
   state,
   prefs,
+  setPref,
   DEFAULT_CROP_PADDING,
 } = await import("../static/state.js");
 
@@ -70,7 +68,7 @@ test("prefs fall back to the default snapshot when storage is empty or corrupt",
 
   store.set("openbgr_prefs", "{not json");
   // A fresh dynamic import re-reads storage; corrupt JSON must not throw.
-  return import(`../static/state.js?corrupt=${Date.now()}`).then((mod) => {
+  return import(`../static/prefs.js?corrupt=${Date.now()}`).then((mod) => {
     assert.equal(mod.prefs.theme, "dark");
     assert.equal(mod.prefs.defaultTier, "auto");
   });
@@ -81,10 +79,30 @@ test("stored preferences sanitize through the schema on load", async () => {
     "openbgr_prefs",
     JSON.stringify({ theme: "light", defaultTier: "bogus", qaFormat: "webp" })
   );
-  const mod = await import(`../static/state.js?stored=${Date.now()}`);
+  const mod = await import(`../static/prefs.js?stored=${Date.now()}`);
   assert.equal(mod.prefs.theme, "light");
   assert.equal(mod.prefs.defaultTier, "auto");
   assert.equal(mod.prefs.qaFormat, "webp");
+});
+
+test("savePrefs persists accentPair for pre-paint boot and dom/getApiToken resolve lazily", () => {
+  setPref("accent", "green");
+  const saved = JSON.parse(store.get("openbgr_prefs"));
+  assert.deepEqual(saved.accentPair, ["#34d399", "#052e1b"]);
+  setPref("accent", "default");
+  assert.equal(JSON.parse(store.get("openbgr_prefs")).accentPair, null);
+
+  let lookedUp = null;
+  globalThis.document = {
+    getElementById: (id) => {
+      lookedUp = id;
+      return { id };
+    },
+    querySelector: () => ({ getAttribute: () => "lazy-token-123" }),
+  };
+  assert.equal(dom.appShell.id, "appShell");
+  assert.equal(lookedUp, "appShell");
+  assert.equal(getApiToken(), "lazy-token-123");
 });
 
 test("getTierDownloadText returns null for models with no active download", () => {

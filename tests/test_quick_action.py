@@ -150,10 +150,12 @@ class TestQuickAction(unittest.TestCase):
         fake_rgba.close()
 
     def test_main_rejects_unknown_flags(self) -> None:
-        """Typos like `--clii` fail loudly instead of silently opening the GUI."""
+        """Typos like `--clii` or `--quick-action --tier` fail loudly instead of being ignored."""
         import contextlib
 
         import app as app_mod
+        import openbgr.server_probe as probe_mod
+        import openbgr.settings as settings_mod
 
         err = io.StringIO()
         with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as ctx:
@@ -161,13 +163,54 @@ class TestQuickAction(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 2)
         self.assertIn("--clii", err.getvalue())
 
+        # Combining --quick-action with --cli flags is rejected.
+        err_qa = io.StringIO()
+        with contextlib.redirect_stderr(err_qa), self.assertRaises(SystemExit) as ctx_qa:
+            app_mod.main(["--quick-action", "--tier", "hr", "photo.png"])
+        self.assertEqual(ctx_qa.exception.code, 2)
+        self.assertIn("--quick-action", err_qa.getvalue())
+
+        # --version prints the canonical version and exits 0.
+        out_ver = io.StringIO()
+        with contextlib.redirect_stdout(out_ver), self.assertRaises(SystemExit) as ctx_ver:
+            app_mod.main(["--version"])
+        self.assertEqual(ctx_ver.exception.code, 0)
+        self.assertIn(settings_mod.APP_VERSION, out_ver.getvalue())
+
         # The legacy -psn flag Finder appends to .app launches is ignored.
-        with patch.object(app_mod, "run_cli", return_value=0) as cli:
-            with self.assertRaises(SystemExit) as ctx2:
-                app_mod.main(["--cli", "-psn_0_12345", "photo.png"])
+        with (
+            patch.object(app_mod, "run_cli", return_value=0) as cli,
+            self.assertRaises(SystemExit) as ctx2,
+        ):
+            app_mod.main(["--cli", "-psn_0_12345", "photo.png"])
         self.assertEqual(ctx2.exception.code, 0)
         cli.assert_called_once()
         self.assertEqual(cli.call_args.args[0], ["photo.png"])
+
+        # is_openbgr_server requires the "app": "openbgr" marker, not just "tiers".
+        class _FakeResp:
+            def __init__(self, body: bytes) -> None:
+                self._body = body
+
+            def read(self) -> bytes:
+                return self._body
+
+            def __enter__(self) -> _FakeResp:
+                return self
+
+            def __exit__(self, *_a: object) -> None:
+                pass
+
+        with patch(
+            "urllib.request.urlopen",
+            return_value=_FakeResp(b'{"tiers": {}}'),
+        ):
+            self.assertFalse(probe_mod.is_openbgr_server("http://127.0.0.1:7860", timeout_s=0.05))
+        with patch(
+            "urllib.request.urlopen",
+            return_value=_FakeResp(b'{"app": "openbgr", "tiers": {}}'),
+        ):
+            self.assertTrue(probe_mod.is_openbgr_server("http://127.0.0.1:7860", timeout_s=0.05))
 
     def test_graceful_exit_uses_signal_status(self) -> None:
         """Signal exits report 128 + signum, not a clean 0."""
@@ -178,6 +221,37 @@ class TestQuickAction(unittest.TestCase):
         with patch("os._exit") as mock_exit:
             app_mod._graceful_exit(signal.SIGINT, None)
         mock_exit.assert_called_once_with(128 + signal.SIGINT)
+
+    def test_thin_client_paths_do_not_import_torch(self) -> None:
+        """Importing `app`, `--help`, and warm-server delegation stay stdlib-only."""
+        import subprocess
+        import sys
+
+        repo_root = Path(__file__).resolve().parent.parent
+        code = "\n".join(
+            [
+                "import sys, app",
+                "assert 'torch' not in sys.modules, 'import app loaded torch'",
+                "assert 'fastapi' not in sys.modules, 'import app loaded fastapi'",
+                "app.build_arg_parser()",
+                "assert 'torch' not in sys.modules, 'build_arg_parser loaded torch'",
+                "app.delegate_quick_action_to_server = lambda files: {'ok': True}",
+                "try:",
+                "    app.main(['--quick-action', 'photo.png'])",
+                "except SystemExit as e:",
+                "    assert e.code == 0",
+                "assert 'torch' not in sys.modules, 'delegated quick-action loaded torch'",
+            ]
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
 
     def test_macos_notifier_strips_asset_catalog_icon(self) -> None:
         """`ensure_macos_notifier_app` removes `CFBundleIconName` and `Assets.car` so `.icns` wins."""

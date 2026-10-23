@@ -16,3 +16,6 @@ models/
 dist/
 build/
 *.egg-info/
+.coverage
+coverage.xml
+htmlcov/

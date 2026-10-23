@@ -114,8 +114,13 @@ class TestPipeline(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             sf_path = Path(tmp) / "model.safetensors"
+            # Place the FP32 tensor past the first 8 keys to verify full-header inspection.
+            tensors: dict[str, torch.Tensor] = {
+                f"fp16_{i:02d}": torch.zeros(4, 4, dtype=torch.float16) for i in range(10)
+            }
+            tensors["weight_late_fp32"] = torch.randn(128, 128, dtype=torch.float32)
             save_file(
-                {"weight": torch.randn(128, 128, dtype=torch.float32)},
+                tensors,
                 str(sf_path),
                 metadata={"format": "pt"},
             )
@@ -128,7 +133,7 @@ class TestPipeline(unittest.TestCase):
                 self.assertEqual(models_mod.compact_model_cache_fp16("dummy/repo"), 0)
 
             with safe_open(str(sf_path), framework="pt", device="cpu") as f:
-                self.assertEqual(f.get_tensor("weight").dtype, torch.float16)
+                self.assertEqual(f.get_tensor("weight_late_fp32").dtype, torch.float16)
 
     def test_segment_foreground_and_api_remove_bg_with_mock_model(self) -> None:
         """Full `segment_foreground` and `/api/remove-bg` flow works with a mocked BiRefNet model."""

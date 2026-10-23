@@ -9,9 +9,15 @@
  * free module reports all-zero counts and error: null.
  */
 
-import { installDomShims } from "./dom-shim.mjs";
+import { installDomShims, FakeElement } from "./dom-shim.mjs";
 
 const counts = { fetch: 0, timers: 0, listeners: 0 };
+
+const origElemAdd = FakeElement.prototype.addEventListener;
+FakeElement.prototype.addEventListener = function (...args) {
+  counts.listeners++;
+  return origElemAdd.apply(this, args);
+};
 
 globalThis.fetch = () => {
   counts.fetch++;

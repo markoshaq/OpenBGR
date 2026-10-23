@@ -7,7 +7,6 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFileSync } from "node:fs";
 import { installDomShims, FakeElement } from "./dom-shim.mjs";
 
 installDomShims();
@@ -17,7 +16,9 @@ const { on } = await import("../static/bus.js");
 const { refreshClipboardState } = await import("../static/clipboard.js");
 on("clipboard:probe", refreshClipboardState);
 const {
+  MENUS,
   MENU_COMMANDS,
+  renderMenuBar,
   closeAllMenus,
   isAnyMenuOpen,
   syncNativeMenusMode,
@@ -54,12 +55,21 @@ function reset() {
   window.openBGR = {};
 }
 
-test("every data-cmd in index.html has a dispatch entry", () => {
-  const html = readFileSync(new URL("../static/index.html", import.meta.url), "utf8");
-  const cmds = new Set([...html.matchAll(/data-cmd="([^"]+)"/g)].map((m) => m[1]));
+test("MENUS table and MENU_COMMANDS stay in 1-to-1 sync and render cleanly", () => {
+  const container = new FakeElement("nav");
+  renderMenuBar(container);
+  const renderedRoots = container.querySelectorAll(".menu-root");
+  assert.equal(renderedRoots.length, MENUS.length);
+
+  const cmds = new Set(
+    container.querySelectorAll(".menu-item").map((el) => el.getAttribute("data-cmd"))
+  );
   assert.ok(cmds.size > 0);
   for (const cmd of cmds) {
     assert.equal(typeof MENU_COMMANDS[cmd], "function", `missing command: ${cmd}`);
+  }
+  for (const key of Object.keys(MENU_COMMANDS)) {
+    assert.ok(cmds.has(key), `unused MENU_COMMANDS entry: ${key}`);
   }
 });
 

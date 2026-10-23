@@ -7,7 +7,6 @@ processes image batches per the persisted Quick Action configuration.
 from __future__ import annotations
 
 import io
-import json
 import os
 from pathlib import Path
 from typing import Any
@@ -15,12 +14,10 @@ from typing import Any
 from PIL import Image
 
 from .config import (
-    API_TOKEN_HEADER,
     RECOMMENDED_TIER,
     TIERS,
     logger,
     normalize_tier_key,
-    read_api_token,
 )
 from .models import MANAGER, set_job_phase
 from .pipeline import segment_foreground
@@ -32,7 +29,15 @@ from .quick_action_native import (
     format_quick_action_notification,
     send_openbgr_notification,
 )
-from .server_probe import is_openbgr_server
+from .server_probe import delegate_quick_action_to_server
+
+__all__ = [
+    "cutout_filename_for",
+    "delegate_quick_action_to_server",
+    "encode_cutout_image",
+    "run_cli",
+    "run_quick_action",
+]
 
 
 def cutout_filename_for(fmt: str = "png") -> tuple[str, str]:
@@ -108,53 +113,6 @@ def _resolve_cli_output(
         dest.mkdir(parents=True, exist_ok=True)
         return _default_output_path(src, fmt=fmt, dest_dir=dest)
     return _with_output_suffix(dest, ext)
-
-
-def delegate_quick_action_to_server(inputs: list[str]) -> dict[str, Any] | None:
-    """
-    If an OpenBGR server is already listening on localhost, delegates the Quick
-    Action batch over HTTP so Windows context-menu invocations and CLI calls
-    reuse the warm GPU/MPS model with zero cold-start overhead.
-    """
-    import urllib.error
-    import urllib.parse
-    import urllib.request
-
-    resolved = [
-        str(Path(p).expanduser().resolve()) for p in inputs if Path(p).expanduser().is_file()
-    ]
-    if not resolved:
-        return None
-    port = os.environ.get("OPENBGR_PORT") or os.environ.get("PORT") or "7860"
-    api = f"http://127.0.0.1:{port}"
-    try:
-        if not is_openbgr_server(api, timeout_s=1.5):
-            return None
-        data = urllib.parse.urlencode([("files", p) for p in resolved]).encode("utf-8")
-        req = urllib.request.Request(f"{api}/api/quick-action", data=data, method="POST")
-        token = read_api_token()
-        if token:
-            req.add_header(API_TOKEN_HEADER, token)
-        with urllib.request.urlopen(req, timeout=300) as res:
-            payload = json.loads(res.read().decode("utf-8"))
-            if isinstance(payload, dict) and ("ok" in payload or "cancelled" in payload):
-                return payload
-    except urllib.error.HTTPError:
-        # The server answered with an error status; nothing is left running
-        # server-side, so a local rerun cannot duplicate outputs.
-        return None
-    except Exception:
-        # A timeout or dropped connection after the POST leaves the batch
-        # running server-side (it runs detached via asyncio.to_thread), so a
-        # local rerun would duplicate every output file. Re-probe once: a live
-        # server owns the job; only a dead one makes local fallback safe.
-        if is_openbgr_server(api, timeout_s=1.5):
-            logger.info(
-                "[QuickAction] Lost the delegated run's response; the server is still processing it."
-            )
-            return {"ok": True, "delegated": True}
-        return None
-    return None
 
 
 def run_quick_action(inputs: list[str]) -> dict[str, Any]:

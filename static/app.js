@@ -42,28 +42,41 @@ import { initControls } from "./controls.js";
 
 // Startup initialization (order mirrors the old top-level wiring sequence).
 // The workspace domain modules take their upward tab-strip calls as injected
-// collaborators so the import graph stays acyclic.
-initSegmentation({ setViewMode, syncMenuBarState });
-initBatchPanel({ renderTabBar, hideTabGhost, closeTabImmediate });
-initBatchRun({ syncMenuBarState });
-initBatch({ renderTabBar, closeTabImmediate, switchToTab, ingestImageFile });
-initConnectivity();
-initModals();
-initSettings();
-initTierDropdown();
-initControls();
-initBackdrop();
-initStageInput();
-initOpenFiles();
-initRecent();
-initExternalLinks();
-installBridge();
-initKeyboard();
-initClipboard();
-initMenuBar();
-initTooltips();
-applyPreferences(syncMenuBarState);
-syncFormatButtons();
-applyBackdrop(state.activeBackdrop);
-syncServerStatus(true, selectTier);
-startPendingFilesPoll();
+// collaborators so the import graph stays acyclic. Each step runs inside
+// `bootInits` so a failure in one module never aborts the rest of the boot.
+function bootInits(steps) {
+  for (const step of steps) {
+    try {
+      step();
+    } catch (err) {
+      console.error("[OpenBGR] Startup init step failed:", err);
+    }
+  }
+}
+
+bootInits([
+  () => initSegmentation({ setViewMode, syncMenuBarState }),
+  () => initBatchPanel({ renderTabBar, hideTabGhost, closeTabImmediate }),
+  () => initBatchRun({ syncMenuBarState }),
+  () => initBatch({ renderTabBar, closeTabImmediate, switchToTab, ingestImageFile }),
+  initConnectivity,
+  initModals,
+  initSettings,
+  initTierDropdown,
+  initControls,
+  initBackdrop,
+  initStageInput,
+  initOpenFiles,
+  initRecent,
+  initExternalLinks,
+  installBridge,
+  initKeyboard,
+  initClipboard,
+  initMenuBar,
+  initTooltips,
+  () => applyPreferences(syncMenuBarState),
+  syncFormatButtons,
+  () => applyBackdrop(state.activeBackdrop),
+  () => syncServerStatus(true, selectTier),
+  startPendingFilesPoll,
+]);

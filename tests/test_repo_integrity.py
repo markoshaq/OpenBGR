@@ -39,10 +39,7 @@ class TestRepoIntegrity(unittest.TestCase):
         self.assertEqual(config_mod.APP_VERSION, canonical)
         self.assertEqual(build_release.APP_VERSION, canonical)
         pkg = json.loads((ROOT_DIR / "package.json").read_text(encoding="utf-8"))
-        self.assertEqual(pkg["version"], canonical)
-        pkg_lock = json.loads((ROOT_DIR / "package-lock.json").read_text(encoding="utf-8"))
-        self.assertEqual(pkg_lock["version"], canonical)
-        self.assertEqual(pkg_lock["packages"][""]["version"], canonical)
+        self.assertNotIn("version", pkg)
 
     def test_dependencies_single_sourced_from_requirements_txt(self) -> None:
         """`requirements.txt` is the only dependency list; pyproject consumes it."""
@@ -81,36 +78,40 @@ class TestRepoIntegrity(unittest.TestCase):
             self.assertIn("<", req, f"{name} has no upper bound")
 
     def test_frontend_constants_match_backend(self) -> None:
-        """Constants duplicated across index.html / state.js / config.py cannot drift."""
+        """Constants shared across prefs.js and config.py cannot drift, and ACCENTS is single-sourced."""
         html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
-        state_js = (STATIC_DIR / "state.js").read_text(encoding="utf-8")
+        prefs_js = (STATIC_DIR / "prefs.js").read_text(encoding="utf-8")
 
         def js_object_block(text: str, name: str) -> str:
             m = re.search(rf"{name}\s*=\s*\{{(.*?)\}}", text, re.DOTALL)
             return m.group(1) if m else ""
 
         pair_re = r'(\w+)\s*:\s*\[\s*"([^"]+)"\s*,\s*"([^"]+)"\s*\]'
-        html_accents = {
-            k: [a, b] for k, a, b in re.findall(pair_re, js_object_block(html, "ACCENTS"))
-        }
         js_accents = {
-            k: [a, b] for k, a, b in re.findall(pair_re, js_object_block(state_js, "ACCENTS"))
+            k: [a, b] for k, a, b in re.findall(pair_re, js_object_block(prefs_js, "ACCENTS"))
         }
-        self.assertTrue(html_accents, "ACCENTS literal missing from index.html")
-        self.assertEqual(html_accents, js_accents)
+        self.assertTrue(js_accents, "ACCENTS literal missing from prefs.js")
+        self.assertEqual(
+            js_object_block(html, "ACCENTS"),
+            "",
+            "index.html must not duplicate the ACCENTS table",
+        )
 
         js_aliases = dict(
-            re.findall(r'(\w+)\s*:\s*"(\w+)"', js_object_block(state_js, "TIER_ALIASES"))
+            re.findall(r'(\w+)\s*:\s*"(\w+)"', js_object_block(prefs_js, "TIER_ALIASES"))
         )
         self.assertEqual(js_aliases, config_mod.TIER_ALIASES)
 
-        keys_block = re.search(r"TIER_KEYS\s*=\s*\[(.*?)\]", state_js, re.DOTALL)
+        keys_block = re.search(r"TIER_KEYS\s*=\s*\[(.*?)\]", prefs_js, re.DOTALL)
         js_tier_keys = re.findall(r'"(\w+)"', keys_block.group(1) if keys_block else "")
         self.assertEqual(js_tier_keys, list(config_mod.TIERS.keys()))
 
     def test_frontend_modules_and_dom_ids(self) -> None:
-        """Every `getElementById` in the ES modules resolves to a real `id` in index.html."""
+        """Every registered DOM id in `dom.js` and `getElementById` in `static/` exists in index.html."""
         expected_modules = [
+            "dom.js",
+            "prefs.js",
+            "format.js",
             "state.js",
             "stage.js",
             "export.js",
@@ -143,6 +144,17 @@ class TestRepoIntegrity(unittest.TestCase):
         html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
         html_ids = set(re.findall(r'\bid="([^"]+)"', html))
 
+        dom_js = (STATIC_DIR / "dom.js").read_text(encoding="utf-8")
+        dom_ids_block = re.search(r"DOM_IDS\s*=\s*Object\.freeze\(\[(.*?)\]\)", dom_js, re.DOTALL)
+        registered_ids = re.findall(r'"([^"]+)"', dom_ids_block.group(1) if dom_ids_block else "")
+        self.assertTrue(registered_ids, "DOM_IDS missing from dom.js")
+        for ref_id in registered_ids:
+            self.assertIn(
+                ref_id,
+                html_ids,
+                f"#{ref_id} registered in dom.js does not exist in index.html",
+            )
+
         for mod_name in expected_modules:
             mod_path = STATIC_DIR / mod_name
             self.assertTrue(mod_path.is_file(), f"Missing ES module: {mod_name}")
@@ -174,14 +186,19 @@ class TestRepoIntegrity(unittest.TestCase):
                 "OpenBGR/openbgr/quick_action_config.py",
                 "OpenBGR/openbgr/quick_action_native.py",
                 "OpenBGR/openbgr/desktop_bridge.py",
+                "OpenBGR/openbgr/desktop_clipboard.py",
                 "OpenBGR/openbgr/desktop_window.py",
                 "OpenBGR/openbgr/desktop_menus.py",
                 "OpenBGR/openbgr/desktop_cocoa.py",
                 "OpenBGR/openbgr/server_probe.py",
+                "OpenBGR/openbgr/settings.py",
                 "OpenBGR/openbgr/api.py",
                 "OpenBGR/static/index.html",
                 "OpenBGR/static/styles.css",
                 "OpenBGR/static/app.js",
+                "OpenBGR/static/dom.js",
+                "OpenBGR/static/prefs.js",
+                "OpenBGR/static/format.js",
                 "OpenBGR/static/state.js",
                 "OpenBGR/static/stage.js",
                 "OpenBGR/static/export.js",
