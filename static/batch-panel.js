@@ -85,14 +85,19 @@ export function syncBatchPanelChrome(tab) {
   }
 }
 
-/** Wires the check-all toggle in the batch panel header for `tab`'s queue. */
-function wireBatchCheckAll(tab) {
-  if (!dom.batchCheckAll) return;
-  dom.batchCheckAll.onclick = () => {
-    if (state.batch.running) return;
-    const selCount = tab.batchFiles.filter(
-      (e) => e.selected !== false
-    ).length;
+/**
+ * Wires the check-all toggle in the batch panel header. The element is static
+ * markup, so the listener binds once and resolves the active tab at click
+ * time; re-binding per render would stack a handler per renderBatchPanel call.
+ */
+let checkAllWired = false;
+function wireBatchCheckAll() {
+  if (!dom.batchCheckAll || checkAllWired) return;
+  checkAllWired = true;
+  dom.batchCheckAll.addEventListener("click", () => {
+    const tab = state.tabs.find((t) => t.id === state.activeTabId);
+    if (state.batch.running || !tab || tab.kind !== "batch") return;
+    const selCount = tab.batchFiles.filter((e) => e.selected !== false).length;
     const turnOn = selCount !== tab.batchFiles.length;
     tab.batchFiles.forEach((e) => {
       e.selected = turnOn;
@@ -100,7 +105,7 @@ function wireBatchCheckAll(tab) {
       if (turnOn && e.status === "skipped") e.status = "queued";
     });
     renderBatchPanel(tab);
-  };
+  });
 }
 
 /** Toggles one queue entry's selected state and repaints its row + counters. */
@@ -236,7 +241,7 @@ export function renderBatchPanel(tab) {
   dom.stage.classList.remove("visible");
   dom.emptyState.style.display = "none";
 
-  wireBatchCheckAll(tab);
+  wireBatchCheckAll();
   updateDestUI();
   renderBatchRows(tab);
   syncBatchPanelChrome(tab);

@@ -83,6 +83,16 @@ TIER_ALIASES: dict[str, str] = {
     "high": "hr",
 }
 
+# File types accepted from OS open-file events, Open With forwarding, and
+# clipboard path drops. Shared by `desktop_bridge` and `desktop_clipboard`,
+# which must not import each other (bridge mixes the clipboard class in).
+IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"})
+
+# Default and minimum desktop window sizes, shared by the pywebview window
+# (`app.py`) and the system-browser `--app=` fallback (`desktop_window.py`).
+DEFAULT_WINDOW_SIZE = (1380, 860)
+MIN_WINDOW_SIZE = (980, 640)
+
 
 def normalize_tier_key(tier: str) -> str:
     """Resolves legacy preset names (`low`, `mid`, `high`) to canonical model keys."""
@@ -94,7 +104,13 @@ def persist_api_token() -> None:
     """Writes the session token to `~/.openbgr/` (0600) for trusted local clients."""
     try:
         APP_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        API_TOKEN_PATH.write_text(API_TOKEN, encoding="utf-8")
+        # Create the file mode-0600 from the start: write_text() + chmod would
+        # leave a window where a permissive umask exposes the token to other
+        # local processes. The chmod still runs for files left over with a
+        # looser mode from an older version or a manual touch.
+        fd = os.open(API_TOKEN_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(API_TOKEN)
         os.chmod(API_TOKEN_PATH, 0o600)
     except OSError as exc:
         logging.getLogger("openbgr").warning(

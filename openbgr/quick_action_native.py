@@ -84,7 +84,8 @@ def copy_png_bytes_to_clipboard(raw_bytes: bytes) -> dict[str, Any]:
                 t = SysThreading.Thread(SysThreading.ThreadStart(_set_win_clip))
                 t.SetApartmentState(SysThreading.ApartmentState.STA)
                 t.Start()
-                t.Join(3000)
+                if not t.Join(3000):
+                    return {"copied": False, "error": "Clipboard thread timed out."}
                 if err_holder:
                     return {"copied": False, "error": err_holder[0]}
                 return {"copied": True}

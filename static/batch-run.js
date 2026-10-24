@@ -14,6 +14,7 @@ import {
   setError,
   openConfirmModal,
   downloadBlob,
+  setStatElapsed,
   FORMAT_EXT,
   DEFAULT_CROP_PADDING,
   formatElapsed,
@@ -103,11 +104,18 @@ async function processBatchEntry(batch, entry, snap, outputDir, controller) {
 
 /** Snapshots the settings a batch run applies uniformly to every entry. */
 function snapshotBatchSettings(tab) {
+  // `gif` is an animation-only export: a batch never produces one file per
+  // animation, so a leftover `gif` format falls back to PNG rather than
+  // writing PNG bytes under a .gif extension.
+  const snapFormat =
+    (tab.exportFormat ?? state.exportFormat) === "gif"
+      ? "png"
+      : (tab.exportFormat ?? state.exportFormat);
   return {
     tier: tab.tier ?? state.tier,
     defringe: tab.defringe ?? state.defringe,
     despill: tab.despill ?? state.despill,
-    format: tab.exportFormat ?? state.exportFormat,
+    format: snapFormat,
     scale: tab.exportScale ?? state.exportScale,
     exportWidth: tab.exportWidth ?? 0,
     exportHeight: tab.exportHeight ?? 0,
@@ -291,10 +299,8 @@ async function processBatchQueue(tab, batch, snap, outputDir, controller) {
   return completed;
 }
 
-/** Tears down the run, flushes or aborts the zip, and shows the summary modal. */
-async function finishBatchRun(tab, batch, run) {
-  const { outputDir, zipHandle, startedAt, elapsedTimer, completed } = run;
-  const wasCancelled = batch.cancelled;
+/** Restores run state (flags, overlay, ticker, pollers) after the queue ends or fails. */
+function teardownBatchRun(batch, elapsedTimer) {
   batch.running = false;
   batch.cancelled = false;
   batch.tabId = null;
@@ -302,6 +308,14 @@ async function finishBatchRun(tab, batch, run) {
   state.abortController = null;
   dom.busyOverlay.classList.remove("active");
   stopJobProgressPolling();
+  clearInterval(elapsedTimer);
+}
+
+/** Tears down the run, flushes or aborts the zip, and shows the summary modal. */
+async function finishBatchRun(tab, batch, run) {
+  const { outputDir, zipHandle, startedAt, elapsedTimer, completed } = run;
+  const wasCancelled = batch.cancelled;
+  teardownBatchRun(batch, elapsedTimer);
 
   if (batch.zipWriter) {
     if (wasCancelled) {
@@ -330,13 +344,12 @@ async function finishBatchRun(tab, batch, run) {
   }
   batch.results = [];
 
-  clearInterval(elapsedTimer);
   const totalElapsed = formatElapsed(performance.now() - startedAt);
   tab.elapsedText = wasCancelled
     ? `CANCELLED - ${totalElapsed}`
     : totalElapsed;
   if (tab.id === state.activeTabId) {
-    dom.statTime.textContent = tab.elapsedText;
+    setStatElapsed(tab.elapsedText);
     dom.appShell?.classList.add("batch-elapsed");
     renderBatchPanel(tab);
   }
@@ -397,17 +410,31 @@ export async function runBatch(tab, { onlyFailed = false } = {}) {
   const startedAt = performance.now();
   const elapsedTimer = startBatchElapsedTicker(startedAt);
 
-  const completed = await processBatchQueue(
-    tab,
-    batch,
-    snap,
-    dest.outputDir,
-    controller
-  );
-  await finishBatchRun(tab, batch, {
-    ...dest,
-    startedAt,
-    elapsedTimer,
-    completed,
-  });
+  try {
+    const completed = await processBatchQueue(
+      tab,
+      batch,
+      snap,
+      dest.outputDir,
+      controller
+    );
+    await finishBatchRun(tab, batch, {
+      ...dest,
+      startedAt,
+      elapsedTimer,
+      completed,
+    });
+  } catch (err) {
+    // A failure outside the per-entry catch (status render, ZIP flush, or the
+    // summary modal) must still release the run state, or the busy overlay,
+    // pollers, and the 250 ms ticker keep running with `batch.running` stuck.
+    if (batch.zipWriter) {
+      await batch.zipWriter.abort().catch(() => {});
+      batch.zipWriter = null;
+    }
+    batch.results = [];
+    teardownBatchRun(batch, elapsedTimer);
+    tabOps.syncMenuBarState();
+    setError(err?.message || "Batch processing failed.");
+  }
 }

@@ -450,9 +450,12 @@ def detect_model_tier(source_dir: Path | str) -> str | None:
     cfg = src / "config.json"
     if cfg.is_file():
         try:
-            raw = json.loads(cfg.read_text(encoding="utf-8")).get("_name_or_path")
+            parsed_cfg = json.loads(cfg.read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            raw = None
+            parsed_cfg = None
+        # config.json may hold a list or scalar in non-HF folders; only dicts
+        # carry `_name_or_path`.
+        raw = parsed_cfg.get("_name_or_path") if isinstance(parsed_cfg, dict) else None
         if isinstance(raw, str) and raw.strip():
             names.append(raw)
     names.append(src.name)

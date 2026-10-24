@@ -35,6 +35,11 @@ target-version = "py310"
 line-length = 100
 extend-exclude = [".venv", "dist", "__pycache__"]
 
+[tool.ruff.lint.isort]
+# Keep `from .settings import (X as X, Y as Y)` re-export blocks in one import
+# statement instead of splitting each alias into its own line.
+combine-as-imports = true
+
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RET"]
 ignore = [

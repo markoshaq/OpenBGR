@@ -93,6 +93,7 @@ export const masterCutoutImg =
   typeof Image !== "undefined" ? new Image() : { onload: null, onerror: null, src: "" };
 
 let nextTabSeq = 1;
+let nextClipboardSeq = 1;
 
 /**
  * The single live workspace store. `state` mirrors the active tab's fields
@@ -138,6 +139,10 @@ export const state = {
   backdropSeq: 0,
   // Blur strength (0-100) applied to the "blur" and "image" backdrops.
   backdropBlur: 50,
+  // Last elapsed-time readout for the active tab; mirrored to `dom.statTime`
+  // by `setStatElapsed` and snapshotted back onto the tab by
+  // `saveStateToActiveTab`.
+  elapsedText: "--",
 
   // Active job lifecycle
   isProcessing: false,
@@ -309,9 +314,9 @@ export function createTabRecord(overrides = {}) {
   };
 }
 
-/** Generates sequential `Pasted Image N` names for clipboard-ingested images. */
+/** Generates sequential `CLIPBOARD_N.PNG` fallback names for pasted images. */
 export function nextClipboardName() {
-  return `CLIPBOARD_${nextTabSeq}.PNG`;
+  return `CLIPBOARD_${nextClipboardSeq++}.PNG`;
 }
 
 /**
@@ -410,7 +415,7 @@ export function saveStateToActiveTab() {
   tab.zoom = state.zoom;
   tab.panX = state.panX;
   tab.panY = state.panY;
-  tab.elapsedText = dom.statTime.textContent;
+  tab.elapsedText = state.elapsedText;
 }
 
 let errorCopyResetTimer = null;
@@ -499,22 +504,27 @@ export function handleErrorToastCopy() {
 
 let lastConfirmFocus = null;
 
+/** Writes the elapsed-time telemetry readout into live state and the bar. */
+export function setStatElapsed(text) {
+  state.elapsedText = text;
+  if (dom.statTime) dom.statTime.textContent = text;
+}
+
 /** Opens the destructive-action confirm modal and stashes its confirm callback. */
 export function openConfirmModal(opts, onConfirm) {
-  const cfg = typeof opts === "string" ? { message: opts } : opts;
   if (dom.modalTitle) {
-    dom.modalTitle.textContent = cfg.title || "STOP CURRENT IMAGE?";
+    dom.modalTitle.textContent = opts.title || "STOP CURRENT IMAGE?";
   }
-  dom.modalDesc.textContent = cfg.message;
-  dom.btnModalConfirm.textContent = cfg.confirmText || "STOP & CONTINUE";
-  dom.btnModalCancel.textContent = cfg.cancelText || "KEEP PROCESSING";
-  dom.btnModalCancel.style.display = cfg.hideCancel ? "none" : "";
+  dom.modalDesc.textContent = opts.message;
+  dom.btnModalConfirm.textContent = opts.confirmText || "STOP & CONTINUE";
+  dom.btnModalCancel.textContent = opts.cancelText || "KEEP PROCESSING";
+  dom.btnModalCancel.style.display = opts.hideCancel ? "none" : "";
   if (dom.btnModalAlt) {
-    dom.btnModalAlt.style.display = cfg.altText ? "" : "none";
-    if (cfg.altText) dom.btnModalAlt.textContent = cfg.altText;
+    dom.btnModalAlt.style.display = opts.altText ? "" : "none";
+    if (opts.altText) dom.btnModalAlt.textContent = opts.altText;
   }
   state.pendingConfirmFn = onConfirm;
-  state.pendingAltFn = cfg.altFn || null;
+  state.pendingAltFn = opts.altFn || null;
   lastConfirmFocus =
     document.activeElement instanceof HTMLElement
       ? document.activeElement
@@ -632,4 +642,133 @@ export function openExternalUrl(url) {
   } else {
     window.open(url, "_blank", "noopener,noreferrer");
   }
+}
+
+/**
+ * Resolves the trimmed `[startFrame, endFrame]` slice of `frames`, clamped to
+ * the loaded range. `requireProcessed` throws naming the first unprocessed
+ * frame; used by export paths that need every frame rendered.
+ */
+export function trimmedFrameSlice(frames, { requireProcessed = false } = {}) {
+  const total = frames.length;
+  const startIdx = Math.max(0, Math.min(total - 1, (state.startFrame || 1) - 1));
+  const endIdx = Math.max(
+    startIdx,
+    Math.min(total - 1, (state.endFrame || total) - 1)
+  );
+  const slice = frames.slice(startIdx, endIdx + 1);
+  if (requireProcessed) {
+    const missing = slice.findIndex((frm) => !frm.resultBlob);
+    if (missing >= 0) {
+      throw new Error(
+        `Frame ${startIdx + missing + 1} is not processed yet. Run PROCESS GIF first.`
+      );
+    }
+  }
+  return { slice, startIdx, endIdx };
+}
+
+/**
+ * Resolves the element used to fill the canvas under "blur"/"image" backdrops
+ * for the ACTIVE tab: the stage's original photo for "blur", the chosen
+ * backdrop photo for "image". Anything else resolves to no backdrop.
+ */
+export function resolveBackdropSource() {
+  if (state.activeBackdrop === "blur") {
+    return dom.beforeImg?.naturalWidth ? dom.beforeImg : null;
+  }
+  if (state.activeBackdrop === "image") {
+    return state.backdropImg?.naturalWidth ? state.backdropImg : null;
+  }
+  return null;
+}
+
+/**
+ * True when the export is a pixel passthrough: PNG at native size with a
+ * checker backdrop, no auto-crop and no shadow cutoff, so the pipeline
+ * output ships unchanged.
+ */
+export function isPassthroughExport({
+  format,
+  targetW,
+  targetH,
+  srcW,
+  srcH,
+  autoCrop,
+  backdrop,
+  shadowCutoff,
+}) {
+  return (
+    !autoCrop &&
+    format === "png" &&
+    targetW === srcW &&
+    targetH === srcH &&
+    backdrop === "checker" &&
+    shadowCutoff === 0
+  );
+}
+
+/**
+ * Resolves the backdrop source for a per-file render (batch entries and
+ * animation frames): for "blur" a new ImageBitmap decoded from `sourceFile`
+ * that the caller must close via `ownedBitmap`; for "image" the shared
+ * backdrop photo, borrowed. Anything else resolves to no backdrop.
+ */
+export async function resolveFileBackdropSource(backdrop, sourceFile, backdropImg) {
+  if (backdrop === "blur" && sourceFile) {
+    const ownedBitmap = await createImageBitmap(sourceFile);
+    return { backdropSource: ownedBitmap, ownedBitmap };
+  }
+  if (backdrop === "image") {
+    const img = backdropImg?.naturalWidth ? backdropImg : null;
+    return { backdropSource: img, ownedBitmap: null };
+  }
+  return { backdropSource: null, ownedBitmap: null };
+}
+
+/**
+ * Opens the shared context menu (`#tabContextMenu`) at viewport point (x, y):
+ * clears it, lets `build` append `.item(label, fn, disabled?)`, `.sep()`,
+ * and `.head(label)` entries, then clamps it inside the viewport. Item clicks
+ * hide the menu before running their handler; separators before the first
+ * item are dropped. Returns false when nothing was built.
+ */
+export function openContextMenu(x, y, build) {
+  const menu = dom.tabContextMenu;
+  if (!menu) return false;
+  menu.replaceChildren();
+  const api = {
+    item(label, fn, disabled = false) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = `ctx-item${disabled ? " ctx-disabled" : ""}`;
+      b.textContent = label;
+      if (!disabled) {
+        b.addEventListener("click", () => {
+          menu.style.display = "none";
+          fn();
+        });
+      }
+      menu.appendChild(b);
+    },
+    sep() {
+      if (!menu.children.length) return;
+      const s = document.createElement("div");
+      s.className = "ctx-sep";
+      menu.appendChild(s);
+    },
+    head(label) {
+      const h = document.createElement("div");
+      h.className = "ctx-head";
+      h.textContent = label;
+      menu.appendChild(h);
+    },
+  };
+  build(api);
+  if (!menu.children.length) return false;
+  menu.style.display = "block";
+  const rect = menu.getBoundingClientRect();
+  menu.style.left = `${Math.min(x, window.innerWidth - rect.width - 8)}px`;
+  menu.style.top = `${Math.min(y, window.innerHeight - rect.height - 8)}px`;
+  return true;
 }

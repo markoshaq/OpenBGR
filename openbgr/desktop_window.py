@@ -14,6 +14,7 @@ import webbrowser
 from typing import Any
 
 from .config import APP_CONFIG_DIR, WINDOW_STATE_PATH
+from .settings import DEFAULT_WINDOW_SIZE
 
 
 def load_window_state() -> dict[str, int]:
@@ -129,7 +130,11 @@ def open_fallback_app_window(url: str) -> None:
         if resolved:
             try:
                 subprocess.Popen(
-                    [resolved, f"--app={url}", "--window-size=1380,860"],
+                    [
+                        resolved,
+                        f"--app={url}",
+                        f"--window-size={DEFAULT_WINDOW_SIZE[0]},{DEFAULT_WINDOW_SIZE[1]}",
+                    ],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )

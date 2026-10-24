@@ -37,6 +37,9 @@ export const DOM_IDS = Object.freeze([
   "animEndFrameUp",
   "animEndFrameDown",
 
+  "viewSplit",
+  "viewCutout",
+  "viewOriginal",
   "btnZoomOut",
   "btnZoomReset",
   "btnZoomIn",
@@ -84,6 +87,9 @@ export const DOM_IDS = Object.freeze([
   "btnToggleQaNotify",
   "qaInstallStatusDesc",
   "btnQaInstallToggle",
+  "btnUninstallAllModels",
+  "modelsTotalSize",
+  "modelsCacheDir",
   "btnOpenCacheDir",
   "btnOpenLogsDir",
 

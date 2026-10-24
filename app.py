@@ -25,10 +25,17 @@ from openbgr.server_probe import (
     delegate_quick_action_to_server,
     forward_open_files_to_server,
     is_openbgr_server,
+    server_port,
     wait_for_port_free,
     wait_for_server,
 )
-from openbgr.settings import APP_VERSION, TIER_KEYS, normalize_tier_key
+from openbgr.settings import (
+    APP_VERSION,
+    DEFAULT_WINDOW_SIZE,
+    MIN_WINDOW_SIZE,
+    TIER_KEYS,
+    normalize_tier_key,
+)
 
 
 def __getattr__(name: str) -> Any:
@@ -258,7 +265,7 @@ def main(argv: list[str] | None = None) -> None:
             )
         )
 
-    port = int(os.environ.get("PORT", "7860"))
+    port = int(server_port())
     host = "127.0.0.1"
     url = f"http://{host}:{port}"
 
@@ -396,15 +403,15 @@ def _run_desktop_window(url: str, server_thread: threading.Thread | None) -> Non
         window_kwargs: dict[str, Any] = {}
         saved_geometry = load_window_state()
         if saved_geometry.get("width") and saved_geometry.get("height"):
-            window_kwargs["width"] = max(980, saved_geometry["width"])
-            window_kwargs["height"] = max(640, saved_geometry["height"])
+            window_kwargs["width"] = max(MIN_WINDOW_SIZE[0], saved_geometry["width"])
+            window_kwargs["height"] = max(MIN_WINDOW_SIZE[1], saved_geometry["height"])
             if saved_geometry.get("x") is not None:
                 window_kwargs["x"] = saved_geometry["x"]
             if saved_geometry.get("y") is not None:
                 window_kwargs["y"] = saved_geometry["y"]
         else:
-            window_kwargs["width"] = 1380
-            window_kwargs["height"] = 860
+            window_kwargs["width"] = DEFAULT_WINDOW_SIZE[0]
+            window_kwargs["height"] = DEFAULT_WINDOW_SIZE[1]
 
         # On macOS and Linux, attach the native OS menu bar; on Windows,
         # WinForms MenuStrip clashes with WebView2 DockStyle.Fill, so Windows
@@ -422,7 +429,7 @@ def _run_desktop_window(url: str, server_thread: threading.Thread | None) -> Non
         window = webview.create_window(
             title="OpenBGR",
             url=window_url,
-            min_size=(980, 640),
+            min_size=MIN_WINDOW_SIZE,
             background_color="#09090b",
             js_api=api_bridge,
             **window_kwargs,

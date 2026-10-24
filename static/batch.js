@@ -7,6 +7,7 @@
 import {
   state,
   dom,
+  prefs,
   getActiveTab,
   defaultTierForNewTab,
   createTabRecord,
@@ -14,6 +15,7 @@ import {
   saveStateToActiveTab,
   setError,
   openConfirmModal,
+  openContextMenu,
   triggerOpenFileDialog,
   filesFromDialogResult,
   isImageFile,
@@ -145,8 +147,21 @@ function convertTabToBatch(tab) {
   tab.resultObjectUrl = null;
   tab.previewBlob = null;
   tab.previewObjectUrl = null;
+  tab.previewSignature = null;
+  tab.previewSource = null;
+  tab.refineJobId = null;
   tab.naturalWidth = 0;
   tab.naturalHeight = 0;
+  // GIF-only state cannot survive the conversion: frames reference revoked
+  // URLs, and `gif` is an animation export, not a per-image format.
+  tab.isAnimated = false;
+  tab.frames = [];
+  tab.currentFrameIndex = 0;
+  tab.startFrame = 1;
+  tab.endFrame = 1;
+  if (tab.exportFormat === "gif") {
+    tab.exportFormat = prefs.defaultFormat || "png";
+  }
   tab.batchFiles = entries;
 }
 
@@ -278,75 +293,44 @@ function startTabRename(tab) {
 
 /** Shows the right-click menu on a tab (batch ops, close). */
 export function showTabContextMenu(tab, x, y, onRequestCloseTab) {
-  const menu = dom.tabContextMenu;
-  if (!menu) return;
-  menu.replaceChildren();
-
-  const addItem = (label, fn, disabled = false) => {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = `ctx-item${disabled ? " ctx-disabled" : ""}`;
-    b.textContent = label;
-    if (!disabled) {
-      b.addEventListener("click", () => {
-        hideTabContextMenu();
-        fn();
+  const hasFiles = tab.kind === "batch" || Boolean(tab.sourceFile);
+  openContextMenu(x, y, (m) => {
+    if (tab.kind !== "batch" && hasFiles) {
+      m.item("SEND TO NEW BATCH", () => {
+        convertTabToBatch(tab);
+        if (tab.id === state.activeTabId) {
+          state.activeTabId = null;
+          tabOps.switchToTab(tab.id);
+        }
+        tabOps.renderTabBar();
       });
     }
-    menu.appendChild(b);
-  };
-  const addSep = () => {
-    const s = document.createElement("div");
-    s.className = "ctx-sep";
-    menu.appendChild(s);
-  };
-  const addHead = (label) => {
-    const h = document.createElement("div");
-    h.className = "ctx-head";
-    h.textContent = label;
-    menu.appendChild(h);
-  };
-
-  const hasFiles = tab.kind === "batch" || Boolean(tab.sourceFile);
-
-  if (tab.kind !== "batch" && hasFiles) {
-    addItem("SEND TO NEW BATCH", () => {
-      convertTabToBatch(tab);
-      if (tab.id === state.activeTabId) {
-        state.activeTabId = null;
-        tabOps.switchToTab(tab.id);
-      }
-      tabOps.renderTabBar();
-    });
-  }
-  const others = state.tabs.filter((t) => t.kind === "batch" && t.id !== tab.id);
-  if (hasFiles && others.length) {
-    if (menu.children.length) addSep();
-    addHead("ADD TO BATCH");
-    others.forEach((b) => {
-      addItem(`${b.name} (${b.batchFiles.length})`, () =>
-        mergeTabsIntoBatch(tab.id, b.id)
-      );
-    });
-  }
-  if (tab.kind === "batch") {
-    addItem("RUN BATCH", () => runBatch(tab), state.batch.running);
-    addItem(
-      "ADD IMAGE…",
-      () => {
-        pickImageFiles((files) => addFilesToBatchTab(tab, files));
-      },
-      state.batch.running
+    const others = state.tabs.filter(
+      (t) => t.kind === "batch" && t.id !== tab.id
     );
-  }
-  if (menu.children.length) addSep();
-  addItem("RENAME TAB", () => startTabRename(tab));
-  addItem("CLOSE TAB", () => onRequestCloseTab(tab.id));
-
-  menu.style.display = "block";
-  const rect = menu.getBoundingClientRect();
-  menu.style.left = `${Math.min(x, window.innerWidth - rect.width - 8)}px`;
-  menu.style.top = `${Math.min(y, window.innerHeight - rect.height - 8)}px`;
+    if (hasFiles && others.length) {
+      m.sep();
+      m.head("ADD TO BATCH");
+      others.forEach((b) => {
+        m.item(`${b.name} (${b.batchFiles.length})`, () =>
+          mergeTabsIntoBatch(tab.id, b.id)
+        );
+      });
+    }
+    if (tab.kind === "batch") {
+      m.item("RUN BATCH", () => runBatch(tab), state.batch.running);
+      m.item(
+        "ADD IMAGE…",
+        () => {
+          pickImageFiles((files) => addFilesToBatchTab(tab, files));
+        },
+        state.batch.running
+      );
+    }
+    m.sep();
+    m.item("RENAME TAB", () => startTabRename(tab));
+    m.item("CLOSE TAB", () => onRequestCloseTab(tab.id));
+  });
 }
 
 /** Dismisses the tab context menu. */

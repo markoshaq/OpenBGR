@@ -16,6 +16,7 @@ import {
   revokeTabUrls,
   saveStateToActiveTab,
   setError,
+  setStatElapsed,
   openConfirmModal,
   normalizeTierKey,
   DEFAULT_CROP_PADDING,
@@ -202,25 +203,28 @@ export function renderTabBar() {
   addBtn.className = "tab-add";
   addBtn.title = "New Tab";
   addBtn.textContent = "+";
-  addBtn.addEventListener("click", () => {
-    if (state.isProcessing) {
-      openConfirmModal(
-        {
-          title: "STOP CURRENT IMAGE?",
-          message: "Opening a new tab will stop the current image processing.",
-          confirmText: "STOP & OPEN TAB",
-          cancelText: "KEEP PROCESSING",
-        },
-        () => {
-          cancelProcessing();
-          createBlankTab();
-        }
-      );
-      return;
-    }
-    createBlankTab();
-  });
+  addBtn.addEventListener("click", () => requestNewTab());
   dom.tabBar.appendChild(addBtn);
+}
+
+/** Opens a fresh tab, confirming first when an image is mid-processing. */
+export function requestNewTab() {
+  if (state.isProcessing) {
+    openConfirmModal(
+      {
+        title: "STOP CURRENT IMAGE?",
+        message: "Opening a new tab will stop the current image processing.",
+        confirmText: "STOP & OPEN TAB",
+        cancelText: "KEEP PROCESSING",
+      },
+      () => {
+        cancelProcessing();
+        createBlankTab();
+      }
+    );
+    return;
+  }
+  createBlankTab();
 }
 
 /** Switches to `tabId`, prompting first if an image is currently processing. */
@@ -384,7 +388,7 @@ export function resetToEmptyWorkspace() {
   if (dom.exportSizeLabel) dom.exportSizeLabel.textContent = "--";
   dom.statFile.textContent = "NONE";
   dom.statDim.textContent = "--";
-  dom.statTime.textContent = "--";
+  setStatElapsed("--");
 
   dom.btnDownload.classList.add("disabled");
   dom.btnCopy.classList.add("disabled");
@@ -507,7 +511,7 @@ function switchToBatchTab(tab) {
   dom.btnCopy.classList.add("disabled");
   dom.statFile.textContent = `BATCH - ${tab.batchFiles.length} FILE${tab.batchFiles.length === 1 ? "" : "S"}`;
   dom.statDim.textContent = "--";
-  dom.statTime.textContent = tab.elapsedText || "--";
+  setStatElapsed(tab.elapsedText || "--");
   dom.appShell?.classList.toggle(
     "batch-elapsed",
     Boolean(tab.elapsedText && tab.elapsedText !== "--")
@@ -540,18 +544,28 @@ async function switchToImageTab(tab) {
     state.naturalWidth > 0 && state.naturalHeight > 0
       ? `${state.naturalWidth}x${state.naturalHeight} PX`
       : "--";
-  dom.statTime.textContent = tab.elapsedText || "--";
+  setStatElapsed(tab.elapsedText || "--");
 
   if (state.resultBlob && state.resultObjectUrl) {
     if (
       !masterCutoutImg.complete ||
       masterCutoutImg.currentSrc !== state.resultObjectUrl
     ) {
+      // Event listeners, not the shared .onload slot: a frame preview or a
+      // second switch can overwrite .onload and strand this promise forever.
       await new Promise((resolve) => {
-        masterCutoutImg.onload = resolve;
-        masterCutoutImg.onerror = resolve;
+        const done = () => {
+          masterCutoutImg.removeEventListener("load", done);
+          masterCutoutImg.removeEventListener("error", done);
+          resolve();
+        };
+        masterCutoutImg.addEventListener("load", done);
+        masterCutoutImg.addEventListener("error", done);
         masterCutoutImg.src = state.resultObjectUrl;
       });
+      // Same stale-load guard as beforeImg.onload above: a newer switch may
+      // have repainted the stage while this decode was in flight.
+      if (state.activeTabId !== tab.id) return;
     }
     dom.afterImg.src = state.previewObjectUrl || state.resultObjectUrl;
     dom.appShell?.classList.remove("no-image");
@@ -687,7 +701,7 @@ export function ingestImageFile(file) {
   dom.stage.classList.add("visible");
   dom.statFile.textContent = rawName.toUpperCase();
   dom.statDim.textContent = "--";
-  dom.statTime.textContent = "READY";
+  setStatElapsed("READY");
 
   renderTabBar();
   syncTabControls();
@@ -713,9 +727,9 @@ export function selectTier(tierKey) {
 /** Switches the stage between split / cutout / original modes. */
 export function setViewMode(mode) {
   state.viewMode = mode;
-  document.getElementById("viewSplit").classList.toggle("active", mode === "split");
-  document.getElementById("viewCutout").classList.toggle("active", mode === "cutout");
-  document.getElementById("viewOriginal").classList.toggle("active", mode === "original");
+  dom.viewSplit?.classList.toggle("active", mode === "split");
+  dom.viewCutout?.classList.toggle("active", mode === "cutout");
+  dom.viewOriginal?.classList.toggle("active", mode === "original");
   renderStageGeometry();
   updateCropGuide();
   saveStateToActiveTab();

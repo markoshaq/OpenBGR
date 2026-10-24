@@ -9,11 +9,11 @@ import {
   dom,
   saveStateToActiveTab,
   setError,
+  openContextMenu,
   filesFromDialogResult,
   isImageFile,
 } from "./state.js";
 import { applyBackdrop, applyBackdropMode } from "./export-ui.js";
-import { emit } from "./bus.js";
 
 /** Decodes a picked photo and installs it as the "image" matte backdrop. */
 export async function setBackdropFile(file) {
@@ -85,22 +85,10 @@ export function handleBackdropModeChip(mode) {
 
 /** Right-clicking the photo thumbnail offers the same remove action. */
 export function showBackdropPhotoMenu(x, y) {
-  if (!state.backdropImg || !dom.tabContextMenu) return;
-  const menu = dom.tabContextMenu;
-  menu.replaceChildren();
-  const item = document.createElement("button");
-  item.type = "button";
-  item.className = "ctx-item";
-  item.textContent = "REMOVE PHOTO";
-  item.addEventListener("click", () => {
-    emit("context-menu:hide");
-    removeBackdropPhoto();
+  if (!state.backdropImg) return;
+  openContextMenu(x, y, (m) => {
+    m.item("REMOVE PHOTO", removeBackdropPhoto);
   });
-  menu.appendChild(item);
-  menu.style.display = "block";
-  const rect = menu.getBoundingClientRect();
-  menu.style.left = `${Math.min(x, window.innerWidth - rect.width - 8)}px`;
-  menu.style.top = `${Math.min(y, window.innerHeight - rect.height - 8)}px`;
 }
 
 /** Wires the backdrop chips, swatches, color picker, and photo controls. */

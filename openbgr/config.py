@@ -18,19 +18,21 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
+# Deliberate re-exports (`as` form) so callers can pull shared settings
+# symbols from `openbgr.config` without knowing they live in `settings`.
 from .settings import (
-    API_TOKEN,
-    API_TOKEN_HEADER,
-    API_TOKEN_PATH,
-    APP_CONFIG_DIR,
-    APP_VERSION,
-    BASE_DIR,
-    TIER_ALIASES,
-    TIER_KEYS,
-    WEB_API_TOKEN,
-    normalize_tier_key,
-    persist_api_token,
-    read_api_token,
+    API_TOKEN as API_TOKEN,
+    API_TOKEN_HEADER as API_TOKEN_HEADER,
+    API_TOKEN_PATH as API_TOKEN_PATH,
+    APP_CONFIG_DIR as APP_CONFIG_DIR,
+    APP_VERSION as APP_VERSION,
+    BASE_DIR as BASE_DIR,
+    TIER_ALIASES as TIER_ALIASES,
+    TIER_KEYS as TIER_KEYS,
+    WEB_API_TOKEN as WEB_API_TOKEN,
+    normalize_tier_key as normalize_tier_key,
+    persist_api_token as persist_api_token,
+    read_api_token as read_api_token,
 )
 
 # Must be set before importing PyTorch so any non-native Apple Silicon MPS operator
@@ -204,21 +206,6 @@ MODELS: dict[str, str] = {
 }
 
 LEGACY_MATTING_REPO = "ZhengPeng7/BiRefNet-matting"
-
-__all__ = [
-    "API_TOKEN",
-    "API_TOKEN_HEADER",
-    "API_TOKEN_PATH",
-    "APP_CONFIG_DIR",
-    "APP_VERSION",
-    "BASE_DIR",
-    "TIER_ALIASES",
-    "TIER_KEYS",
-    "WEB_API_TOKEN",
-    "normalize_tier_key",
-    "persist_api_token",
-    "read_api_token",
-]
 
 
 # Selectable BiRefNet models exposed in the UI and `/api/status`.

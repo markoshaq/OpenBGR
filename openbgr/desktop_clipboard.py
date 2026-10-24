@@ -8,13 +8,16 @@ from __future__ import annotations
 
 import base64
 import io
+import platform
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
 
 from PIL import Image
 
-from . import desktop_bridge as _bridge
+from .quick_action_native import copy_png_bytes_to_clipboard
+from .settings import IMAGE_EXTENSIONS
 
 # Common image-data UTI types on the macOS pasteboard. Anything outside this
 # set falls back to NSImage.canInitWithPasteboard_ for fringe formats.
@@ -36,6 +39,8 @@ _PASTEBOARD_FILE_TYPES = frozenset({"NSFilenamesPboardType", "public.file-url"})
 class ClipboardMixin:
     """Native clipboard read/write/probe methods mixed into `DesktopApi`."""
 
+    # Safety cap for base64 bridge payloads (clipboard reads and Save-As
+    # writes). File picks use file_id grants streamed over HTTP, uncapped.
     OPEN_DIALOG_MAX_BYTES: int = 48 * 1024 * 1024
     _clip_seq: Any
     _clip_has_image: bool | None
@@ -72,7 +77,7 @@ class ClipboardMixin:
         """
         try:
             raw_bytes = self._decode_bounded_base64(data_base64)
-            return _bridge.copy_png_bytes_to_clipboard(raw_bytes)
+            return copy_png_bytes_to_clipboard(raw_bytes)
         except Exception as exc:
             return {"copied": False, "error": str(exc)}
 
@@ -81,7 +86,7 @@ class ClipboardMixin:
         Probes whether the native OS clipboard currently holds an image or an
         image file path, without triggering browser clipboard permission prompts.
         """
-        sys_name = _bridge.platform.system()
+        sys_name = platform.system()
 
         if sys_name == "Darwin":
             try:
@@ -96,8 +101,7 @@ class ClipboardMixin:
                     has_image: bool | None = True
                 elif types & _PASTEBOARD_FILE_TYPES:
                     has_image = any(
-                        Path(str(p)).is_file()
-                        and Path(str(p)).suffix.lower() in _bridge._IMAGE_EXTENSIONS
+                        Path(str(p)).is_file() and Path(str(p)).suffix.lower() in IMAGE_EXTENSIONS
                         for p in self._macos_clipboard_paths()
                     )
                 else:
@@ -128,8 +132,7 @@ class ClipboardMixin:
                 has_result: bool | None = True
             elif isinstance(grabbed, (list, tuple)):
                 has_result = any(
-                    Path(str(item)).is_file()
-                    and Path(str(item)).suffix.lower() in _bridge._IMAGE_EXTENSIONS
+                    Path(str(item)).is_file() and Path(str(item)).suffix.lower() in IMAGE_EXTENSIONS
                     for item in grabbed
                 )
             elif sys_name in ("Darwin", "Windows"):
@@ -143,12 +146,12 @@ class ClipboardMixin:
         except Exception:
             pass
 
-        if _bridge.platform.system() == "Linux":
+        if platform.system() == "Linux":
             for cmd in (
                 ["wl-paste", "--list-types"],
                 ["xclip", "-selection", "clipboard", "-t", "TARGETS", "-o"],
             ):
-                if _bridge.shutil.which(cmd[0]):
+                if shutil.which(cmd[0]):
                     try:
                         proc = subprocess.run(
                             cmd,
@@ -189,7 +192,7 @@ class ClipboardMixin:
             if isinstance(grabbed, (list, tuple)):
                 for item in grabbed:
                     p = Path(str(item))
-                    if p.is_file() and p.suffix.lower() in _bridge._IMAGE_EXTENSIONS:
+                    if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS:
                         data = p.read_bytes()
                         if len(data) <= self.OPEN_DIALOG_MAX_BYTES:
                             return {
@@ -200,10 +203,10 @@ class ClipboardMixin:
         except Exception:
             pass
 
-        if _bridge.platform.system() == "Darwin":
+        if platform.system() == "Darwin":
             for item in self._macos_clipboard_paths():
                 p = Path(str(item))
-                if p.is_file() and p.suffix.lower() in _bridge._IMAGE_EXTENSIONS:
+                if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS:
                     data = p.read_bytes()
                     if len(data) <= self.OPEN_DIALOG_MAX_BYTES:
                         return {
@@ -212,12 +215,12 @@ class ClipboardMixin:
                             "data_b64": base64.b64encode(data).decode("ascii"),
                         }
 
-        if _bridge.platform.system() == "Linux":
+        if platform.system() == "Linux":
             for cmd in (
                 ["wl-paste", "--type", "image/png"],
                 ["xclip", "-selection", "clipboard", "-t", "image/png", "-o"],
             ):
-                if _bridge.shutil.which(cmd[0]):
+                if shutil.which(cmd[0]):
                     try:
                         proc = subprocess.run(
                             cmd,

@@ -16,6 +16,9 @@ import {
   blobToBase64,
   downloadBlob,
   setSuccess,
+  trimmedFrameSlice,
+  isPassthroughExport,
+  resolveFileBackdropSource,
   FORMAT_EXT,
   formatDiskBytes,
 } from "./state.js";
@@ -109,19 +112,7 @@ export function revealSavedPath(path) {
  * and encodes the result as an animated GIF or WebP via `/api/encode-animation`.
  */
 export async function buildAnimatedExportBlob(format = "gif", opts = {}) {
-  const total = state.frames.length;
-  const startIdx = Math.max(0, Math.min(total - 1, (state.startFrame || 1) - 1));
-  const endIdx = Math.max(
-    startIdx,
-    Math.min(total - 1, (state.endFrame || total) - 1)
-  );
-  const slice = state.frames.slice(startIdx, endIdx + 1);
-  const missing = slice.findIndex((frm) => !frm.resultBlob);
-  if (missing >= 0) {
-    throw new Error(
-      `Frame ${startIdx + missing + 1} is not processed yet. Run PROCESS GIF first.`
-    );
-  }
+  const { slice } = trimmedFrameSlice(state.frames, { requireProcessed: true });
 
   const srcW = state.naturalWidth || masterCutoutImg.naturalWidth;
   const srcH = state.naturalHeight || masterCutoutImg.naturalHeight;
@@ -174,12 +165,18 @@ export async function buildAnimatedExportBlob(format = "gif", opts = {}) {
     state.aspectLocked !== false
       ? scaledH
       : Math.max(1, state.exportHeight || scaledH);
-  const passthrough =
-    !state.autoCrop &&
-    targetW === srcW &&
-    targetH === srcH &&
-    state.activeBackdrop === "checker" &&
-    state.shadowCutoff === 0;
+  // Frames always render as PNG intermediates, so the passthrough check uses
+  // "png" regardless of the final container format.
+  const passthrough = isPassthroughExport({
+    format: "png",
+    targetW,
+    targetH,
+    srcW,
+    srcH,
+    autoCrop: state.autoCrop,
+    backdrop: state.activeBackdrop,
+    shadowCutoff: state.shadowCutoff,
+  });
 
   const showBusy = opts.showOverlay !== false && !state.isProcessing;
   if (showBusy) {
@@ -205,22 +202,19 @@ export async function buildAnimatedExportBlob(format = "gif", opts = {}) {
       const bmp = await createImageBitmap(cutoutBlob);
       let bgBmp = null;
       try {
-        let backdropSource = null;
-        if (state.activeBackdrop === "blur" && frm.sourceFile) {
-          bgBmp = await createImageBitmap(frm.sourceFile);
-          backdropSource = bgBmp;
-        } else if (state.activeBackdrop === "image") {
-          backdropSource = state.backdropImg?.naturalWidth
-            ? state.backdropImg
-            : null;
-        }
+        const resolvedBackdrop = await resolveFileBackdropSource(
+          state.activeBackdrop,
+          frm.sourceFile,
+          state.backdropImg
+        );
+        bgBmp = resolvedBackdrop.ownedBitmap;
         const renderedFrame = await renderExportBlob(bmp, srcW, srcH, {
           format: "png",
           targetW,
           targetH,
           shadowCutoff: state.shadowCutoff,
           backdrop: state.activeBackdrop,
-          backdropSource,
+          backdropSource: resolvedBackdrop.backdropSource,
           backdropBlur: state.backdropBlur,
           autoCrop: state.autoCrop,
           cropPadding: state.cropPadding,
@@ -338,19 +332,9 @@ async function saveSingleExportBlob(exportBlob, fileName) {
  * auto-crop, resolution scale, custom dimensions, shadow cutoff, and backdrop.
  */
 export async function exportAnimatedFramesIndividually() {
-  const total = state.frames.length;
-  const startIdx = Math.max(0, Math.min(total - 1, (state.startFrame || 1) - 1));
-  const endIdx = Math.max(
-    startIdx,
-    Math.min(total - 1, (state.endFrame || total) - 1)
-  );
-  const slice = state.frames.slice(startIdx, endIdx + 1);
-  const missing = slice.findIndex((frm) => !frm.resultBlob);
-  if (missing >= 0) {
-    throw new Error(
-      `Frame ${startIdx + missing + 1} is not processed yet. Run PROCESS GIF first.`
-    );
-  }
+  const { slice, startIdx } = trimmedFrameSlice(state.frames, {
+    requireProcessed: true,
+  });
 
   // When exporting multiple individual files without a chosen folder on desktop,
   // prompt for a destination directory so each frame lands directly on disk.
@@ -421,34 +405,34 @@ export async function exportAnimatedFramesIndividually() {
             ? scaledH
             : Math.max(1, state.exportHeight || scaledH);
 
-        const isPassthrough =
-          !state.autoCrop &&
-          fmt === "png" &&
-          targetW === srcW &&
-          targetH === srcH &&
-          state.activeBackdrop === "checker" &&
-          state.shadowCutoff === 0;
+        const isPassthrough = isPassthroughExport({
+          format: fmt,
+          targetW,
+          targetH,
+          srcW,
+          srcH,
+          autoCrop: state.autoCrop,
+          backdrop: state.activeBackdrop,
+          shadowCutoff: state.shadowCutoff,
+        });
 
         let frameBlob;
         if (isPassthrough) {
           frameBlob = cutoutBlob;
         } else {
-          let backdropSource = null;
-          if (state.activeBackdrop === "blur" && frm.sourceFile) {
-            bgBmp = await createImageBitmap(frm.sourceFile);
-            backdropSource = bgBmp;
-          } else if (state.activeBackdrop === "image") {
-            backdropSource = state.backdropImg?.naturalWidth
-              ? state.backdropImg
-              : null;
-          }
+          const resolvedBackdrop = await resolveFileBackdropSource(
+            state.activeBackdrop,
+            frm.sourceFile,
+            state.backdropImg
+          );
+          bgBmp = resolvedBackdrop.ownedBitmap;
           frameBlob = await renderExportBlob(bmp, srcW, srcH, {
             format: fmt,
             targetW,
             targetH,
             shadowCutoff: state.shadowCutoff,
             backdrop: state.activeBackdrop,
-            backdropSource,
+            backdropSource: resolvedBackdrop.backdropSource,
             backdropBlur: state.backdropBlur,
             autoCrop: state.autoCrop,
             cropPadding: state.cropPadding,

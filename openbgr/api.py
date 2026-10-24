@@ -16,13 +16,14 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from huggingface_hub import snapshot_download
 from huggingface_hub.constants import HF_HUB_CACHE
 from PIL import Image
+from starlette.middleware.base import RequestResponseEndpoint
 
 from . import desktop_bridge as desktop
 from .config import (
@@ -116,6 +117,24 @@ app = FastAPI(
     description="Self-hosted, zero-telemetry dichotomous image segmentation powered by BiRefNet",
     lifespan=lifespan,
 )
+
+# Uploads are buffered whole before decode/write, so request bodies are
+# hard-capped to keep a bad client from pinning gigabytes of RAM. Generous
+# for real photography: a 100 MP JPEG is ~40 MB.
+MAX_UPLOAD_BYTES = 256 * 1024 * 1024
+
+_INFERENCE_BUSY_409 = HTTPException(
+    status_code=409,
+    detail="Cannot uninstall model weights while processing is running.",
+)
+
+
+def _model_busy_409(action: str) -> HTTPException:
+    """Builds the 409 for endpoints blocked by an in-flight model download or load."""
+    return HTTPException(
+        status_code=409,
+        detail=f"A model is still downloading or loading. Wait for it to finish before {action}.",
+    )
 
 
 def _quick_action_status(config: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -338,17 +357,11 @@ def api_uninstall_model(target: str = Form(...)) -> dict[str, Any]:
     `hr`, `portrait`, `matting`, `dynamic`, or `all`) and unloads it if active.
     """
     if MANAGER.inference_lock.locked():
-        raise HTTPException(
-            status_code=409,
-            detail="Cannot uninstall model weights while processing is running.",
-        )
+        raise _INFERENCE_BUSY_409
     with JOB_PROGRESS_LOCK:
         job_phase = JOB_PROGRESS["phase"]
     if model_download_active() or job_phase in ("download", "load"):
-        raise HTTPException(
-            status_code=409,
-            detail="A model is still downloading or loading. Wait for it to finish before uninstalling.",
-        )
+        raise _model_busy_409("uninstalling")
 
     cleaned = target.strip().lower()
     if cleaned == "all":
@@ -368,20 +381,14 @@ def api_uninstall_model(target: str = Form(...)) -> dict[str, Any]:
     # request for a whole first-run download.
     for m_key in model_keys:
         if MANAGER.active_model_key == m_key and not MANAGER.unload(wait=False):
-            raise HTTPException(
-                status_code=409,
-                detail="A model is still downloading or loading. Wait for it to finish before uninstalling.",
-            )
+            raise _model_busy_409("uninstalling")
 
     # Hold both locks for the whole deletion so a download or job cannot
     # start between the fast-fail checks above and the rmtree calls below.
     # Non-blocking acquires convert the residual race into a fast 409
     # rather than hanging on a whole download/inference.
     if not MANAGER.inference_lock.acquire(blocking=False):
-        raise HTTPException(
-            status_code=409,
-            detail="Cannot uninstall model weights while processing is running.",
-        )
+        raise _INFERENCE_BUSY_409
     try:
         with model_download_guard(blocking=False):
             repos_to_remove: list[str] = []
@@ -400,10 +407,7 @@ def api_uninstall_model(target: str = Form(...)) -> dict[str, Any]:
                 if lock_dir.exists():
                     shutil.rmtree(lock_dir, ignore_errors=True)
     except BlockingIOError:
-        raise HTTPException(
-            status_code=409,
-            detail="A model is still downloading or loading. Wait for it to finish before uninstalling.",
-        ) from None
+        raise _model_busy_409("uninstalling") from None
     finally:
         MANAGER.inference_lock.release()
 
@@ -588,10 +592,7 @@ async def api_import_model(path: str = Form(...), target: str = Form("")) -> dic
     try:
         imported = await asyncio.to_thread(_import)
     except BlockingIOError:
-        raise HTTPException(
-            status_code=409,
-            detail="A model is still downloading or loading. Wait for it to finish before importing.",
-        ) from None
+        raise _model_busy_409("importing") from None
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -722,7 +723,6 @@ async def api_remove_bg(
     finally:
         del raw_bytes
 
-    result_img: Image.Image | None = None
     try:
         result_img, elapsed_ms, tier_cfg, job_id = await asyncio.to_thread(
             segment_foreground,
@@ -744,9 +744,6 @@ async def api_remove_bg(
         set_job_phase("idle")
         pil_img.close()
 
-    # All except paths above raise, so reaching here means the job succeeded.
-    if result_img is None:
-        raise HTTPException(status_code=500, detail="Pipeline returned no image.")
     output_buffer = io.BytesIO()
     try:
         result_img.save(output_buffer, format="PNG", compress_level=1)
@@ -921,15 +918,17 @@ async def api_extract_frames(file: UploadFile = File(...)) -> dict[str, Any]:
 async def api_encode_animation(
     files: list[UploadFile] = File(...),
     durations: str = Form("[]"),
-    format: str = Form("gif"),
+    anim_format: str = Form("gif", alias="format"),
 ) -> Response:
     """
     Assembles rendered RGBA frame images and per-frame durations (in ms) into
     an animated GIF (`format='gif'`) or animated WebP (`format='webp'`).
     """
-    fmt_clean = (format or "gif").strip().lower()
+    fmt_clean = (anim_format or "gif").strip().lower()
     if fmt_clean not in ("gif", "webp"):
-        raise HTTPException(status_code=400, detail=f"Unsupported animation format '{format}'.")
+        raise HTTPException(
+            status_code=400, detail=f"Unsupported animation format '{anim_format}'."
+        )
     if not files:
         raise HTTPException(status_code=400, detail="No animation frames provided.")
     if len(files) > MAX_ANIMATION_FRAMES:
@@ -983,7 +982,7 @@ async def api_encode_animation(
 
 
 @app.middleware("http")
-async def no_cache_static(request, call_next):
+async def no_cache_static(request: Request, call_next: RequestResponseEndpoint) -> Response:
     """Forces revalidation on the page shell so fresh edits reach the WebView."""
     response = await call_next(request)
     if request.url.path == "/" or request.url.path.startswith("/static/"):
@@ -1002,17 +1001,13 @@ _CROSS_SITE_FETCH = {"cross-site", "same-site"}
 # cannot turn arbitrary paths into readable file grants or write beside them.
 _LOCAL_ONLY_PATHS = {"/api/open-files", "/api/quick-action"}
 
-# Uploads are buffered whole before decode/write, so request bodies are
-# hard-capped to keep a bad client from pinning gigabytes of RAM. Generous
-# for real photography: a 100 MP JPEG is ~40 MB.
-MAX_UPLOAD_BYTES = 256 * 1024 * 1024
 # Slack on top of the file cap so the multipart envelope itself (boundaries,
 # form fields) cannot false-positive a borderline upload.
 _MULTIPART_OVERHEAD_BYTES = 64 * 1024
 
 
 @app.middleware("http")
-async def api_token_guard(request, call_next):
+async def api_token_guard(request: Request, call_next: RequestResponseEndpoint) -> Response:
     """
     Requires a per-session token on mutating `/api/*` calls so arbitrary
     websites cannot trigger file writes, model deletions, or job control via
@@ -1037,7 +1032,7 @@ async def api_token_guard(request, call_next):
 
 
 @app.middleware("http")
-async def request_size_guard(request, call_next):
+async def request_size_guard(request: Request, call_next: RequestResponseEndpoint) -> Response:
     """
     Rejects over-sized API uploads by Content-Length before the body is
     consumed. Uploads lacking a length (chunked) are still capped when the
@@ -1057,11 +1052,13 @@ async def request_size_guard(request, call_next):
 # Host allowlisting closes the rebinding hole: the session token is injected
 # into `/` for anyone who can reach the port, so a page loaded from a domain
 # that rebinds to 127.0.0.1 could otherwise read the token same-origin and
-# call mutating endpoints that pass both checks above. Only loopback names
-# may serve the app (the server binds 127.0.0.1, so no other Host is valid).
+# call mutating endpoints that pass both checks above. Only the two exact
+# loopback names are allowed: `*.localhost` would admit arbitrary subdomains,
+# which no legitimate client uses (the server binds 127.0.0.1, so no other
+# Host is valid).
 app.add_middleware(
     TrustedHostMiddleware,
-    allowed_hosts=["127.0.0.1", "localhost", "*.localhost"],
+    allowed_hosts=["127.0.0.1", "localhost"],
     www_redirect=False,
 )
 

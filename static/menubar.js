@@ -100,7 +100,6 @@ export const MENUS = [
         shortcut: "1",
         kbd: "1",
         check: "view:split",
-        checked: true,
         requires: "result",
       },
       {
@@ -162,7 +161,6 @@ export const MENUS = [
         label: "General - 1K Studio (BiRefNet)",
         requires: "model-controls",
         check: "tier:general",
-        checked: true,
       },
       {
         cmd: "presetHr",
@@ -194,14 +192,12 @@ export const MENUS = [
         label: "Defringe Edges",
         requires: "model-controls",
         check: "defringe",
-        checked: true,
       },
       {
         cmd: "toggleDespill",
         label: "Suppress Color Spill",
         requires: "model-controls",
         check: "despill",
-        checked: true,
       },
       null,
       {

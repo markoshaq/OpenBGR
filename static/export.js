@@ -10,6 +10,9 @@ import {
   dom,
   masterCutoutImg,
   saveStateToActiveTab,
+  isPassthroughExport,
+  resolveBackdropSource,
+  resolveFileBackdropSource,
   formatDiskBytes,
 } from "./state.js";
 import { emit } from "./bus.js";
@@ -511,20 +514,6 @@ function canvasToBlob(canvas, mimeType, quality) {
   });
 }
 
-/**
- * Resolves the image used to fill the canvas under "blur"/"image" backdrops:
- * the original stage photo for "blur", the chosen photo for "image".
- */
-function resolveBackdropSource() {
-  if (state.activeBackdrop === "blur") {
-    return dom.beforeImg?.naturalWidth ? dom.beforeImg : null;
-  }
-  if (state.activeBackdrop === "image") {
-    return state.backdropImg?.naturalWidth ? state.backdropImg : null;
-  }
-  return null;
-}
-
 /** Builds the final export blob for the active image using live export settings. */
 export async function buildExportBlob(format) {
   const srcW = state.naturalWidth || masterCutoutImg.naturalWidth;
@@ -534,12 +523,16 @@ export async function buildExportBlob(format) {
   const targetH = Math.max(1, state.exportHeight || baseDims.h || srcH);
 
   if (
-    !state.autoCrop &&
-    format === "png" &&
-    targetW === srcW &&
-    targetH === srcH &&
-    state.activeBackdrop === "checker" &&
-    state.shadowCutoff === 0 &&
+    isPassthroughExport({
+      format,
+      targetW,
+      targetH,
+      srcW,
+      srcH,
+      autoCrop: state.autoCrop,
+      backdrop: state.activeBackdrop,
+      shadowCutoff: state.shadowCutoff,
+    }) &&
     state.resultBlob
   ) {
     return state.resultBlob;
@@ -600,23 +593,27 @@ export async function buildBatchExportBlob(blob, snap, originalFile = null) {
     }
 
     if (
-      !autoCrop &&
-      snap.format === "png" &&
-      snap.backdrop === "checker" &&
-      snap.shadowCutoff === 0 &&
-      targetW === srcW &&
-      targetH === srcH
+      isPassthroughExport({
+        format: snap.format,
+        targetW,
+        targetH,
+        srcW,
+        srcH,
+        autoCrop,
+        backdrop: snap.backdrop,
+        shadowCutoff: snap.shadowCutoff,
+      })
     ) {
       return blob;
     }
 
-    let backdropSource = null;
-    if (snap.backdrop === "blur" && originalFile) {
-      bgBmp = await createImageBitmap(originalFile);
-      backdropSource = bgBmp;
-    } else if (snap.backdrop === "image") {
-      backdropSource = snap.backdropImg || null;
-    }
+    const resolvedBackdrop = await resolveFileBackdropSource(
+      snap.backdrop,
+      originalFile,
+      snap.backdropImg
+    );
+    bgBmp = resolvedBackdrop.ownedBitmap;
+    const backdropSource = resolvedBackdrop.backdropSource;
 
     return await renderExportBlob(bmp, srcW, srcH, {
       format: snap.format,

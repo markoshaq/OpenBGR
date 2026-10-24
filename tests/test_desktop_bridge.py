@@ -20,6 +20,7 @@ from unittest.mock import MagicMock, patch
 from PIL import Image, ImageGrab
 
 import openbgr.desktop_bridge as bridge_mod
+import openbgr.desktop_clipboard as clip_mod
 
 
 def _reset_module_state() -> None:
@@ -109,7 +110,7 @@ class TestDesktopApi(unittest.TestCase):
         """`copy_image` decodes base64 and hands bytes to the platform clipboard writer."""
         bridge = bridge_mod.DesktopApi()
         with patch.object(
-            bridge_mod, "copy_png_bytes_to_clipboard", return_value={"copied": True}
+            clip_mod, "copy_png_bytes_to_clipboard", return_value={"copied": True}
         ) as mock_copy:
             payload = base64.b64encode(b"png-bytes").decode("ascii")
             self.assertEqual(bridge.copy_image(payload), {"copied": True})
@@ -146,7 +147,7 @@ class TestDesktopApi(unittest.TestCase):
         img = self.tmp / "finder.png"
         img.write_bytes(b"file-bytes")
         with (
-            patch.object(bridge_mod.platform, "system", return_value="Windows"),
+            patch.object(clip_mod.platform, "system", return_value="Windows"),
             patch.object(ImageGrab, "grabclipboard", return_value=[str(img)]),
         ):
             res = bridge.read_clipboard_image()
@@ -158,9 +159,9 @@ class TestDesktopApi(unittest.TestCase):
         """An empty clipboard with no Linux helpers reports has_image False."""
         bridge = bridge_mod.DesktopApi()
         with (
-            patch.object(bridge_mod.platform, "system", return_value="Linux"),
+            patch.object(clip_mod.platform, "system", return_value="Linux"),
             patch.object(ImageGrab, "grabclipboard", return_value=None),
-            patch.object(bridge_mod.shutil, "which", return_value=None),
+            patch.object(clip_mod.shutil, "which", return_value=None),
         ):
             self.assertEqual(bridge.read_clipboard_image(), {"has_image": False})
 
@@ -172,7 +173,7 @@ class TestDesktopApi(unittest.TestCase):
 
         fake_clip = Image.new("RGBA", (4, 4))
         with (
-            patch.object(bridge_mod.platform, "system", return_value="Windows"),
+            patch.object(clip_mod.platform, "system", return_value="Windows"),
             patch.object(ctypes, "windll", windll, create=True),
             patch.object(ImageGrab, "grabclipboard", return_value=fake_clip),
         ):
@@ -185,9 +186,9 @@ class TestDesktopApi(unittest.TestCase):
         """Linux without wl-paste/xclip reports has_image None (unknown)."""
         bridge = bridge_mod.DesktopApi()
         with (
-            patch.object(bridge_mod.platform, "system", return_value="Linux"),
+            patch.object(clip_mod.platform, "system", return_value="Linux"),
             patch.object(ImageGrab, "grabclipboard", return_value=None),
-            patch.object(bridge_mod.shutil, "which", return_value=None),
+            patch.object(clip_mod.shutil, "which", return_value=None),
         ):
             self.assertEqual(bridge.has_clipboard_image(), {"has_image": None})
 

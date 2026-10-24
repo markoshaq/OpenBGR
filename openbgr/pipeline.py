@@ -354,57 +354,61 @@ def segment_foreground(
         if oriented_image is not raw_image:
             oriented_image.close()
 
-        if tier_cfg.get("dynamic"):
-            dyn_h, dyn_w = compute_dynamic_size(orig_w, orig_h, int(tier_cfg["resolution"]))
-            preprocess = get_preprocess_transform((dyn_h, dyn_w))
-            tier_cfg["sublabel"] = f"Dynamic / {dyn_w}x{dyn_h}"
-        else:
-            tier_res = int(tier_cfg["resolution"])
-            # Avoid upscaling small images (such as 480p GIF frames) to 1024x1024 or 2K:
-            # clamping to the next multiple of 32 (floor 512) cuts MPS/VRAM peak by ~1-3 GB
-            # and doubles frame throughput without sacrificing sub-pixel detail.
-            long_side = max(orig_w, orig_h)
-            eff_res = (
-                min(tier_res, max(512, ((long_side + 31) // 32) * 32))
-                if long_side < tier_res
-                else tier_res
-            )
-            preprocess = get_preprocess_transform(eff_res)
-        input_tensor: torch.Tensor | None = None
-        outputs: Any = None
-        pred_logits: torch.Tensor | None = None
-        alpha_tensor: torch.Tensor | None = None
-
+        # rgb_image must be released on every exit path: the outer finally also
+        # covers cancels and OOM raised during preprocessing or inference, not
+        # just the post-inference composition block.
+        mask_pil: Image.Image | None = None
         try:
-            input_tensor = preprocess(rgb_image).unsqueeze(0).to(device=DEVICE, dtype=DTYPE)
-            MANAGER.check_cancelled(job_epoch)
+            if tier_cfg.get("dynamic"):
+                dyn_h, dyn_w = compute_dynamic_size(orig_w, orig_h, int(tier_cfg["resolution"]))
+                preprocess = get_preprocess_transform((dyn_h, dyn_w))
+                tier_cfg["sublabel"] = f"Dynamic / {dyn_w}x{dyn_h}"
+            else:
+                tier_res = int(tier_cfg["resolution"])
+                # Avoid upscaling small images (such as 480p GIF frames) to 1024x1024 or 2K:
+                # clamping to the next multiple of 32 (floor 512) cuts MPS/VRAM peak by ~1-3 GB
+                # and doubles frame throughput without sacrificing sub-pixel detail.
+                long_side = max(orig_w, orig_h)
+                eff_res = (
+                    min(tier_res, max(512, ((long_side + 31) // 32) * 32))
+                    if long_side < tier_res
+                    else tier_res
+                )
+                preprocess = get_preprocess_transform(eff_res)
+            input_tensor: torch.Tensor | None = None
+            outputs: Any = None
+            pred_logits: torch.Tensor | None = None
+            alpha_tensor: torch.Tensor | None = None
 
-            with torch.inference_mode():
-                outputs = model(input_tensor)
-                del input_tensor
-                input_tensor = None
-                pred_logits = outputs[-1] if isinstance(outputs, (list, tuple)) else outputs
-                del outputs
-                outputs = None
-                alpha_tensor = pred_logits.float().sigmoid().cpu()
-                del pred_logits
-                pred_logits = None
+            try:
+                input_tensor = preprocess(rgb_image).unsqueeze(0).to(device=DEVICE, dtype=DTYPE)
+                MANAGER.check_cancelled(job_epoch)
 
-            MANAGER.check_cancelled(job_epoch)
+                with torch.inference_mode():
+                    outputs = model(input_tensor)
+                    del input_tensor
+                    input_tensor = None
+                    pred_logits = outputs[-1] if isinstance(outputs, (list, tuple)) else outputs
+                    del outputs
+                    outputs = None
+                    alpha_tensor = pred_logits.float().sigmoid().cpu()
+                    del pred_logits
+                    pred_logits = None
 
-            mask_pil = transforms.ToPILImage()(alpha_tensor[0].squeeze(0)).resize(
-                (orig_w, orig_h), resample=Image.Resampling.LANCZOS
-            )
-        finally:
-            # Explicitly release GPU/MPS tensors immediately after forward pass,
-            # then flush the device caching allocator: freed MPS blocks are kept
-            # for reuse otherwise, so a big-tier pass would pin its activation
-            # peak (~1-2 GB unified RAM at 1536px) for the rest of the session.
-            del input_tensor, outputs, pred_logits, alpha_tensor
-            MANAGER.flush_device_memory()
+                MANAGER.check_cancelled(job_epoch)
 
-        job_id = next(_JOB_ID_SEQ)
-        try:
+                mask_pil = transforms.ToPILImage()(alpha_tensor[0].squeeze(0)).resize(
+                    (orig_w, orig_h), resample=Image.Resampling.LANCZOS
+                )
+            finally:
+                # Explicitly release GPU/MPS tensors immediately after forward pass,
+                # then flush the device caching allocator: freed MPS blocks are kept
+                # for reuse otherwise, so a big-tier pass would pin its activation
+                # peak (~1-2 GB unified RAM at 1536px) for the rest of the session.
+                del input_tensor, outputs, pred_logits, alpha_tensor
+                MANAGER.flush_device_memory()
+
+            job_id = next(_JOB_ID_SEQ)
             MANAGER.check_cancelled(job_epoch)
             alpha_np = np.array(mask_pil, dtype=np.uint8)
             rgb_np_raw = np.array(rgb_image, dtype=np.uint8)
@@ -418,7 +422,8 @@ def segment_foreground(
                 rgb_np_raw, alpha_np, defringe, despill, edge_shift, edge_feather
             )
         finally:
-            mask_pil.close()
+            if mask_pil is not None:
+                mask_pil.close()
             rgb_image.close()
 
         elapsed_ms = (time.perf_counter() - start_time) * 1000.0

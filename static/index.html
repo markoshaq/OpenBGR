@@ -185,7 +185,7 @@
           <div class="preset-stack">
             <button
               type="button"
-              class="toggle-card active has-tooltip"
+              class="toggle-card active"
               id="btnDefringe"
               data-tooltip="Removes background color bleed along hair, fur &amp; soft borders via morphological edge decontamination."
             >
@@ -196,7 +196,7 @@
 
             <button
               type="button"
-              class="toggle-card active has-tooltip"
+              class="toggle-card active"
               id="btnDespill"
               data-tooltip="Neutralizes background color reflections on rims, hair &amp; glass surfaces."
             >
@@ -208,7 +208,7 @@
         </div>
 
         <div class="sidebar-section requires-image">
-          <div class="section-header-row has-tooltip" data-tooltip="Slices off faint semi-transparent floor reflections and ghost shadows.">
+          <div class="section-header-row" data-tooltip="Slices off faint semi-transparent floor reflections and ghost shadows.">
             <span class="section-header">SHADOW / REFLECTION CUTOFF</span>
             <span class="scale-pct" id="shadowCutoffLabel">0%</span>
           </div>
@@ -224,7 +224,7 @@
         </div>
 
         <div class="sidebar-section requires-image">
-          <div class="section-header-row has-tooltip" data-tooltip="Contracts (-) or expands (+) the matte edge in pixels to cut fringe halos.">
+          <div class="section-header-row" data-tooltip="Contracts (-) or expands (+) the matte edge in pixels to cut fringe halos.">
             <span class="section-header">EDGE SHIFT</span>
             <span class="scale-pct" id="edgeShiftLabel">0px</span>
           </div>
@@ -240,7 +240,7 @@
         </div>
 
         <div class="sidebar-section requires-image">
-          <div class="section-header-row has-tooltip" data-tooltip="Softens the matte edge with a Gaussian blur to hide hard cut lines.">
+          <div class="section-header-row" data-tooltip="Softens the matte edge with a Gaussian blur to hide hard cut lines.">
             <span class="section-header">EDGE FEATHER</span>
             <span class="scale-pct" id="edgeFeatherLabel">0px</span>
           </div>
@@ -258,15 +258,15 @@
         <div class="sidebar-section requires-image">
           <div class="section-header">BACKDROP</div>
           <div class="preset-chips mode-chips">
-            <button type="button" class="preset-chip mode-chip has-tooltip active" data-mode="checker" data-tooltip="Transparency is kept; the checkerboard only previews it.">GRID</button>
-            <button type="button" class="preset-chip mode-chip has-tooltip" data-mode="color" data-tooltip="A flat color fills the canvas behind the subject.">COLOR</button>
-            <button type="button" class="preset-chip mode-chip has-tooltip" data-mode="blur" data-tooltip="The original photo, blurred behind the sharp cutout for a portrait bokeh look.">BLUR</button>
-            <button type="button" class="preset-chip mode-chip has-tooltip" data-mode="image" data-tooltip="Composite the cutout onto a second photo.">PHOTO</button>
+            <button type="button" class="preset-chip mode-chip active" data-mode="checker" data-tooltip="Transparency is kept; the checkerboard only previews it.">GRID</button>
+            <button type="button" class="preset-chip mode-chip" data-mode="color" data-tooltip="A flat color fills the canvas behind the subject.">COLOR</button>
+            <button type="button" class="preset-chip mode-chip" data-mode="blur" data-tooltip="The original photo, blurred behind the sharp cutout for a portrait bokeh look.">BLUR</button>
+            <button type="button" class="preset-chip mode-chip" data-mode="image" data-tooltip="Composite the cutout onto a second photo.">PHOTO</button>
           </div>
           <div class="swatches-grid" id="matteSwatches" role="group" aria-label="Backdrop color" style="display:none">
-            <button type="button" class="swatch has-tooltip" data-bg="#ffffff" style="background:#ffffff" data-tooltip="Pure White" aria-label="Pure white"></button>
-            <button type="button" class="swatch has-tooltip" data-bg="#000000" style="background:#000000" data-tooltip="Pure Black" aria-label="Pure black"></button>
-            <button type="button" class="swatch has-tooltip" data-bg="#18181b" style="background:#18181b" data-tooltip="Studio Dark Gray" aria-label="Studio dark gray"></button>
+            <button type="button" class="swatch" data-bg="#ffffff" style="background:#ffffff" data-tooltip="Pure White" aria-label="Pure white"></button>
+            <button type="button" class="swatch" data-bg="#000000" style="background:#000000" data-tooltip="Pure Black" aria-label="Pure black"></button>
+            <button type="button" class="swatch" data-bg="#18181b" style="background:#18181b" data-tooltip="Studio Dark Gray" aria-label="Studio dark gray"></button>
             <input type="color" id="colorPicker" value="#00ff66" class="swatch" style="padding:0; background:none;" data-tooltip="Custom Backdrop Color" aria-label="Custom backdrop color" />
           </div>
           <div class="backdrop-photo-wrap" id="backdropPhotoWrap" style="display:none">
@@ -277,7 +277,7 @@
             </div>
           </div>
           <div class="backdrop-blur-wrap" id="backdropBlurWrap" style="display:none">
-            <div class="section-header-row has-tooltip" data-tooltip="Blurs the backdrop image behind the sharp subject.">
+            <div class="section-header-row" data-tooltip="Blurs the backdrop image behind the sharp subject.">
               <span class="section-header">BACKDROP BLUR</span>
               <span class="scale-pct" id="backdropBlurLabel">50%</span>
             </div>
@@ -417,9 +417,9 @@
         <div class="anim-dock" id="animDock">
           <div class="anim-playback-bar" id="animPlaybackBar">
             <div class="anim-controls">
-              <button type="button" class="anim-ctrl-btn has-tooltip" id="btnAnimPrev" data-tooltip="Previous frame (←)" aria-label="Previous frame"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M8.75 2v8L3.75 6z"/><path d="M1.75 2h1.5v8h-1.5z"/></svg></button>
-              <button type="button" class="anim-ctrl-btn anim-play-btn has-tooltip" id="btnAnimPlay" data-tooltip="Play / Pause (Space)" aria-label="Play or pause animation"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3.5 2v8l5.5-4z"/></svg><span>PLAY</span></button>
-              <button type="button" class="anim-ctrl-btn has-tooltip" id="btnAnimNext" data-tooltip="Next frame (→)" aria-label="Next frame"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3.25 2v8l5-4z"/><path d="M8.75 2h1.5v8h-1.5z"/></svg></button>
+              <button type="button" class="anim-ctrl-btn" id="btnAnimPrev" data-tooltip="Previous frame (←)" aria-label="Previous frame"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M8.75 2v8L3.75 6z"/><path d="M1.75 2h1.5v8h-1.5z"/></svg></button>
+              <button type="button" class="anim-ctrl-btn anim-play-btn" id="btnAnimPlay" data-tooltip="Play / Pause (Space)" aria-label="Play or pause animation"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3.5 2v8l5.5-4z"/></svg><span>PLAY</span></button>
+              <button type="button" class="anim-ctrl-btn" id="btnAnimNext" data-tooltip="Next frame (→)" aria-label="Next frame"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3.25 2v8l5-4z"/><path d="M8.75 2h1.5v8h-1.5z"/></svg></button>
             </div>
             <div class="anim-telemetry">
               <span class="anim-readout" id="animFrameReadout">FRAME 1 / 1</span>
@@ -441,26 +441,26 @@
         <div class="sidebar-section">
           <div class="section-header">OUTPUT FORMAT</div>
           <div class="tier-row" id="formatRow">
-            <button type="button" class="tier-btn fmt-btn anim-only has-tooltip" data-format="gif" data-tooltip="Animated GIF with transparency (or backdrop color) across the trimmed frame range.">
+            <button type="button" class="tier-btn fmt-btn anim-only" data-format="gif" data-tooltip="Animated GIF with transparency (or backdrop color) across the trimmed frame range.">
               <span class="tier-label">GIF</span>
             </button>
-            <button type="button" class="tier-btn fmt-btn has-tooltip active" data-format="png" data-tooltip="Lossless 32-bit RGBA with full transparency. Largest files, best compatibility.">
+            <button type="button" class="tier-btn fmt-btn active" data-format="png" data-tooltip="Lossless 32-bit RGBA with full transparency. Largest files, best compatibility.">
               <span class="tier-label">PNG</span>
             </button>
-            <button type="button" class="tier-btn fmt-btn has-tooltip" data-format="webp" data-tooltip="Compressed with full transparency. ~40% smaller than PNG.">
+            <button type="button" class="tier-btn fmt-btn" data-format="webp" data-tooltip="Compressed with full transparency. ~40% smaller than PNG.">
               <span class="tier-label">WEBP</span>
             </button>
-            <button type="button" class="tier-btn fmt-btn has-tooltip" data-format="jpg" data-tooltip="No transparency. The cutout is flattened onto the active backdrop color.">
+            <button type="button" class="tier-btn fmt-btn" data-format="jpg" data-tooltip="No transparency. The cutout is flattened onto the active backdrop color.">
               <span class="tier-label">JPG</span>
             </button>
-            <button type="button" class="tier-btn fmt-btn has-tooltip" data-format="mask" data-tooltip="8-bit grayscale matte saved as a .png file (white = foreground, black = background).">
+            <button type="button" class="tier-btn fmt-btn" data-format="mask" data-tooltip="8-bit grayscale matte saved as a .png file (white = foreground, black = background).">
               <span class="tier-label">MASK</span>
             </button>
           </div>
         </div>
 
         <div class="sidebar-section">
-          <div class="section-header-row has-tooltip" data-tooltip="Trims transparent borders to the subject's tight alpha bounding box before scaling.">
+          <div class="section-header-row" data-tooltip="Trims transparent borders to the subject's tight alpha bounding box before scaling.">
             <span class="section-header">AUTO-CROP TO SUBJECT</span>
             <button
               type="button"
@@ -472,7 +472,7 @@
             ><span class="switch-knob"></span></button>
           </div>
           <div class="crop-padding-wrap disabled" id="cropPaddingWrap">
-            <div class="section-header-row has-tooltip" data-tooltip="Adds symmetric margin around the cropped subject as a percentage of its longest side.">
+            <div class="section-header-row" data-tooltip="Adds symmetric margin around the cropped subject as a percentage of its longest side.">
               <span class="section-header">CROP PADDING</span>
               <span class="scale-pct" id="cropPaddingLabel">5%</span>
             </div>
@@ -526,7 +526,7 @@
             </div>
             <button
               type="button"
-              class="aspect-lock-btn active has-tooltip"
+              class="aspect-lock-btn active"
               id="aspectLockBtn"
               aria-pressed="true"
               aria-label="Toggle aspect-ratio lock"
@@ -559,16 +559,16 @@
           </div>
           <div class="section-header preset-head">ASPECT RATIO</div>
           <div class="preset-chips">
-            <button type="button" class="preset-chip has-tooltip active" id="presetReset" data-tooltip="Back to the scaled source aspect ratio">ORIGINAL</button>
-            <button type="button" class="preset-chip has-tooltip" data-w="1024" data-h="1024" data-tooltip="1024 x 1024 marketplace square">1:1</button>
-            <button type="button" class="preset-chip has-tooltip" data-w="1080" data-h="1350" data-tooltip="1080 x 1350 portrait post">4:5</button>
-            <button type="button" class="preset-chip has-tooltip" data-w="1080" data-h="1920" data-tooltip="1080 x 1920 story">9:16</button>
-            <button type="button" class="preset-chip has-tooltip" data-w="1920" data-h="1080" data-tooltip="1920 x 1080 landscape">16:9</button>
+            <button type="button" class="preset-chip active" id="presetReset" data-tooltip="Back to the scaled source aspect ratio">ORIGINAL</button>
+            <button type="button" class="preset-chip" data-w="1024" data-h="1024" data-tooltip="1024 x 1024 marketplace square">1:1</button>
+            <button type="button" class="preset-chip" data-w="1080" data-h="1350" data-tooltip="1080 x 1350 portrait post">4:5</button>
+            <button type="button" class="preset-chip" data-w="1080" data-h="1920" data-tooltip="1080 x 1920 story">9:16</button>
+            <button type="button" class="preset-chip" data-w="1920" data-h="1080" data-tooltip="1920 x 1080 landscape">16:9</button>
           </div>
           <div class="section-header preset-head">CANVAS FIT</div>
           <div class="preset-chips fit-chips" id="canvasFitChips">
-            <button type="button" class="preset-chip fit-chip has-tooltip active" data-fit="fit" data-tooltip="Keep aspect, centered with margins">FIT</button>
-            <button type="button" class="preset-chip fit-chip has-tooltip" data-fit="stretch" data-tooltip="Stretch the subject to fill the canvas">STRETCH</button>
+            <button type="button" class="preset-chip fit-chip active" data-fit="fit" data-tooltip="Keep aspect, centered with margins">FIT</button>
+            <button type="button" class="preset-chip fit-chip" data-fit="stretch" data-tooltip="Stretch the subject to fill the canvas">STRETCH</button>
           </div>
         </div>
 

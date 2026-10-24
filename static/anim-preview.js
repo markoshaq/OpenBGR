@@ -9,7 +9,12 @@
  * `initAnimatedPreviews()` from `initAnimation()`.
  */
 
-import { state, dom, masterCutoutImg } from "./state.js";
+import {
+  state,
+  dom,
+  masterCutoutImg,
+  resolveFileBackdropSource,
+} from "./state.js";
 import { emit, on } from "./bus.js";
 import {
   renderExportBlob,
@@ -96,22 +101,19 @@ export async function refreshAnimatedFramePreviews() {
               frame.resultBlob
             )
           : null;
-        let backdropSource = null;
-        if (state.activeBackdrop === "blur" && frame.sourceFile) {
-          bgBmp = await createImageBitmap(frame.sourceFile);
-          backdropSource = bgBmp;
-        } else if (state.activeBackdrop === "image") {
-          backdropSource = state.backdropImg?.naturalWidth
-            ? state.backdropImg
-            : null;
-        }
+        const resolvedBackdrop = await resolveFileBackdropSource(
+          state.activeBackdrop,
+          frame.sourceFile,
+          state.backdropImg
+        );
+        bgBmp = resolvedBackdrop.ownedBitmap;
         blob = await renderExportBlob(bmp, srcW, srcH, {
           format: previewFmt,
           targetW: w,
           targetH: h,
           shadowCutoff: state.shadowCutoff,
           backdrop: state.activeBackdrop,
-          backdropSource,
+          backdropSource: resolvedBackdrop.backdropSource,
           backdropBlur: state.backdropBlur,
           autoCrop: applyCrop,
           cropPadding: applyCrop ? state.cropPadding : 0,

@@ -19,6 +19,8 @@ import {
   saveStateToActiveTab,
   setError,
   closeConfirmModal,
+  trimmedFrameSlice,
+  setStatElapsed,
   PRESET_NAMES,
   updateTierDownloadUI,
   clearTierDownloadProgress,
@@ -66,8 +68,9 @@ export function cancelProcessing() {
   stopJobProgressPolling();
   closeConfirmModal();
   const elapsedMs = stopElapsedTicker();
-  dom.statTime.textContent =
-    elapsedMs != null ? `CANCELLED - ${formatElapsed(elapsedMs)}` : "CANCELLED";
+  setStatElapsed(
+    elapsedMs != null ? `CANCELLED - ${formatElapsed(elapsedMs)}` : "CANCELLED"
+  );
 
   if (!state.resultBlob && state.sourceFile) {
     tabOps.setViewMode("original");
@@ -325,14 +328,18 @@ async function applySegmentationResult(response, controller) {
     masterCutoutImg.src = state.resultObjectUrl;
   });
 
+  finishSegmentationSuccess();
+}
+
+/** Shared post-run UI: unblocks export buttons, stamps the elapsed readout, and snapshots per-tab state. */
+function finishSegmentationSuccess() {
   dom.appShell?.classList.remove("no-result");
   dom.btnDownload.classList.remove("disabled");
   dom.btnCopy.classList.remove("disabled");
 
   updateExportTelemetry();
   const finishedMs = stopElapsedTicker();
-  dom.statTime.textContent =
-    finishedMs != null ? formatElapsed(finishedMs) : "DONE";
+  setStatElapsed(finishedMs != null ? formatElapsed(finishedMs) : "DONE");
 
   tabOps.setViewMode("split");
   saveStateToActiveTab();
@@ -347,15 +354,7 @@ async function applySegmentationResult(response, controller) {
 async function runAnimatedSegmentation(controller) {
   stopAnimationPlayback();
   const frames = state.frames;
-  const total = frames.length;
-  const startIdx = Math.max(
-    0,
-    Math.min(total - 1, (state.startFrame || 1) - 1)
-  );
-  const endIdx = Math.max(
-    startIdx,
-    Math.min(total - 1, (state.endFrame || total) - 1)
-  );
+  const { startIdx, endIdx } = trimmedFrameSlice(frames);
   const count = endIdx - startIdx + 1;
   const staged = [];
   let outW = 0;
@@ -468,18 +467,7 @@ async function runAnimatedSegmentation(controller) {
   }
   selectAnimationFrame(targetIdx, { scrollIntoView: false });
 
-  dom.appShell?.classList.remove("no-result");
-  dom.btnDownload.classList.remove("disabled");
-  dom.btnCopy.classList.remove("disabled");
-
-  updateExportTelemetry();
-  const finishedMs = stopElapsedTicker();
-  dom.statTime.textContent =
-    finishedMs != null ? formatElapsed(finishedMs) : "DONE";
-
-  tabOps.setViewMode("split");
-  saveStateToActiveTab();
-  syncServerStatus(false);
+  finishSegmentationSuccess();
 }
 
 /** POSTs the active image to `/api/remove-bg` and applies the returned cutout + job id. */
@@ -514,7 +502,7 @@ export async function runSegmentation() {
     if (err.name === "AbortError") return;
     stopElapsedTicker();
     setError(err.message || "Failed to process image.");
-    dom.statTime.textContent = "ERROR";
+    setStatElapsed("ERROR");
   } finally {
     if (state.abortController === controller) {
       state.isProcessing = false;
@@ -596,7 +584,7 @@ export async function applyEdgeRefinement() {
               needsReprocess = true;
               break;
             }
-            dom.statTime.textContent = "REPROCESS TO APPLY";
+            setStatElapsed("REPROCESS TO APPLY");
           }
           continue;
         }

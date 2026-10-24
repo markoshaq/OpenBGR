@@ -93,14 +93,14 @@ export function handleKeydown(e) {
       !e.repeat &&
       !state.isPanning
     ) {
-      e.preventDefault?.();
+      e.preventDefault();
       toggleAnimationPlayback();
     }
   } else if (e.key === "ArrowLeft" && state.isAnimated && state.frames.length > 1) {
-    e.preventDefault?.();
+    e.preventDefault();
     stepAnimationFrame(-1);
   } else if (e.key === "ArrowRight" && state.isAnimated && state.frames.length > 1) {
-    e.preventDefault?.();
+    e.preventDefault();
     stepAnimationFrame(1);
   } else if ((e.key === "z" || e.key === "Z") && state.sourceFile) {
     toggleLoupe();
@@ -120,4 +120,9 @@ export function handleKeyup(e) {
 export function initKeyboard() {
   window.addEventListener("keydown", handleKeydown);
   window.addEventListener("keyup", handleKeyup);
+  // Losing focus while Space is held never delivers keyup; without this the
+  // pan modifier stays armed until the next keyup.
+  window.addEventListener("blur", () => {
+    state.spacePressed = false;
+  });
 }

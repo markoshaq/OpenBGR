@@ -1,8 +1,28 @@
 # Changelog
 
-## [0.12.0]
+## [0.12.1]
 
-### Added
+### Fixed
+
+- Sending an animated tab to a batch no longer leaves the animation dock visible or writes PNG bytes to .gif files; the converted tab drops its frame state and GIF export format
+- The batch-complete summary now renders the saved location on its own line instead of collapsing it into the sentence
+- A failing batch run can no longer leave the busy overlay and progress polling stuck on
+- Holding Space for pan mode no longer stays armed after the window loses focus
+- Importing a model folder with a non-object config.json no longer errors
+- Failed or cancelled inference no longer keeps a full-resolution image buffer in memory
+- `OPENBGR_PORT` is honored consistently by the server and its warm-instance probes
+
+### Security
+
+- The dev-only `*.localhost` wildcard was removed from the Host allowlist
+- The session token file is created mode-0600 instead of being chmod'd after writing
+
+<details>
+<summary>Past releases</summary>
+
+### [0.12.0]
+
+#### Added
 
 - Animated GIF and WebP input with a frame filmstrip, playback controls, and a Start/End trim range with steppers
 - Animated processing runs the trimmed frame range with live progress and cancel; refinement, backdrop, and export settings apply to every frame
@@ -18,7 +38,7 @@
 - Retry Failed button re-runs only failed batch items
 - Open action after export or batch opens the saved file or folder in the file manager
 
-### Changed
+#### Changed
 
 - Small images and animation frames skip upscaling to the model's full resolution: lower GPU memory and much faster frames
 - Models load in FP16 at startup (~1.4 GB less RAM); machines under ~10 GB default to Lite
@@ -40,7 +60,7 @@
 - Past release notes are kept in a collapsed section below; GitHub release notes still extract only the current section
 - `Start Mac.command` renamed to `start_mac.command`
 
-### Fixed
+#### Fixed
 
 - Desktop export no longer opens a white page with the raw file; it uses a native save dialog
 - Auto-Crop on animations unions every trimmed frame so moving subjects aren't clipped
@@ -56,14 +76,11 @@
 - Shared UI constants (accents, tier aliases, tier keys) are drift-checked by the repo integrity test
 - Test suite runs on Python 3.10 via a tomli fallback for tomllib
 
-### Security
+#### Security
 
 - Reject non-loopback Host headers so the session token cannot leak through DNS rebinding
 - /api/save only writes into folders picked through the app's folder dialog
 - Upload bodies are capped at 256 MB before buffering
-
-<details>
-<summary>Past releases</summary>
 
 ### [0.11.3]
 

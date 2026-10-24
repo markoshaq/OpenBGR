@@ -6,7 +6,7 @@
  * - Crisp 1px structural hairline grid (`--border`)
  * - High-contrast neutral carbon palette (`#09090b` / `#111113` / `#fafafa`)
  * - Monospace technical controls & telemetry readouts (`--mono`)
- * - Instant custom CSS hover tooltips on status dots (`data-tooltip`)
+ * - Floating JS tooltips on `data-tooltip` elements (`tooltips.js`)
  */
 
 :root {
@@ -1770,6 +1770,7 @@ body {
 
 .modal-desc {
   font-size: 13px;
+  white-space: pre-line;
   color: var(--muted);
   line-height: 1.5;
 }

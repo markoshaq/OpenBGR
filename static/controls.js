@@ -231,15 +231,9 @@ export function initControls() {
   );
 
   // Top bar: View mode, Zoom, and 4x Loupe
-  document
-    .getElementById("viewSplit")
-    .addEventListener("click", () => setViewMode("split"));
-  document
-    .getElementById("viewCutout")
-    .addEventListener("click", () => setViewMode("cutout"));
-  document
-    .getElementById("viewOriginal")
-    .addEventListener("click", () => setViewMode("original"));
+  dom.viewSplit?.addEventListener("click", () => setViewMode("split"));
+  dom.viewCutout?.addEventListener("click", () => setViewMode("cutout"));
+  dom.viewOriginal?.addEventListener("click", () => setViewMode("original"));
 
   dom.btnZoomIn?.addEventListener("click", () => setZoom(state.zoom + 0.25));
   dom.btnZoomOut?.addEventListener("click", () => setZoom(state.zoom - 0.25));

@@ -58,7 +58,10 @@ export async function openImageDialog() {
 export function requestOpenImage() {
   if (state.isProcessing) {
     openConfirmModal(
-      "This will stop the current image processing. Do you want to open a new image?",
+      {
+        message:
+          "This will stop the current image processing. Do you want to open a new image?",
+      },
       () => {
         cancelProcessing();
         openImageDialog();
@@ -139,7 +142,10 @@ export function handleWindowDrop(e) {
 
   if (state.isProcessing) {
     openConfirmModal(
-      "This will stop the current image processing. Do you want to load the dropped image?",
+      {
+        message:
+          "This will stop the current image processing. Do you want to load the dropped image?",
+      },
       () => {
         cancelProcessing();
         files.forEach((f) => ingestImageFile(f));

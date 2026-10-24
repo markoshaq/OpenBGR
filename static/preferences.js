@@ -16,6 +16,7 @@ import {
   setError,
   setSuccess,
   openConfirmModal,
+  openContextMenu,
   createByteSmoother,
   updateTierDownloadUI,
   clearTierDownloadProgress,
@@ -159,15 +160,15 @@ export function updateCacheIndicator() {
       ? `${formatDiskBytes(totalDisk)} (${formatDiskBytes(appBytes)} APP + ${formatDiskBytes(modelBytes)} MODELS)`
       : `${formatDiskBytes(modelBytes)} (${installedCount} OF ${TIER_KEYS.length} INSTALLED)`;
 
-  const totalEl = document.getElementById("modelsTotalSize");
+  const totalEl = dom.modelsTotalSize;
   if (totalEl) totalEl.textContent = totalSummary;
 
-  const cacheDirEl = document.getElementById("modelsCacheDir");
+  const cacheDirEl = dom.modelsCacheDir;
   if (cacheDirEl && state.serverStatus?.cache_dir) {
     cacheDirEl.textContent = state.serverStatus.cache_dir;
   }
 
-  const uninstallAllBtn = document.getElementById("btnUninstallAllModels");
+  const uninstallAllBtn = dom.btnUninstallAllModels;
   if (uninstallAllBtn) {
     uninstallAllBtn.disabled =
       (installedCount === 0 && modelBytes === 0) || state.isProcessing;
@@ -216,7 +217,7 @@ export async function uninstallModel(target) {
 
   const btn =
     target === "all"
-      ? document.getElementById("btnUninstallAllModels")
+      ? dom.btnUninstallAllModels
       : document.getElementById(`sysbtn-${target}`);
   if (btn) {
     btn.disabled = true;
@@ -334,10 +335,6 @@ async function installModel(target) {
 
 /** Builds the right-click menu for a model card (title, Install/Uninstall, Manage in Settings). */
 export function showModelContextMenu(key, x, y) {
-  const menu = dom.tabContextMenu;
-  if (!menu) return;
-  menu.replaceChildren();
-
   const norm = normalizeTierKey(key);
   const tierInfo = getTierInfo(norm);
   const sizeBytes = Number(tierInfo?.size_bytes) || 0;
@@ -347,63 +344,38 @@ export function showModelContextMenu(key, x, y) {
   const compactSize = sizeNum > 0 ? formatDiskBytes(sizeNum, true) : null;
   const sizeSuffix = compactSize ? ` (${compactSize})` : "";
   const techName = tierInfo?.tech_name || MODEL_TECH_NAMES[norm] || norm;
-
-  const head = document.createElement("div");
-  head.className = "ctx-head";
-  head.textContent = techName;
-  menu.appendChild(head);
-
-  const addItem = (label, fn, disabled = false) => {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = `ctx-item${disabled ? " ctx-disabled" : ""}`;
-    b.textContent = label;
-    if (!disabled) {
-      b.addEventListener("click", () => {
-        menu.style.display = "none";
-        fn();
-      });
-    }
-    menu.appendChild(b);
-  };
-
   const busy = state.isProcessing || Boolean(installingModelKey);
-  if (isInstalled) {
-    addItem(
-      `Uninstall${sizeSuffix}`,
-      () =>
-        openConfirmModal(
-          {
-            title: `UNINSTALL ${String(techName).toUpperCase()}?`,
-            message: `This deletes ${compactSize || "the cached model weights"} from disk. You will need to re-download the model to use it again.`,
-            confirmText: "UNINSTALL",
-            cancelText: "KEEP MODEL",
-          },
-          () => uninstallModel(norm)
-        ),
-      busy
-    );
-  } else {
-    addItem(
-      `Install${sizeSuffix}`,
-      () => installModel(norm),
-      busy || !navigator.onLine || serverOffline()
-    );
-    if (serverOffline()) {
-      addItem("Import Model Folder…", () => openPrefsDialog("models"));
+
+  openContextMenu(x, y, (m) => {
+    m.head(techName);
+    if (isInstalled) {
+      m.item(
+        `Uninstall${sizeSuffix}`,
+        () =>
+          openConfirmModal(
+            {
+              title: `UNINSTALL ${String(techName).toUpperCase()}?`,
+              message: `This deletes ${compactSize || "the cached model weights"} from disk. You will need to re-download the model to use it again.`,
+              confirmText: "UNINSTALL",
+              cancelText: "KEEP MODEL",
+            },
+            () => uninstallModel(norm)
+          ),
+        busy
+      );
+    } else {
+      m.item(
+        `Install${sizeSuffix}`,
+        () => installModel(norm),
+        busy || !navigator.onLine || serverOffline()
+      );
+      if (serverOffline()) {
+        m.item("Import Model Folder…", () => openPrefsDialog("models"));
+      }
     }
-  }
-
-  const sep = document.createElement("div");
-  sep.className = "ctx-sep";
-  menu.appendChild(sep);
-
-  addItem("Manage Models in Settings…", () => openPrefsDialog("models"));
-
-  menu.style.display = "block";
-  const rect = menu.getBoundingClientRect();
-  menu.style.left = `${Math.min(x, window.innerWidth - rect.width - 8)}px`;
-  menu.style.top = `${Math.min(y, window.innerHeight - rect.height - 8)}px`;
+    m.sep();
+    m.item("Manage Models in Settings…", () => openPrefsDialog("models"));
+  });
 }
 
 /** Persists the current Quick Action preferences to `~/.openbgr/quick_action.json` via the server. */

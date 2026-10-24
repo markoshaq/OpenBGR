@@ -436,15 +436,13 @@ export async function probeAndLoadAnimationFrames(file, tabId) {
       };
     });
 
-    const animFormat = "gif";
-
-    tab.isAnimated = true;
+        tab.isAnimated = true;
     tab.frames = frames;
     tab.currentFrameIndex = 0;
     tab.startFrame = 1;
     tab.endFrame = frames.length;
     if (tab.exportFormat === "png") {
-      tab.exportFormat = animFormat;
+      tab.exportFormat = "gif";
     }
 
     if (state.activeTabId === tabId) {
@@ -454,7 +452,7 @@ export async function probeAndLoadAnimationFrames(file, tabId) {
       state.startFrame = 1;
       state.endFrame = frames.length;
       if (state.exportFormat === "png") {
-        state.exportFormat = animFormat;
+        state.exportFormat = "gif";
         syncFormatButtons();
       }
       renderAnimationFilmstrip();

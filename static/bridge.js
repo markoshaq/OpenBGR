@@ -14,7 +14,6 @@ import {
   setPref,
   getActiveTab,
   normalizeTierKey,
-  openConfirmModal,
   openExternalUrl,
 } from "./state.js";
 import { setZoom } from "./stage.js";
@@ -26,7 +25,7 @@ import {
 import { openPrefsDialog, applyPreferences } from "./preferences.js";
 import { requestBatch } from "./batch.js";
 import {
-  createBlankTab,
+  requestNewTab,
   requestCloseTab,
   reopenClosedTab,
   requestSwitchToTab,
@@ -45,22 +44,7 @@ export const commands = {
   pullPendingFiles: () => pullPendingFiles(),
   newTab: () => {
     if (!getActiveTab()) return;
-    if (state.isProcessing) {
-      openConfirmModal(
-        {
-          title: "STOP CURRENT IMAGE?",
-          message: "Opening a new tab will stop the current image processing.",
-          confirmText: "STOP & OPEN TAB",
-          cancelText: "KEEP PROCESSING",
-        },
-        () => {
-          cancelProcessing();
-          createBlankTab();
-        }
-      );
-      return;
-    }
-    createBlankTab();
+    requestNewTab();
   },
   openImage: () => requestOpenImage(),
   openRecent: () => openRecentDialog(),

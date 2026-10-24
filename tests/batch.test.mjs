@@ -354,6 +354,37 @@ test("mergeTabsIntoBatch converts a plain image tab into a batch target", () => 
   );
 });
 
+test("mergeTabsIntoBatch clears animation state when converting an animated tab", () => {
+  resetWorkspace();
+  // An animated tab being converted into a batch must drop its GIF-only
+  // state: leftover frames reference revoked URLs and `gif` is not a valid
+  // per-image export format (it would write PNG bytes to a .gif file).
+  const dst = createTabRecord({
+    sourceFile: new File([enc.encode("d")], "d.gif", { type: "image/gif" }),
+    name: "d.gif",
+    isAnimated: true,
+    frames: [{ resultObjectUrl: "blob:dead" }, { resultObjectUrl: "blob:beef" }],
+    currentFrameIndex: 1,
+    startFrame: 1,
+    endFrame: 2,
+    exportFormat: "gif",
+    refineJobId: 7,
+  });
+  state.tabs.push(dst);
+  const src = createTabRecord({
+    sourceFile: new File([enc.encode("x")], "x.png", { type: "image/png" }),
+    name: "x.png",
+  });
+  state.tabs.push(src);
+  mergeTabsIntoBatch(src.id, dst.id);
+  assert.equal(dst.kind, "batch");
+  assert.equal(dst.isAnimated, false);
+  assert.deepEqual(dst.frames, []);
+  assert.equal(dst.currentFrameIndex, 0);
+  assert.equal(dst.exportFormat, "png");
+  assert.equal(dst.refineJobId, null);
+});
+
 test("extractBatchItemToTab moves a queue row into its own tab", () => {
   resetWorkspace();
   const tab = makeBatchTab(["a.png", "b.png"]);

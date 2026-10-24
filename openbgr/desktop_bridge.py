@@ -9,7 +9,6 @@ import json
 import os
 import platform
 import secrets
-import shutil
 import subprocess
 import sys
 import threading
@@ -28,10 +27,7 @@ from .config import (
 )
 from .desktop_clipboard import ClipboardMixin
 from .models import MANAGER
-from .quick_action_native import copy_png_bytes_to_clipboard
-
-# File types accepted from OS open-file events and clipboard path drops.
-_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"})
+from .settings import IMAGE_EXTENSIONS
 
 # Image paths handed to the app by the OS (argv / macOS 'odoc' AppleEvent) that
 # the frontend should ingest into tabs once the window is ready.
@@ -40,8 +36,6 @@ _PENDING_OPEN_FILES: list[str] = []
 _MAX_PENDING_OPEN_FILES = 128
 _DESKTOP_API: DesktopApi | None = None
 _OPEN_FILES_RECEIVED = 0
-
-__all__ = ["ClipboardMixin", "copy_png_bytes_to_clipboard", "shutil"]
 
 
 def set_desktop_api(bridge: DesktopApi | None) -> None:
@@ -136,7 +130,7 @@ def add_recent_files(paths: Any) -> None:
     files = [
         str(Path(str(p)).resolve())
         for p in paths
-        if Path(str(p)).is_file() and Path(str(p)).suffix.lower() in _IMAGE_EXTENSIONS
+        if Path(str(p)).is_file() and Path(str(p)).suffix.lower() in IMAGE_EXTENSIONS
     ]
     if not files:
         return
@@ -218,7 +212,7 @@ def queue_open_files(paths: Any) -> None:
     file_list = [
         str(p)
         for p in paths
-        if Path(str(p)).is_file() and Path(str(p)).suffix.lower() in _IMAGE_EXTENSIONS
+        if Path(str(p)).is_file() and Path(str(p)).suffix.lower() in IMAGE_EXTENSIONS
     ]
     if not file_list:
         return
@@ -254,10 +248,6 @@ class DesktopApi(ClipboardMixin):
     window fullscreen and theme synchronization, external browser links, and
     clean Quit.
     """
-
-    # Safety cap for base64 bridge payloads (clipboard reads and Save-As writes).
-    # File picks use file_id grants streamed over HTTP, so they are uncapped.
-    OPEN_DIALOG_MAX_BYTES = 48 * 1024 * 1024
 
     def __init__(self) -> None:
         """The pywebview window handle is attached after `create_window`."""

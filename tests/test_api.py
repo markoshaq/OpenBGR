@@ -524,8 +524,13 @@ class TestApiEndpoints(unittest.TestCase):
             headers={**foreign, config_mod.API_TOKEN_HEADER: config_mod.API_TOKEN},
         )
         self.assertEqual(res.status_code, 400)
+        # Browsers resolve *.localhost to loopback natively, so wildcard
+        # subdomains would widen the token-injection surface; they are rejected.
+        res = client.get("/", headers={"host": "app.localhost"})
+        self.assertEqual(res.status_code, 400)
+        self.assertNotIn("openbgr-api-token", res.text)
         # The loopback names the app and its probes use still pass.
-        for host in ("127.0.0.1", "127.0.0.1:7860", "localhost", "app.localhost"):
+        for host in ("127.0.0.1", "127.0.0.1:7860", "localhost"):
             res = client.get("/api/progress", headers={"host": host})
             self.assertEqual(res.status_code, 200, host)
 

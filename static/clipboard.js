@@ -14,7 +14,10 @@ import { on } from "./bus.js";
 export function ingestWithConfirm(fileOrBlob) {
   if (state.isProcessing) {
     openConfirmModal(
-      "This will stop the current image processing. Do you want to load the pasted image?",
+      {
+        message:
+          "This will stop the current image processing. Do you want to load the pasted image?",
+      },
       () => {
         cancelProcessing();
         ingestImageFile(fileOrBlob);

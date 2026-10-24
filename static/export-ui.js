@@ -11,6 +11,7 @@ import {
   dom,
   masterCutoutImg,
   getActiveTab,
+  trimmedFrameSlice,
   FORMAT_LABELS,
   formatDiskBytes,
 } from "./state.js";
@@ -114,15 +115,7 @@ export function updateExportTelemetry() {
       if (exact) {
         dom.exportSizeLabel.textContent = formatDiskBytes(exact.size);
       } else if (state.isAnimated && state.frames.length > 1) {
-        const total = state.frames.length;
-        const startIdx = Math.max(
-          0,
-          Math.min(total - 1, (state.startFrame || 1) - 1)
-        );
-        const endIdx = Math.max(
-          startIdx,
-          Math.min(total - 1, (state.endFrame || total) - 1)
-        );
+        const { startIdx, endIdx } = trimmedFrameSlice(state.frames);
         let sumBytes = 0;
         let rangeDone = true;
         for (let i = startIdx; i <= endIdx; i++) {

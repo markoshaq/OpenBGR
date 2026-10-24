@@ -120,9 +120,9 @@ export function initSettings() {
     });
   });
 
-  document
-    .getElementById("btnUninstallAllModels")
-    ?.addEventListener("click", () => uninstallModel("all"));
+  dom.btnUninstallAllModels?.addEventListener("click", () =>
+    uninstallModel("all")
+  );
 
   dom.btnOpenCacheDir?.addEventListener("click", () => openCacheFolder());
   dom.btnOpenLogsDir?.addEventListener("click", () => openLogsFolder());

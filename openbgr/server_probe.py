@@ -16,6 +16,11 @@ from typing import Any
 from .settings import API_TOKEN_HEADER, read_api_token
 
 
+def server_port() -> str:
+    """Port the OpenBGR server listens on: `OPENBGR_PORT`, then generic `PORT`."""
+    return os.environ.get("OPENBGR_PORT") or os.environ.get("PORT") or "7860"
+
+
 def wait_for_server(host: str, port: int, timeout_s: float = 15.0) -> bool:
     """Polls until the local Uvicorn TCP socket is accepting connections."""
     deadline = time.perf_counter() + timeout_s
@@ -108,8 +113,7 @@ def delegate_quick_action_to_server(inputs: list[str]) -> dict[str, Any] | None:
     ]
     if not resolved:
         return None
-    port = os.environ.get("OPENBGR_PORT") or os.environ.get("PORT") or "7860"
-    api = f"http://127.0.0.1:{port}"
+    api = f"http://127.0.0.1:{server_port()}"
     try:
         if not is_openbgr_server(api, timeout_s=1.5):
             return None
