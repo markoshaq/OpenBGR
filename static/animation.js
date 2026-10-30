@@ -25,6 +25,7 @@ import {
   updateExportTelemetry,
   updateCropGuide,
   syncFormatButtons,
+  applyScaleValue,
 } from "./export-ui.js";
 import { buildAnimatedExportBlob } from "./export-io.js";
 import { initAnimatedPreviews } from "./anim-preview.js";
@@ -209,8 +210,12 @@ export function selectAnimationFrame(index, opts = {}) {
 
   const prev = state.frames[state.currentFrameIndex];
   if (prev && state.currentFrameIndex !== clamped) {
-    prev.resultBlob = state.resultBlob;
-    prev.resultObjectUrl = state.resultObjectUrl;
+    // Same guard as saveStateToActiveTab: a transiently null live result must
+    // not erase the frame we are leaving.
+    if (state.resultBlob || !prev.resultBlob) {
+      prev.resultBlob = state.resultBlob;
+      prev.resultObjectUrl = state.resultObjectUrl;
+    }
     // Only carry the shared preview when it was rendered from prev's own
     // result; a render that landed mid-switch belongs to another frame.
     if (state.previewSource === state.resultBlob) {
@@ -391,7 +396,10 @@ export function setAnimationTrimRange(startVal, endVal) {
     syncFilmstripSelection(false);
     saveStateToActiveTab();
   }
-  updateExportTelemetry();
+  // The trim range reshapes the auto-crop union, so aspect-locked dims
+  // recompute from the new base; unlocked custom boxes stay as typed.
+  if (state.autoCrop && state.aspectLocked) applyScaleValue(state.exportScale);
+  else updateExportTelemetry();
 }
 
 /**
@@ -436,7 +444,7 @@ export async function probeAndLoadAnimationFrames(file, tabId) {
       };
     });
 
-        tab.isAnimated = true;
+    tab.isAnimated = true;
     tab.frames = frames;
     tab.currentFrameIndex = 0;
     tab.startFrame = 1;

@@ -365,8 +365,13 @@ export function saveStateToActiveTab() {
   if (!tab) return;
   if (state.isAnimated && state.frames[state.currentFrameIndex]) {
     const cur = state.frames[state.currentFrameIndex];
-    cur.resultBlob = state.resultBlob;
-    cur.resultObjectUrl = state.resultObjectUrl;
+    // A null live result must never erase a processed frame's cutout: the
+    // mirror can run while `state.resultBlob` is transiently unset (mid-run,
+    // mid-switch), and overwriting would destroy the frame's work.
+    if (state.resultBlob || !cur.resultBlob) {
+      cur.resultBlob = state.resultBlob;
+      cur.resultObjectUrl = state.resultObjectUrl;
+    }
     cur.previewBlob = state.previewBlob;
     cur.previewObjectUrl = state.previewObjectUrl;
     cur.previewSignature = state.previewSignature;

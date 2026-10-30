@@ -16,6 +16,7 @@ import {
   formatDiskBytes,
 } from "./state.js";
 import {
+  cropPlacement,
   getActiveCropRect,
   getExportBaseDims,
   exactExportBlob,
@@ -24,6 +25,46 @@ import {
   updateLiveStagePreview,
 } from "./export.js";
 import { scheduleAnimatedExportSize } from "./anim-export.js";
+
+/**
+ * Stage-overlay fractions (`{ left, top, right, bottom }`) of the active crop
+ * rect for the dashed auto-crop guide. At the source aspect the rect maps
+ * directly onto the full-frame stage. Under a mismatched export box the stage
+ * shows the crop placed inside the export canvas (fit or stretch) and
+ * letterboxed back to the source aspect, so the rect is mapped through the
+ * same placement the render uses and the outline tracks the cutout.
+ */
+function cropGuideInsets() {
+  const rect = getActiveCropRect();
+  const srcW = state.naturalWidth || masterCutoutImg.naturalWidth || 0;
+  const srcH = state.naturalHeight || masterCutoutImg.naturalHeight || 0;
+  let left = rect.x / srcW;
+  let top = rect.y / srcH;
+  let right = (srcW - rect.x - rect.w) / srcW;
+  let bottom = (srcH - rect.y - rect.h) / srcH;
+  if (srcW > 0 && srcH > 0 && exportAspectMismatch()) {
+    const targetW = state.exportWidth || rect.w;
+    const targetH = state.exportHeight || rect.h;
+    const { scaleX, scaleY, offsetX, offsetY } = cropPlacement(
+      rect,
+      targetW,
+      targetH,
+      state.canvasFit === "stretch"
+    );
+    // The export canvas displays contained in the stage box, which keeps the
+    // source aspect, so map the placed rect back into source-pixel fractions.
+    const k = Math.min(srcW / targetW, srcH / targetH);
+    const x = (srcW - targetW * k) / 2 + offsetX * k;
+    const y = (srcH - targetH * k) / 2 + offsetY * k;
+    const w = rect.w * scaleX * k;
+    const h = rect.h * scaleY * k;
+    left = x / srcW;
+    top = y / srcH;
+    right = (srcW - x - w) / srcW;
+    bottom = (srcH - y - h) / srcH;
+  }
+  return { left, top, right, bottom };
+}
 
 /** Updates the dashed crop-frame overlay on the stage when Auto-Crop is active. */
 export function updateCropGuide() {
@@ -41,11 +82,14 @@ export function updateCropGuide() {
     guide.classList.remove("visible");
     return;
   }
-  const rect = getActiveCropRect();
   // The rect may reach past the frame (padding beyond the image edge exports
   // as transparent canvas margin): negative insets push the border off-stage,
   // so the dim overlay covers only pixels that are actually cropped away.
-  const inset = `${(rect.y / srcH) * 100}% ${((srcW - rect.x - rect.w) / srcW) * 100}% ${((srcH - rect.y - rect.h) / srcH) * 100}% ${(rect.x / srcW) * 100}%`;
+  // Under a mismatched export box the fractions come back mapped through the
+  // render's placement, so the outline tracks the reframed cutout instead of
+  // the full-frame position.
+  const { left, top, right, bottom } = cropGuideInsets();
+  const inset = `${top * 100}% ${right * 100}% ${bottom * 100}% ${left * 100}%`;
   guide.style.setProperty("--crop-inset", inset);
   guide.dataset.inset = inset;
   guide.classList.add("visible");

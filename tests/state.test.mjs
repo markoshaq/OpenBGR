@@ -27,6 +27,7 @@ const {
   createTabRecord,
   defaultTierForNewTab,
   getApiToken,
+  saveStateToActiveTab,
   dom,
   state,
   prefs,
@@ -169,6 +170,53 @@ test("createTabRecord yields a well-formed image tab honoring overrides", () => 
   assert.equal(a.canvasFit, "fit");
   assert.equal(a.backdropColor, "#ffffff");
   assert.equal(a.exportCacheBlob, null);
+});
+
+test("saveStateToActiveTab never mirrors a null live result over a processed frame", () => {
+  const blob = new Blob(["x"], { type: "image/png" });
+  const saved = {
+    isAnimated: state.isAnimated,
+    frames: state.frames,
+    currentFrameIndex: state.currentFrameIndex,
+    resultBlob: state.resultBlob,
+    resultObjectUrl: state.resultObjectUrl,
+    activeTabId: state.activeTabId,
+    tabs: state.tabs,
+  };
+  try {
+    state.isAnimated = true;
+    state.currentFrameIndex = 0;
+    state.frames = [
+      {
+        resultBlob: blob,
+        resultObjectUrl: "blob:frame-result",
+        previewBlob: null,
+        previewObjectUrl: null,
+        previewSignature: null,
+        refineJobId: null,
+      },
+    ];
+    const tab = createTabRecord({ kind: "image" });
+    state.tabs = [tab];
+    state.activeTabId = tab.id;
+
+    // Transient desync: the live result is unset while the frame holds one.
+    state.resultBlob = null;
+    state.resultObjectUrl = null;
+    saveStateToActiveTab();
+    assert.equal(state.frames[0].resultBlob, blob, "frame result survives");
+    assert.equal(state.frames[0].resultObjectUrl, "blob:frame-result");
+
+    // A real live result still mirrors into the frame.
+    state.resultBlob = blob;
+    state.resultObjectUrl = "blob:live-result";
+    saveStateToActiveTab();
+    assert.equal(state.frames[0].resultBlob, blob);
+    assert.equal(state.frames[0].resultObjectUrl, "blob:live-result");
+    assert.equal(tab.resultBlob, blob);
+  } finally {
+    Object.assign(state, saved);
+  }
 });
 
 test("defaultTierForNewTab prefers explicit pref, then recommended, then active", () => {

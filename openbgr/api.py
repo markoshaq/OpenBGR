@@ -20,8 +20,6 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from huggingface_hub import snapshot_download
-from huggingface_hub.constants import HF_HUB_CACHE
 from PIL import Image
 from starlette.middleware.base import RequestResponseEndpoint
 
@@ -31,13 +29,9 @@ from .config import (
     API_TOKEN_HEADER,
     APP_CONFIG_DIR,
     APP_VERSION,
-    DEVICE,
-    DEVICE_LABEL,
     HOST_RAM_GB,
     LEGACY_MATTING_REPO,
     MODELS,
-    PRECISION_LABEL,
-    RECOMMENDED_TIER,
     STATIC_DIR,
     TIERS,
     WEB_API_TOKEN,
@@ -67,6 +61,7 @@ from .models import (
     refresh_expected_sizes,
     set_job_phase,
     track_model_download,
+    warm_device_kernels,
 )
 from .pipeline import (
     MAX_ANIMATION_FRAMES,
@@ -87,27 +82,73 @@ from .quick_action_native import choose_output_folder_native, choose_save_path_n
 from .settings import env_forces_offline, offline_mode_enabled, set_offline_mode
 
 
+def _startup_background() -> None:
+    """
+    Warms the deferred hardware runtime off the serving path: sizes the disk
+    caches, imports torch, detects the device, logs the compute banner,
+    preloads the recommended model when it is already cached, and only then
+    refreshes remote model sizes (so the Hugging Face API calls never compete
+    with the preload for bandwidth). Runs on a daemon thread started by the
+    lifespan hook; failures are logged, never fatal to the server.
+    """
+    from .config import logger
+
+    try:
+        from .config import (
+            DEVICE_LABEL,
+            MODELS,
+            PRECISION_LABEL,
+            RECOMMENDED_TIER,
+            TIERS,
+            ensure_runtime,
+            get_app_disk_bytes,
+        )
+
+        # Warm the disk-size caches first: they are pure filesystem walks that
+        # can overlap the torch import below, so the first /api/status is fast
+        # as soon as the runtime lock releases.
+        get_app_disk_bytes()
+        for repo_id in (*MODELS.values(), LEGACY_MATTING_REPO):
+            get_model_disk_bytes(repo_id)
+
+        ensure_runtime()
+        logger.info(
+            "[Config] Compute: %s (%s); default model: %s (%s).",
+            DEVICE_LABEL,
+            PRECISION_LABEL,
+            TIERS[RECOMMENDED_TIER]["label"],
+            TIERS[RECOMMENDED_TIER]["sublabel"],
+        )
+        default_model_key = TIERS[RECOMMENDED_TIER]["model_key"]
+        if is_model_cached_locally(MODELS[default_model_key]):
+            try:
+                model = MANAGER.get_or_load(default_model_key)
+            except Exception:
+                logger.exception("[Model] Startup preload of %s failed.", default_model_key)
+            else:
+                # Absorb the one-time MPS/CUDA kernel compilation here so the
+                # user's first PROCESS click runs at full speed.
+                warm_device_kernels(model)
+        if not offline_mode_enabled():
+            refresh_expected_sizes()
+    except Exception:
+        logger.exception("[Config] Startup warmup failed; hardware detection deferred.")
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """
-    Application lifespan hook. Preloads the recommended default model if cached
-    on disk, and ensures all device memory is flushed on server shutdown.
+    Application lifespan hook. Heavy startup work (torch import, hardware
+    detection, model preload) runs on a daemon thread so Uvicorn binds and
+    serves immediately; the first `/api/status` waits briefly on the runtime
+    lock if it lands before the warmup finishes. Shutdown flushes device memory.
     """
-    timer: threading.Timer | None = None
     STATIC_DIR.mkdir(exist_ok=True)
     persist_api_token()
-    default_model_key = TIERS[RECOMMENDED_TIER]["model_key"]
-    if is_model_cached_locally(MODELS[default_model_key]):
-        timer = threading.Timer(0.5, lambda: MANAGER.get_or_load(default_model_key))
-        timer.daemon = True
-        timer.start()
-    if not offline_mode_enabled():
-        threading.Thread(target=refresh_expected_sizes, daemon=True).start()
+    threading.Thread(target=_startup_background, daemon=True).start()
     try:
         yield
     finally:
-        if timer is not None:
-            timer.cancel()
         MANAGER.request_cancel()
         MANAGER.unload()
 
@@ -160,6 +201,8 @@ def api_status() -> dict[str, Any]:
     Returns detected compute hardware, floating-point precision mode, system RAM,
     recommended model, and local offline cache availability and disk usage for each model.
     """
+    from .config import DEVICE, DEVICE_LABEL, PRECISION_LABEL, RECOMMENDED_TIER
+
     maybe_refresh_expected_sizes()
     tiers_status = {}
     total_cache_bytes = 0
@@ -181,6 +224,8 @@ def api_status() -> dict[str, Any]:
     total_cache_bytes += get_model_disk_bytes(LEGACY_MATTING_REPO)
     app_size_bytes = get_app_disk_bytes()
     total_disk_bytes = total_cache_bytes + app_size_bytes
+
+    from huggingface_hub.constants import HF_HUB_CACHE
 
     cache_path = Path(HF_HUB_CACHE)
     try:
@@ -328,6 +373,8 @@ def api_local_file(file_id: str) -> Response:
 @app.post("/api/open-cache-dir")
 def api_open_cache_dir() -> dict[str, Any]:
     """Opens the Hugging Face Hub model cache directory in the system file manager."""
+    from huggingface_hub.constants import HF_HUB_CACHE
+
     cache_path = Path(HF_HUB_CACHE)
     opened = open_folder_in_file_manager(cache_path)
     if not opened:
@@ -390,6 +437,8 @@ def api_uninstall_model(target: str = Form(...)) -> dict[str, Any]:
     if not MANAGER.inference_lock.acquire(blocking=False):
         raise _INFERENCE_BUSY_409
     try:
+        from huggingface_hub.constants import HF_HUB_CACHE
+
         with model_download_guard(blocking=False):
             repos_to_remove: list[str] = []
             for m_key in model_keys:
@@ -453,6 +502,8 @@ async def api_install_model(target: str = Form(...)) -> dict[str, Any]:
 
     def _download() -> None:
         """Blocking download + FP16 compaction, run in a worker thread."""
+        from huggingface_hub import snapshot_download
+
         with track_model_download(norm) as dl_tqdm:
             snapshot_download(repo_id=repo_id, tqdm_class=dl_tqdm)
         set_job_phase("load", norm)
@@ -697,6 +748,8 @@ async def api_remove_bg(
     Accepts an uploaded image file and returns a full-resolution, lossless
     32-bit RGBA PNG along with performance telemetry HTTP headers.
     """
+    from .config import DEVICE_LABEL, PRECISION_LABEL
+
     norm_tier = "matting" if matting else normalize_tier_key(tier)
     if norm_tier not in TIERS:
         raise HTTPException(status_code=400, detail=f"Invalid model preset '{tier}'.")
@@ -1021,8 +1074,12 @@ async def api_token_guard(request: Request, call_next: RequestResponseEndpoint) 
         if request.headers.get("sec-fetch-site") in _CROSS_SITE_FETCH:
             return JSONResponse({"detail": "Forbidden"}, status_code=403)
         token = request.headers.get(API_TOKEN_HEADER, "")
-        is_local = secrets.compare_digest(token, API_TOKEN)
-        is_web = secrets.compare_digest(token, WEB_API_TOKEN)
+        # compare_digest rejects non-ASCII str inputs with TypeError (which
+        # would surface as a 500); compare the encoded bytes instead so a
+        # malformed header is just a clean 403.
+        token_bytes = token.encode("utf-8", "replace")
+        is_local = secrets.compare_digest(token_bytes, API_TOKEN.encode())
+        is_web = secrets.compare_digest(token_bytes, WEB_API_TOKEN.encode())
         if request.url.path in _LOCAL_ONLY_PATHS:
             if not is_local:
                 return JSONResponse({"detail": "Forbidden"}, status_code=403)

@@ -16,7 +16,7 @@ import time
 import warnings
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 # Deliberate re-exports (`as` form) so callers can pull shared settings
 # symbols from `openbgr.config` without knowing they live in `settings`.
@@ -35,6 +35,9 @@ from .settings import (
     read_api_token as read_api_token,
 )
 
+if TYPE_CHECKING:
+    import torch
+
 # Must be set before importing PyTorch so any non-native Apple Silicon MPS operator
 # transparently falls back to CPU execution without raising a runtime error.
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
@@ -43,8 +46,6 @@ warnings.filterwarnings(
     category=FutureWarning,
     module=r"^(transformers|timm|kornia|torch)(\.|$)",
 )
-
-import torch
 
 # ---------------------------------------------------------------------------
 # Path & Runtime Configuration
@@ -122,11 +123,6 @@ DEFAULT_QUICK_ACTION_CONFIG: dict[str, Any] = {
     "notify": True,
 }
 
-# Scale intra-op CPU parallelism for machines running without a GPU accelerator.
-_cpu_count = os.cpu_count()
-if _cpu_count:
-    torch.set_num_threads(min(8, _cpu_count))
-
 # ImageNet normalization constants required by BiRefNet Swin-T / Swin-L backbones.
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
@@ -178,8 +174,13 @@ def get_host_ram_gb() -> float:
     return 16.0
 
 
+HOST_RAM_GB: float = get_host_ram_gb()
+
+
 def get_system_memory_gb() -> float:
     """Estimates total GPU or system memory in GiB to prevent swap thrashing on 2K tensors."""
+    import torch
+
     if torch.cuda.is_available():
         try:
             return torch.cuda.get_device_properties(0).total_memory / (1024**3)
@@ -188,11 +189,9 @@ def get_system_memory_gb() -> float:
     return get_host_ram_gb()
 
 
-HOST_RAM_GB: float = get_host_ram_gb()
-SYSTEM_MEMORY_GB: float = get_system_memory_gb()
-# Evaluating BiRefNet_HR at 2048x2048 allocates >6 GB of intermediate attention feature
-# pyramids; on 8 GB systems, 1536x1536 (2.25x pixel density of 1024x1024) prevents swap thrashing.
-HR_RESOLUTION: int = 2048 if SYSTEM_MEMORY_GB >= 14.0 else 1536
+# ---------------------------------------------------------------------------
+# Model Registry
+# ---------------------------------------------------------------------------
 
 # Supported Hugging Face model repositories. Each key maps to a distinct official
 # BiRefNet checkpoint from ZhengPeng7.
@@ -208,93 +207,107 @@ MODELS: dict[str, str] = {
 LEGACY_MATTING_REPO = "ZhengPeng7/BiRefNet-matting"
 
 
-# Selectable BiRefNet models exposed in the UI and `/api/status`.
-TIERS: dict[str, dict[str, Any]] = {
-    "lite": {
-        "label": "Lite",
-        "tech_name": "BiRefNet_lite",
-        "sublabel": "1K Fast",
-        "model_key": "lite",
-        "repo_id": MODELS["lite"],
-        "expected_bytes": 177742341,
-        "resolution": 1024,
-        "dynamic": False,
-        "description": (
-            "BiRefNet_lite (Swin-T @ 1024px). Fast general cutouts for quick batches, "
-            "CPUs, and integrated graphics."
-        ),
-    },
-    "general": {
-        "label": "General",
-        "tech_name": "BiRefNet",
-        "sublabel": "1K Studio",
-        "model_key": "general",
-        "repo_id": MODELS["general"],
-        "expected_bytes": 444584498,
-        "resolution": 1024,
-        "dynamic": False,
-        "description": (
-            "BiRefNet (Swin-L @ 1024px). All-round flagship for products, objects, "
-            "animals, and everyday photography."
-        ),
-    },
-    "hr": {
-        "label": "Ultra HR",
-        "tech_name": "BiRefNet_HR",
-        "sublabel": f"2K {HR_RESOLUTION}px",
-        "model_key": "hr",
-        "repo_id": MODELS["hr"],
-        "expected_bytes": 444583809,
-        "resolution": HR_RESOLUTION,
-        "dynamic": False,
-        "description": (
-            f"BiRefNet_HR (Swin-L @ {HR_RESOLUTION}px). Native 2K inference for 4K/8K "
-            "photography and intricate micro-edge detail."
-        ),
-    },
-    "portrait": {
-        "label": "Portrait",
-        "tech_name": "BiRefNet-portrait",
-        "sublabel": "1K People",
-        "model_key": "portrait",
-        "repo_id": MODELS["portrait"],
-        "expected_bytes": 884984566,
-        "resolution": 1024,
-        "dynamic": False,
-        "description": (
-            "BiRefNet-portrait (Swin-L @ 1024px). Fine-tuned for human subjects, "
-            "headshots, flyaway hair strands, eyelashes, and clothing."
-        ),
-    },
-    "matting": {
-        "label": "Matting",
-        "tech_name": "BiRefNet_HR-matting",
-        "sublabel": "2K Alpha",
-        "model_key": "matting",
-        "repo_id": MODELS["matting"],
-        "expected_bytes": 444584399,
-        "resolution": HR_RESOLUTION,
-        "dynamic": False,
-        "description": (
-            f"BiRefNet_HR-matting (Swin-L @ {HR_RESOLUTION}px). High-resolution soft alpha "
-            "matting for glass, smoke, veils, sheer fabric, and fine hair."
-        ),
-    },
-    "dynamic": {
-        "label": "Dynamic",
-        "tech_name": "BiRefNet_dynamic",
-        "sublabel": "Native Ratio",
-        "model_key": "dynamic",
-        "repo_id": MODELS["dynamic"],
-        "expected_bytes": 444584549,
-        "resolution": HR_RESOLUTION,
-        "dynamic": True,
-        "description": (
-            "BiRefNet_dynamic (Swin-L). Preserves native aspect ratio up to 2K without "
-            "square distortion, ideal for panoramas and vertical banners."
-        ),
-    },
-}
+def _build_tiers(hr_resolution: int) -> dict[str, dict[str, Any]]:
+    """
+    Builds the selectable BiRefNet model registry exposed in the UI and
+    `/api/status`. The 2K tiers take `hr_resolution` so the table can be built
+    before torch is importable and corrected once real device memory is known.
+    """
+    return {
+        "lite": {
+            "label": "Lite",
+            "tech_name": "BiRefNet_lite",
+            "sublabel": "1K Fast",
+            "model_key": "lite",
+            "repo_id": MODELS["lite"],
+            "expected_bytes": 177742341,
+            "resolution": 1024,
+            "dynamic": False,
+            "description": (
+                "BiRefNet_lite (Swin-T @ 1024px). Fast general cutouts for quick batches, "
+                "CPUs, and integrated graphics."
+            ),
+        },
+        "general": {
+            "label": "General",
+            "tech_name": "BiRefNet",
+            "sublabel": "1K Studio",
+            "model_key": "general",
+            "repo_id": MODELS["general"],
+            "expected_bytes": 444584498,
+            "resolution": 1024,
+            "dynamic": False,
+            "description": (
+                "BiRefNet (Swin-L @ 1024px). All-round flagship for products, objects, "
+                "animals, and everyday photography."
+            ),
+        },
+        "hr": {
+            "label": "Ultra HR",
+            "tech_name": "BiRefNet_HR",
+            "sublabel": f"2K {hr_resolution}px",
+            "model_key": "hr",
+            "repo_id": MODELS["hr"],
+            "expected_bytes": 444583809,
+            "resolution": hr_resolution,
+            "dynamic": False,
+            "description": (
+                f"BiRefNet_HR (Swin-L @ {hr_resolution}px). Native 2K inference for 4K/8K "
+                "photography and intricate micro-edge detail."
+            ),
+        },
+        "portrait": {
+            "label": "Portrait",
+            "tech_name": "BiRefNet-portrait",
+            "sublabel": "1K People",
+            "model_key": "portrait",
+            "repo_id": MODELS["portrait"],
+            "expected_bytes": 884984566,
+            "resolution": 1024,
+            "dynamic": False,
+            "description": (
+                "BiRefNet-portrait (Swin-L @ 1024px). Fine-tuned for human subjects, "
+                "headshots, flyaway hair strands, eyelashes, and clothing."
+            ),
+        },
+        "matting": {
+            "label": "Matting",
+            "tech_name": "BiRefNet_HR-matting",
+            "sublabel": "2K Alpha",
+            "model_key": "matting",
+            "repo_id": MODELS["matting"],
+            "expected_bytes": 444584399,
+            "resolution": hr_resolution,
+            "dynamic": False,
+            "description": (
+                f"BiRefNet_HR-matting (Swin-L @ {hr_resolution}px). High-resolution soft alpha "
+                "matting for glass, smoke, veils, sheer fabric, and fine hair."
+            ),
+        },
+        "dynamic": {
+            "label": "Dynamic",
+            "tech_name": "BiRefNet_dynamic",
+            "sublabel": "Native Ratio",
+            "model_key": "dynamic",
+            "repo_id": MODELS["dynamic"],
+            "expected_bytes": 444584549,
+            "resolution": hr_resolution,
+            "dynamic": True,
+            "description": (
+                "BiRefNet_dynamic (Swin-L). Preserves native aspect ratio up to 2K without "
+                "square distortion, ideal for panoramas and vertical banners."
+            ),
+        },
+    }
+
+
+# Evaluating BiRefNet_HR at 2048x2048 allocates >6 GB of intermediate attention feature
+# pyramids; on 8 GB systems, 1536x1536 (2.25x pixel density of 1024x1024) prevents swap
+# thrashing. Built eagerly from host RAM (torch-free); `ensure_runtime` corrects the
+# 2K tiers once the CUDA-aware device-memory value is known.
+_HOST_HR_RESOLUTION: int = 2048 if HOST_RAM_GB >= 14.0 else 1536
+
+TIERS: dict[str, dict[str, Any]] = _build_tiers(_HOST_HR_RESOLUTION)
 
 
 # ---------------------------------------------------------------------------
@@ -309,6 +322,8 @@ def detect_compute_device() -> torch.device:
     2. Apple Silicon Metal Performance Shaders (`mps`)
     3. Multi-threaded Host CPU (`cpu`)
     """
+    import torch
+
     if torch.cuda.is_available():
         return torch.device("cuda")
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
@@ -318,6 +333,8 @@ def detect_compute_device() -> torch.device:
 
 def format_device_label(device: torch.device) -> str:
     """Returns an ASCII-safe hardware identifier for UI telemetry and HTTP headers."""
+    import torch
+
     if device.type == "cuda":
         try:
             return f"CUDA / {torch.cuda.get_device_name(0)}"
@@ -341,7 +358,7 @@ def format_device_label(device: torch.device) -> str:
     return f"CPU / {cpu_name}"
 
 
-def select_recommended_tier(device: torch.device) -> str:
+def select_recommended_tier(device: torch.device, system_memory_gb: float) -> str:
     """
     Heuristically chooses the default model at startup:
     - CPU hosts and machines with < 10 GB of unified/system RAM default to
@@ -349,10 +366,12 @@ def select_recommended_tier(device: torch.device) -> str:
     - Dedicated CUDA GPUs with >= 16 GB VRAM default to 'hr' (2048x2048 BiRefNet_HR).
     - All other GPU/MPS accelerators default to 'general' (1024x1024 BiRefNet Swin-L).
     """
-    if device.type == "cpu" or SYSTEM_MEMORY_GB < 10.0:
+    if device.type == "cpu" or system_memory_gb < 10.0:
         return "lite"
     if device.type == "cuda":
         try:
+            import torch
+
             vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
             if vram_gb >= 16.0:
                 return "hr"
@@ -361,14 +380,76 @@ def select_recommended_tier(device: torch.device) -> str:
     return "general"
 
 
-DEVICE: torch.device = detect_compute_device()
-DEVICE_LABEL: str = format_device_label(DEVICE)
+# ---------------------------------------------------------------------------
+# Deferred Hardware Runtime
+# ---------------------------------------------------------------------------
+# `torch` and every value derived from it (device, precision, recommended tier,
+# the 2K tier resolutions) load lazily via `ensure_runtime`, so importing
+# `openbgr.config` stays cheap for the server bind path: the desktop window
+# opens while a background thread materializes the runtime. First access to
+# any attribute below (including `from .config import DEVICE`) triggers the
+# same one-time initialization.
 
-# Use FP16 half-precision on GPU accelerators (CUDA / MPS) to halve memory usage
-# and maximize tensor throughput; retain FP32 on CPU for numerical compatibility.
-DTYPE: torch.dtype = torch.float16 if DEVICE.type in ("mps", "cuda") else torch.float32
-PRECISION_LABEL: str = "FP16" if DTYPE == torch.float16 else "FP32"
-RECOMMENDED_TIER: str = select_recommended_tier(DEVICE)
+_RUNTIME_ATTRS = frozenset(
+    {
+        "DEVICE",
+        "DEVICE_LABEL",
+        "DTYPE",
+        "PRECISION_LABEL",
+        "RECOMMENDED_TIER",
+        "SYSTEM_MEMORY_GB",
+        "HR_RESOLUTION",
+    }
+)
+_runtime_lock = threading.Lock()
+_runtime_ready = False
+
+
+def ensure_runtime() -> None:
+    """
+    Imports torch once, sizes intra-op CPU parallelism, detects the compute
+    device, and materializes `DEVICE`, `DEVICE_LABEL`, `DTYPE`,
+    `PRECISION_LABEL`, `RECOMMENDED_TIER`, `SYSTEM_MEMORY_GB`, and
+    `HR_RESOLUTION` as module globals. Idempotent and thread-safe.
+    """
+    global _runtime_ready
+    with _runtime_lock:
+        if _runtime_ready:
+            return
+        import torch
+
+        _cpu_count = os.cpu_count()
+        if _cpu_count:
+            torch.set_num_threads(min(8, _cpu_count))
+
+        device = detect_compute_device()
+        system_memory_gb = get_system_memory_gb()
+        hr_resolution = 2048 if system_memory_gb >= 14.0 else 1536
+        dtype = torch.float16 if device.type in ("mps", "cuda") else torch.float32
+        globals().update(
+            DEVICE=device,
+            DEVICE_LABEL=format_device_label(device),
+            DTYPE=dtype,
+            PRECISION_LABEL="FP16" if dtype == torch.float16 else "FP32",
+            RECOMMENDED_TIER=select_recommended_tier(device, system_memory_gb),
+            SYSTEM_MEMORY_GB=system_memory_gb,
+            HR_RESOLUTION=hr_resolution,
+        )
+        if hr_resolution != _HOST_HR_RESOLUTION:
+            # The eager TIERS table guessed from host RAM alone; a small-VRAM
+            # CUDA host needs the lower 2K resolution. update() keeps the dict
+            # object identity, so every `from .config import TIERS` consumer
+            # (and any sub-dict read at call time) sees the corrected values.
+            TIERS.update(_build_tiers(hr_resolution))
+        _runtime_ready = True
+
+
+def __getattr__(name: str) -> Any:
+    """Materializes the torch-derived runtime values on first access."""
+    if name in _RUNTIME_ATTRS:
+        ensure_runtime()
+        return globals()[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -410,13 +491,17 @@ def _dir_tree_bytes(root: Path, skip_top_dirs: set[str] | None = None) -> int:
 
 def _refresh_app_venv_bytes() -> None:
     """Sizes `.venv` and `node_modules` off the request path for `get_app_disk_bytes`."""
-    global _APP_VENV_BYTES
+    global _APP_VENV_BYTES, _APP_DISK_CACHE
     total = 0
     for name in (".venv", "node_modules"):
         sub = BASE_DIR / name
         if sub.is_dir():
             total += _dir_tree_bytes(sub)
     _APP_VENV_BYTES = total
+    # The first `get_app_disk_bytes` call may have cached a total without these
+    # trees; drop it so the next poll reports the complete size.
+    with _APP_DISK_LOCK:
+        _APP_DISK_CACHE = (0.0, 0)
 
 
 def get_app_disk_bytes() -> int:

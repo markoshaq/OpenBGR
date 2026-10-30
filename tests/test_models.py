@@ -308,6 +308,63 @@ class TestModelManagerConcurrency(unittest.TestCase):
             self.assertEqual(snap["model_key"], "portrait")
         self.assertFalse(models_mod.model_download_active())
 
+    def test_warm_device_kernels_runs_and_respects_gate(self) -> None:
+        """The kernel warmup runs one small forward; skips on CPU and while a job runs."""
+        import torch
+
+        import openbgr.config as config_mod
+
+        calls: list[tuple[int, ...]] = []
+
+        class _Tiny(torch.nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.conv = torch.nn.Conv2d(3, 2, 3, padding=1)
+
+            def forward(self, x: torch.Tensor) -> list[torch.Tensor]:
+                calls.append(tuple(x.shape))
+                return [x]
+
+        model = _Tiny()
+        cpu = torch.device("cpu")
+
+        # Forced run on any platform: one dummy pass with the documented shape.
+        with patch.object(config_mod, "DEVICE", cpu):
+            models_mod.warm_device_kernels(model, device_types=("cpu",))
+        self.assertEqual(calls, [(1, 3, 512, 512)])
+
+        # Default gate skips CPU-only hosts (nothing to compile there).
+        calls.clear()
+        with patch.object(config_mod, "DEVICE", cpu):
+            models_mod.warm_device_kernels(model)
+        self.assertEqual(calls, [])
+
+        # A running job blocks the warmup (it would only add queue delay).
+        calls.clear()
+        with (
+            patch.object(config_mod, "DEVICE", cpu),
+            models_mod.JOB_PROGRESS_LOCK,
+        ):
+            models_mod.JOB_PROGRESS["phase"] = "inference"
+        try:
+            with patch.object(config_mod, "DEVICE", cpu):
+                models_mod.warm_device_kernels(model, device_types=("cpu",))
+            self.assertEqual(calls, [])
+        finally:
+            models_mod.set_job_phase("idle")
+
+        # Best-effort contract: a failing forward never propagates.
+        class _Boom(torch.nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.conv = torch.nn.Conv2d(3, 2, 3, padding=1)
+
+            def forward(self, x: torch.Tensor) -> list[torch.Tensor]:
+                raise RuntimeError("boom")
+
+        with patch.object(config_mod, "DEVICE", cpu):
+            models_mod.warm_device_kernels(_Boom(), device_types=("cpu",))
+
     def test_uninstall_conflict_guards_and_lock_ordering(self) -> None:
         """`api_uninstall_model` returns HTTP 409 without deadlocking under held locks."""
         mgr = models_mod.MANAGER

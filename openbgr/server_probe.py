@@ -13,12 +13,26 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .settings import API_TOKEN_HEADER, read_api_token
+from .settings import API_TOKEN_HEADER, IMAGE_EXTENSIONS, read_api_token
 
 
 def server_port() -> str:
     """Port the OpenBGR server listens on: `OPENBGR_PORT`, then generic `PORT`."""
     return os.environ.get("OPENBGR_PORT") or os.environ.get("PORT") or "7860"
+
+
+def server_listening(host: str, port: int, timeout_s: float = 0.3) -> bool:
+    """
+    Single-shot TCP connect probe: True only when something accepts right now.
+    A refused connection fails in microseconds on loopback, so cold-start
+    callers pay nothing (unlike `wait_for_server`, which retries to its
+    deadline because it legitimately waits for a server that is coming up).
+    """
+    try:
+        with socket.create_connection((host, port), timeout=timeout_s):
+            return True
+    except OSError:
+        return False
 
 
 def wait_for_server(host: str, port: int, timeout_s: float = 15.0) -> bool:
@@ -74,22 +88,33 @@ def is_openbgr_server(url: str, timeout_s: float = 10.0) -> bool:
     """
     Verifies that whatever is listening on the port is actually OpenBGR's API;
     guards against opening a foreign service when the port is already in use.
+
+    Probes `/api/progress` rather than `/api/status`: the progress endpoint is
+    runtime-free, so it answers instantly even while a freshly started server
+    is still importing torch in its warmup thread (a `/api/status` probe would
+    block on that warmup and delay the desktop window by the whole import).
+    A connection refusal means nothing is listening, so no retry can help:
+    return immediately instead of polling to the deadline (which used to cost
+    every cold Quick Action ~1.5 s).
     """
     import urllib.error
     import urllib.request
 
+    # Mirrors `openbgr.models._VALID_PHASES`; duplicated because this module
+    # must stay stdlib-only.
+    phases = {"idle", "download", "load", "inference"}
     deadline = time.perf_counter() + timeout_s
     while time.perf_counter() < deadline:
         try:
-            with urllib.request.urlopen(f"{url}/api/status", timeout=3) as res:
+            with urllib.request.urlopen(f"{url}/api/progress", timeout=3) as res:
                 payload = json.loads(res.read().decode("utf-8"))
-                return (
-                    isinstance(payload, dict)
-                    and payload.get("app") == "openbgr"
-                    and "tiers" in payload
-                )
+                return isinstance(payload, dict) and payload.get("phase") in phases
         except urllib.error.HTTPError:
             return False
+        except urllib.error.URLError as exc:
+            if isinstance(exc.reason, ConnectionRefusedError):
+                return False
+            time.sleep(0.15)
         except Exception:
             time.sleep(0.15)
     return False
@@ -108,12 +133,21 @@ def delegate_quick_action_to_server(inputs: list[str]) -> dict[str, Any] | None:
     import urllib.parse
     import urllib.request
 
+    # Same image filter as `queue_open_files`: right-clicking a non-image (or
+    # a path that no longer exists) must not POST junk to a warm server.
     resolved = [
-        str(Path(p).expanduser().resolve()) for p in inputs if Path(p).expanduser().is_file()
+        str(Path(p).expanduser().resolve())
+        for p in inputs
+        if Path(p).expanduser().is_file()
+        and Path(p).expanduser().suffix.lower() in IMAGE_EXTENSIONS
     ]
     if not resolved:
         return None
     api = f"http://127.0.0.1:{server_port()}"
+    # Refused connections fail instantly, so this costs nothing on a cold
+    # start; a live server answers on the first attempt either way.
+    if not server_listening("127.0.0.1", int(server_port())):
+        return None
     try:
         if not is_openbgr_server(api, timeout_s=1.5):
             return None

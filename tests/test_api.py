@@ -63,6 +63,43 @@ class TestApiContracts(unittest.TestCase):
         self.assertEqual(dyn_h % 32, 0)
         self.assertGreater(dyn_w, dyn_h)
 
+    def test_app_disk_cache_refreshes_when_venv_sizing_lands(self) -> None:
+        """The 60s app-size cache drops when the background `.venv` sizing completes."""
+        saved = (
+            config_mod._APP_DISK_CACHE,
+            config_mod._APP_VENV_BYTES,
+            config_mod._APP_VENV_STARTED,
+        )
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                cfg_dir = Path(tmp) / "cfg"
+                cfg_dir.mkdir()
+
+                def fake_tree(_root: Path, skip_top_dirs: set[str] | None = None) -> int:
+                    return 1000
+
+                with (
+                    patch.object(config_mod, "_dir_tree_bytes", fake_tree),
+                    patch.object(config_mod, "APP_CONFIG_DIR", cfg_dir),
+                ):
+                    config_mod._APP_DISK_CACHE = (0.0, 0)
+                    config_mod._APP_VENV_BYTES = None
+                    config_mod._APP_VENV_STARTED = False
+                    first = config_mod.get_app_disk_bytes()
+                    self.assertGreater(first, 0)
+                    # Background sizing completes and must invalidate the
+                    # stale first-poll cache so the next call includes it.
+                    config_mod._refresh_app_venv_bytes()
+                    self.assertGreater(config_mod._APP_VENV_BYTES or 0, 0)
+                    second = config_mod.get_app_disk_bytes()
+                    self.assertEqual(second, first + (config_mod._APP_VENV_BYTES or 0))
+        finally:
+            (
+                config_mod._APP_DISK_CACHE,
+                config_mod._APP_VENV_BYTES,
+                config_mod._APP_VENV_STARTED,
+            ) = saved
+
     def test_api_refine_endpoint(self) -> None:
         """`/api/refine` re-composes cached multi-tab jobs, evicts over-budget entries, and 409s on misses."""
         rgb = np.full((24, 24, 3), (30, 180, 90), dtype=np.uint8)
@@ -400,7 +437,10 @@ class TestApiContracts(unittest.TestCase):
         sentinel = object()
         fake_mod = types.SimpleNamespace(tqdm=sentinel)
         original_mod = models_mod._HF_TQDM_MODULE
+        original_unresolved = models_mod._HF_TQDM_UNRESOLVED
         try:
+            # Resolution already happened: the module attribute is authoritative.
+            models_mod._HF_TQDM_UNRESOLVED = False
             models_mod._HF_TQDM_MODULE = fake_mod
             with models_mod.track_model_download("general"):
                 self.assertIs(fake_mod.tqdm, models_mod._JobDownloadTqdm)
@@ -417,6 +457,7 @@ class TestApiContracts(unittest.TestCase):
             self.assertTrue(any("tqdm" in out for out in logs.output))
         finally:
             models_mod._HF_TQDM_MODULE = original_mod
+            models_mod._HF_TQDM_UNRESOLVED = original_unresolved
             models_mod.set_job_phase("idle")
 
     def test_apply_offline_mode_reports_unapplied_layers(self) -> None:
@@ -508,6 +549,14 @@ class TestApiEndpoints(unittest.TestCase):
             ).status_code,
             403,
         )
+
+    def test_non_ascii_token_header_rejected_cleanly(self) -> None:
+        """A non-ASCII token header is a clean 403, not a 500 from compare_digest."""
+        # httpx only accepts ascii/bytes header values; raw latin-1 bytes are
+        # what a hostile client would put on the wire, and Starlette decodes
+        # them into a non-ASCII str.
+        res = self.client.post("/api/cancel", headers={config_mod.API_TOKEN_HEADER: b"t\xf6k\xebn"})
+        self.assertEqual(res.status_code, 403)
 
     def test_foreign_host_header_rejected(self) -> None:
         """Non-loopback Host headers get HTTP 400 and never receive the token page."""

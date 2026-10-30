@@ -53,6 +53,15 @@ set "ICON_REF=%APPEXE%"
 if exist "%ICO%" set "ICON_REF=%ICO%"
 set "BASE=HKCU\Software\Classes\SystemFileAssociations\image\shell"
 
+rem --- Open With dialog listing -----------------------------------------------
+rem Registers the exe as an application so "Open With" lists OpenBGR for
+rem images (GIF/WebP included) without the user browsing for it first.
+reg add "HKCU\Software\Classes\Applications\OpenBGR.exe" /v FriendlyAppName /d "OpenBGR" /f >nul
+reg add "HKCU\Software\Classes\Applications\OpenBGR.exe\shell\open\command" /ve /d "\"%APPEXE%\" \"%%1\"" /f >nul
+for %%E in (.png .jpg .jpeg .webp .bmp .gif .tif .tiff) do (
+    reg add "HKCU\Software\Classes\Applications\OpenBGR.exe\SupportedTypes\%%E" /ve /d "" /f >nul
+)
+
 rem --- "Remove Background with OpenBGR" (headless cutout) ---------------------
 reg add "%BASE%\OpenBGR.RemoveBG" /v MUIVerb /d "Remove Background with OpenBGR" /f >nul
 reg add "%BASE%\OpenBGR.RemoveBG" /v Icon /d "\"%ICON_REF%\"" /f >nul

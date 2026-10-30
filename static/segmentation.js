@@ -35,7 +35,7 @@ export function initSegmentation(ops) {
   tabOps = ops;
 }
 import { updateExportTelemetry, applyScaleValue } from "./export-ui.js";
-import { warmBlobAlphaBBox } from "./export.js";
+import { warmBlobAlphaBBox } from "./alpha-bbox.js";
 import {
   syncServerStatus,
   isModelInstallInProgress,
@@ -447,7 +447,7 @@ async function runAnimatedSegmentation(controller) {
 
   // Land on a processed frame: the current one may sit outside the trim
   // range and carry no cutout, which would leave EXPORT disabled.
-  const curIdx = Math.max(0, Math.min(total - 1, state.currentFrameIndex));
+  const curIdx = Math.max(0, Math.min(frames.length - 1, state.currentFrameIndex));
   const targetIdx = frames[curIdx]?.resultBlob ? curIdx : startIdx;
   const targetUrl = frames[targetIdx]?.resultObjectUrl;
   if (targetUrl) {

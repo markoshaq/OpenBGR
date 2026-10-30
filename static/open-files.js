@@ -209,11 +209,18 @@ export function pendingFilesPollMs() {
 
 /**
  * Ingests OS-delivered files once the bridge is up, then keeps polling so
- * files sent to an already-running instance arrive too. Returns the interval id.
+ * files sent to an already-running instance arrive too. Re-reads the cadence
+ * every tick: the pywebview bridge arrives asynchronously after boot, so the
+ * slow desktop pace only applies once it actually exists. Returns the timer id.
  */
 export function startPendingFilesPoll() {
-  pullPendingFiles();
-  return setInterval(pullPendingFiles, pendingFilesPollMs());
+  let timer = null;
+  const tick = () => {
+    pullPendingFiles();
+    timer = setTimeout(tick, pendingFilesPollMs());
+  };
+  tick();
+  return timer;
 }
 
 /** Wires the Open buttons, hidden file input, and window/tab-bar drop targets. */

@@ -580,6 +580,9 @@ export async function importModelFromFolder() {
 export async function syncServerStatus(isInitialLoad = false, onSelectTier = null) {
   try {
     const response = await apiFetch("/api/status");
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
     state.serverStatus = await response.json();
 
     const { device_label, precision, ram_label, ram_gb, recommended_tier, version } =

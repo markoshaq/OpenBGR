@@ -17,8 +17,6 @@ import webbrowser
 from pathlib import Path
 from typing import Any
 
-from huggingface_hub.constants import HF_HUB_CACHE
-
 from .config import (
     APP_CONFIG_DIR,
     logger,
@@ -419,6 +417,8 @@ class DesktopApi(ClipboardMixin):
 
     def open_cache_dir(self) -> dict[str, Any]:
         """Opens the Hugging Face model cache directory in the system file manager."""
+        from huggingface_hub.constants import HF_HUB_CACHE
+
         cache_path = Path(HF_HUB_CACHE)
         return {
             "opened": open_folder_in_file_manager(cache_path),

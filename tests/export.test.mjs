@@ -26,12 +26,14 @@ const { state, dom, masterCutoutImg, DEFAULT_CROP_PADDING } = await import(
 const { buildZip, createZipWriter } = await import("../static/zip.js");
 const {
   buildBatchExportBlob,
-  scanAlphaBBoxFromPixels,
   expandCropBox,
   getActiveCropRect,
   getExportBaseDims,
   updateLiveStagePreview,
 } = await import("../static/export.js");
+const { scanAlphaBBoxFromPixels, warmBlobAlphaBBox } = await import(
+  "../static/alpha-bbox.js"
+);
 const {
   updateCropGuide,
   updateExportTelemetry,
@@ -186,28 +188,6 @@ test("buildBatchExportBlob renders an 8-bit alpha mask for mask format", async (
   assert.ok(out.size > 0);
 });
 
-test("scanAlphaBBoxFromPixels finds the tight foreground box and ignores faint dust", () => {
-  const w = 10;
-  const h = 8;
-  const data = new Uint8ClampedArray(w * h * 4);
-  // Faint 2/255 alpha speck at (0, 0) is below the threshold (4) and ignored.
-  data[3] = 2;
-  // Subject pixels at (2, 1) and (6, 5).
-  data[(1 * w + 2) * 4 + 3] = 200;
-  data[(5 * w + 6) * 4 + 3] = 255;
-
-  assert.deepEqual(scanAlphaBBoxFromPixels(data, w, h, 4), {
-    x: 2,
-    y: 1,
-    w: 5,
-    h: 5,
-  });
-  assert.deepEqual(
-    scanAlphaBBoxFromPixels(new Uint8ClampedArray(w * h * 4), w, h, 4),
-    { x: 0, y: 0, w: 10, h: 8 }
-  );
-});
-
 test("expandCropBox adds symmetric padding based on the longest side", () => {
   const tight = { x: 50, y: 40, w: 100, h: 200 };
   assert.deepEqual(expandCropBox(tight, 0), tight);
@@ -276,6 +256,105 @@ test("getExportBaseDims, updateCropGuide, and buildBatchExportBlob handle autoCr
   assert.equal(out.type, "image/png");
   // Fake bitmap is 320x240 with empty alpha (full-frame box); 5% of 320 = 16px per side.
   assert.equal(await out.text(), "352x272");
+});
+
+test("crop guide tracks the placed crop under aspect presets and canvas fit", async () => {
+  state.naturalWidth = 100;
+  state.naturalHeight = 80;
+  state.resultBlob = new Blob([enc.encode("png")], { type: "image/png" });
+  masterCutoutImg.src = "blob:test-cutout-guide";
+  state.shadowCutoff = 0;
+  state.viewMode = "split";
+  state.autoCrop = true;
+  state.cropPadding = 0;
+
+  // Square preset on a 5:4 frame: the stage shows the crop placed inside the
+  // 100x100 canvas (fit, centered) letterboxed back to the source aspect, so
+  // the dashed box sits at the pillarbox bands plus the fit margins.
+  applyExportSizePreset(100, 100);
+  assert.equal(dom.cropGuide.dataset.inset, "10% 10% 10% 10%");
+
+  // Stretch maps the crop to the whole export canvas: only the pillarbox
+  // bands remain outside the dashed box.
+  setCanvasFit("stretch");
+  assert.equal(dom.cropGuide.dataset.inset, "0% 10% 0% 10%");
+
+  // Back to the source aspect: the guide returns to the full-frame position.
+  setCanvasFit("fit");
+  resetExportSize();
+  assert.equal(dom.cropGuide.dataset.inset, "0% 0% 0% 0%");
+
+  state.autoCrop = false;
+  // Let the debounced preview render from the telemetry updates settle.
+  await new Promise((r) => setTimeout(r, 250));
+});
+
+test("animated tabs read the union of trimmed frame boxes, not one frame's crop", async () => {
+  // Feed computeAlphaBBox per-call alpha patterns so each frame caches a
+  // different subject box.
+  const realCreate = document.createElement.bind(document);
+  let alphaBox = null;
+  document.createElement = (tag) => {
+    const el = realCreate(tag);
+    if (tag === "canvas" && alphaBox) {
+      el._ctx.getImageData = (x, y, w, h) => {
+        const data = new Uint8ClampedArray(w * h * 4);
+        for (let yy = alphaBox.y; yy < alphaBox.y + alphaBox.h; yy++) {
+          for (let xx = alphaBox.x; xx < alphaBox.x + alphaBox.w; xx++) {
+            data[(yy * w + xx) * 4 + 3] = 255;
+          }
+        }
+        return { data };
+      };
+    }
+    return el;
+  };
+
+  state.isAnimated = true;
+  state.naturalWidth = 100;
+  state.naturalHeight = 80;
+  state.startFrame = 1;
+  state.endFrame = 2;
+  state.autoCrop = true;
+  state.cropPadding = 0;
+  state.shadowCutoff = 0;
+  const blobA = new Blob([enc.encode("fa")], { type: "image/png" });
+  const blobB = new Blob([enc.encode("fb")], { type: "image/png" });
+  state.frames = [
+    { resultBlob: blobA, resultObjectUrl: "blob:fa" },
+    { resultBlob: blobB, resultObjectUrl: "blob:fb" },
+  ];
+  state.resultBlob = blobA;
+
+  try {
+    alphaBox = { x: 10, y: 10, w: 20, h: 20 };
+    await warmBlobAlphaBBox(blobA, 100, 80, 0);
+    alphaBox = { x: 50, y: 40, w: 20, h: 20 };
+    await warmBlobAlphaBBox(blobB, 100, 80, 0);
+  } finally {
+    alphaBox = null;
+    document.createElement = realCreate;
+  }
+
+  // The union spans both frames' subjects; the current frame's box alone
+  // would report 20x20.
+  assert.deepEqual(getActiveCropRect(), { x: 10, y: 10, w: 60, h: 50 });
+  assert.deepEqual(getExportBaseDims(), { w: 60, h: 50 });
+
+  // Padding applies to the union, not per frame.
+  state.cropPadding = 10;
+  assert.deepEqual(getActiveCropRect(), { x: 4, y: 4, w: 72, h: 62 });
+  state.cropPadding = 0;
+
+  // Outside the trim range the excluded frame's box does not contribute.
+  state.endFrame = 1;
+  assert.deepEqual(getActiveCropRect(), { x: 10, y: 10, w: 20, h: 20 });
+  state.endFrame = 2;
+
+  // Still tabs keep the single-frame path.
+  state.isAnimated = false;
+  assert.deepEqual(getActiveCropRect(), { x: 10, y: 10, w: 20, h: 20 });
+  state.autoCrop = false;
 });
 
 test("getActiveCropRect falls back to the full frame when the cutout is not decoded", () => {

@@ -2,15 +2,32 @@
 
 ## [0.12.1]
 
+### Added
+
+- Much faster startup: the window opens almost instantly while the AI engine loads in the background
+- First processing run after launch is up to 1.7s faster: the one-time engine warmup runs in the background
+- Windows: OpenBGR now appears in the Open With dialog for images, GIF and WebP included; re-run the context-menu installer to get it
+
 ### Fixed
 
-- Sending an animated tab to a batch no longer leaves the animation dock visible or writes PNG bytes to .gif files; the converted tab drops its frame state and GIF export format
-- The batch-complete summary now renders the saved location on its own line instead of collapsing it into the sentence
-- A failing batch run can no longer leave the busy overlay and progress polling stuck on
-- Holding Space for pan mode no longer stays armed after the window loses focus
+- Processing an animated tab no longer ends in a false error, and frame cutouts survive setting changes
+- Auto-Crop on animated tabs now matches the GIF export and follows trim changes
+- The auto-crop guide follows aspect preset and canvas fit changes
+- Exporting frames individually without a chosen folder no longer fails to build the ZIP
+- Sending an animated tab to a batch no longer leaves the animation dock visible or writes PNG bytes into .gif files
+- A failed batch run no longer leaves the busy overlay stuck
+- The batch-complete summary puts the saved location on its own line
+- Holding Space for pan no longer stays armed after the window loses focus
 - Importing a model folder with a non-object config.json no longer errors
 - Failed or cancelled inference no longer keeps a full-resolution image buffer in memory
+- Cold Open With launches and right-click Quick Actions no longer waste up to 1.5s probing for a server that is not running
+- Right-clicking images while the app is still launching now reuses the warming engine instead of cold-starting a second one
+- The Settings storage summary no longer underreports the app size right after launch
+- Model size lookups no longer retry every minute when the network cannot answer
+- Closing a tab that is processing now dismisses its open confirmation dialog
+- Double-clicking RUN BATCH can no longer open two destination pickers
 - `OPENBGR_PORT` is honored consistently by the server and its warm-instance probes
+- Malformed session token headers now get a clean rejection instead of a server error
 
 ### Security
 

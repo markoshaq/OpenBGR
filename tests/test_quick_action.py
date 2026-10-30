@@ -187,7 +187,8 @@ class TestQuickAction(unittest.TestCase):
         cli.assert_called_once()
         self.assertEqual(cli.call_args.args[0], ["photo.png"])
 
-        # is_openbgr_server requires the "app": "openbgr" marker, not just "tiers".
+        # is_openbgr_server fingerprints the runtime-free /api/progress payload,
+        # not /api/status (whose hardware fields wait on the torch warmup).
         class _FakeResp:
             def __init__(self, body: bytes) -> None:
                 self._body = body
@@ -203,12 +204,12 @@ class TestQuickAction(unittest.TestCase):
 
         with patch(
             "urllib.request.urlopen",
-            return_value=_FakeResp(b'{"tiers": {}}'),
+            return_value=_FakeResp(b'{"phase": "unknown-thing"}'),
         ):
             self.assertFalse(probe_mod.is_openbgr_server("http://127.0.0.1:7860", timeout_s=0.05))
         with patch(
             "urllib.request.urlopen",
-            return_value=_FakeResp(b'{"app": "openbgr", "tiers": {}}'),
+            return_value=_FakeResp(b'{"phase": "idle"}'),
         ):
             self.assertTrue(probe_mod.is_openbgr_server("http://127.0.0.1:7860", timeout_s=0.05))
 
@@ -223,7 +224,7 @@ class TestQuickAction(unittest.TestCase):
         mock_exit.assert_called_once_with(128 + signal.SIGINT)
 
     def test_thin_client_paths_do_not_import_torch(self) -> None:
-        """Importing `app`, `--help`, and warm-server delegation stay stdlib-only."""
+        """Importing `app`, `--help`, warm-server delegation, and `openbgr.api` stay ML-free."""
         import subprocess
         import sys
 
@@ -241,6 +242,15 @@ class TestQuickAction(unittest.TestCase):
                 "except SystemExit as e:",
                 "    assert e.code == 0",
                 "assert 'torch' not in sys.modules, 'delegated quick-action loaded torch'",
+                # The API surface itself must stay ML-free at import: the
+                # desktop window is gated on the server binding, so every
+                # second of import here is a second before the window opens.
+                "import openbgr.api",
+                "assert 'torch' not in sys.modules, 'import openbgr.api loaded torch'",
+                "assert 'transformers' not in sys.modules, 'import openbgr.api loaded transformers'",
+                "assert 'torchvision' not in sys.modules, 'import openbgr.api loaded torchvision'",
+                "assert 'scipy' not in sys.modules, 'import openbgr.api loaded scipy'",
+                "assert 'huggingface_hub' not in sys.modules, 'import openbgr.api loaded huggingface_hub'",
             ]
         )
         proc = subprocess.run(
@@ -248,10 +258,142 @@ class TestQuickAction(unittest.TestCase):
             cwd=str(repo_root),
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=30,
             check=False,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
+
+    def test_probes_fail_fast_when_nothing_listens(self) -> None:
+        """Connection-refused probes return immediately instead of polling to the deadline."""
+        import socket
+        import time
+
+        import openbgr.server_probe as probe_mod
+
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            free_port = sock.getsockname()[1]
+
+        t0 = time.perf_counter()
+        self.assertFalse(probe_mod.server_listening("127.0.0.1", free_port))
+        self.assertLess(time.perf_counter() - t0, 0.2)
+
+        t0 = time.perf_counter()
+        self.assertFalse(
+            probe_mod.is_openbgr_server(f"http://127.0.0.1:{free_port}", timeout_s=1.5)
+        )
+        self.assertLess(time.perf_counter() - t0, 0.5)
+
+    def test_desktop_window_opens_placeholder_and_navigates_when_ready(self) -> None:
+        """Window-first: a fresh launch shows the placeholder and navigates once the server binds."""
+        import sys as sys_mod
+        import types
+
+        import app as app_mod
+        import openbgr.config as config_mod
+
+        class _FakeEvents:
+            def __getattr__(self, name: str) -> object:
+                return _FakeEvent()
+
+        class _FakeEvent:
+            def __iadd__(self, other: object) -> _FakeEvent:
+                return self
+
+        class _FakeWindow:
+            def __init__(self, **kwargs: object) -> None:
+                self.kwargs = kwargs
+                self.events = _FakeEvents()
+                self.loaded_urls: list[str] = []
+                self.loaded_html: list[str] = []
+
+            def load_url(self, url: str) -> None:
+                self.loaded_urls.append(url)
+
+            def load_html(self, html: str, *a: object, **k: object) -> None:
+                self.loaded_html.append(html)
+
+        fake_webview = types.ModuleType("webview")
+        fake_webview.settings = {}
+        created: list[_FakeWindow] = []
+        started: list[dict] = []
+        fake_webview.create_window = lambda **kwargs: (
+            created.append(_FakeWindow(**kwargs)) or created[-1]
+        )
+
+        def _fake_start(**kwargs: object) -> None:
+            started.append(kwargs)
+            func = kwargs.get("func")
+            if func is not None:
+                func(*kwargs["args"])
+
+        fake_webview.start = _fake_start
+        fake_menu = types.ModuleType("webview.menu")
+        for cls in ("Menu", "MenuAction", "MenuSeparator"):
+            setattr(
+                fake_menu,
+                cls,
+                lambda *a, **k: types.SimpleNamespace(
+                    title=a[0] if a else "", items=a[1] if len(a) > 1 else [], function=None
+                ),
+            )
+        fake_webview.menu = fake_menu
+
+        exits: list[int] = []
+        with (
+            patch.dict(sys_mod.modules, {"webview": fake_webview, "webview.menu": fake_menu}),
+            patch.object(app_mod, "wait_for_server", return_value=True),
+            patch.object(app_mod, "is_openbgr_server", return_value=True),
+            patch.object(app_mod.os, "_exit", side_effect=lambda code: exits.append(code)),
+            patch.object(config_mod, "ensure_app_icon", return_value=None),
+        ):
+            # Fresh launch: placeholder HTML, no url, loader navigates when ready.
+            app_mod._run_desktop_window(
+                "http://127.0.0.1:7860", "127.0.0.1", 7860, reused=False, server_thread=None
+            )
+            self.assertEqual(len(created), 1)
+            self.assertIsNone(created[0].kwargs.get("url"))
+            self.assertEqual(created[0].kwargs.get("html"), app_mod._STARTING_HTML)
+            self.assertIn("func", started[0])
+            self.assertEqual(created[0].loaded_urls, ["http://127.0.0.1:7860/?native_menus=1"])
+            self.assertEqual(exits, [0])
+
+            # Reused server: the studio URL loads directly, no loader needed.
+            created.clear()
+            started.clear()
+            exits.clear()
+            app_mod._run_desktop_window(
+                "http://127.0.0.1:7860", "127.0.0.1", 7860, reused=True, server_thread=None
+            )
+            self.assertEqual(created[0].kwargs.get("url"), "http://127.0.0.1:7860/?native_menus=1")
+            self.assertIsNone(created[0].kwargs.get("html"))
+            self.assertNotIn("func", started[0])
+            self.assertEqual(exits, [0])
+
+    def test_navigate_when_ready_shows_error_page_when_server_never_binds(self) -> None:
+        """A dead or foreign server lands on the error page instead of a dead splash."""
+        import app as app_mod
+
+        class _FakeWindow:
+            def __init__(self) -> None:
+                self.loaded_urls: list[str] = []
+                self.loaded_html: list[str] = []
+
+            def load_url(self, url: str) -> None:
+                self.loaded_urls.append(url)
+
+            def load_html(self, html: str, *a: object, **k: object) -> None:
+                self.loaded_html.append(html)
+
+        window = _FakeWindow()
+        with (
+            patch.object(app_mod, "wait_for_server", return_value=False),
+            patch.object(app_mod, "is_openbgr_server", return_value=False),
+        ):
+            app_mod._navigate_when_ready(window, "http://127.0.0.1:7860/", "127.0.0.1", 7860)
+        self.assertEqual(window.loaded_urls, [])
+        self.assertEqual(len(window.loaded_html), 1)
+        self.assertIn("7860", window.loaded_html[0])
 
     def test_macos_notifier_strips_asset_catalog_icon(self) -> None:
         """`ensure_macos_notifier_app` removes `CFBundleIconName` and `Assets.car` so `.icns` wins."""

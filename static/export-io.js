@@ -24,12 +24,12 @@ import {
 } from "./state.js";
 import {
   buildExportBlob,
-  computeAlphaBBox,
   exactExportBlob,
   expandCropBox,
   getExportBaseDims,
   renderExportBlob,
 } from "./export.js";
+import { computeAlphaBBox } from "./alpha-bbox.js";
 import { updateDestUI } from "./export-ui.js";
 import { buildZip } from "./zip.js";
 
@@ -493,7 +493,8 @@ export async function exportAnimatedFramesIndividually() {
     }))
   );
   const zipBlob = buildZip(zipEntries);
-  const isTrimmed = state.startFrame > 1 || state.endFrame < total;
+  const isTrimmed =
+    state.startFrame > 1 || state.endFrame < state.frames.length;
   const trimTag = isTrimmed ? `-f${state.startFrame}-${state.endFrame}` : "";
   const zipName = `${baseName}-${suffix}${trimTag}-frames.zip`;
   await saveSingleExportBlob(zipBlob, zipName);

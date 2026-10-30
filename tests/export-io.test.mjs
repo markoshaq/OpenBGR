@@ -24,6 +24,7 @@ const {
   saveBatchFile,
   revealSavedPath,
   exportActiveImage,
+  exportAnimatedFramesIndividually,
   copyActiveCutout,
   copyOriginalImage,
 } = await import("../static/export-io.js");
@@ -239,6 +240,53 @@ test("copyActiveCutout reports an error when every path fails", async () => {
   window.pywebview = { api: { copy_image: async () => ({ copied: false }) } };
   await copyActiveCutout();
   assert.match(dom.errorToast.textContent, /Clipboard PNG write/);
+});
+
+test("multi-frame individual export without a folder downloads an untrimmed ZIP", async () => {
+  reset();
+  state.isAnimated = true;
+  state.naturalWidth = 100;
+  state.naturalHeight = 80;
+  state.startFrame = 1;
+  state.endFrame = 2;
+  state.exportScale = 1;
+  state.aspectLocked = true;
+  state.exportFormat = "png";
+  state.sourceFile = { name: "dance.gif" };
+  const f1 = new Blob([enc.encode("f1")], { type: "image/png" });
+  const f2 = new Blob([enc.encode("f2")], { type: "image/png" });
+  state.frames = [
+    { resultBlob: f1, resultObjectUrl: "blob:f1", durationMs: 80 },
+    { resultBlob: f2, resultObjectUrl: "blob:f2", durationMs: 90 },
+  ];
+  state.resultBlob = f1;
+
+  const downloads = [];
+  const realCreate = document.createElement.bind(document);
+  document.createElement = (tag) => {
+    const el = realCreate(tag);
+    if (tag === "a") {
+      let name = "";
+      Object.defineProperty(el, "download", {
+        configurable: true,
+        get: () => name,
+        set: (v) => {
+          name = v;
+          downloads.push(v);
+        },
+      });
+    }
+    return el;
+  };
+  try {
+    // Regression: the ZIP branch read an undefined `total` and crashed.
+    await exportAnimatedFramesIndividually();
+  } finally {
+    document.createElement = realCreate;
+  }
+  assert.deepEqual(downloads, ["dance-cutout-frames.zip"]);
+  state.isAnimated = false;
+  state.frames = [];
 });
 
 test("copyOriginalImage re-encodes the source and copies via the bridge", async () => {

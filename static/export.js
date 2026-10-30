@@ -14,124 +14,52 @@ import {
   resolveBackdropSource,
   resolveFileBackdropSource,
   formatDiskBytes,
+  trimmedFrameSlice,
 } from "./state.js";
 import { emit } from "./bus.js";
-
-const ALPHA_BBOX_FLOOR = 4;
-let bboxCache = null;
-const blobBBoxCache = new WeakMap();
-
-/**
- * Scans an RGBA pixel buffer (`width * height * 4`) for the tight bounding box
- * of pixels with `alpha > threshold`. Falls back to the full frame when empty.
- * Each bound scans inward from its edge and stops at the first hit, so a
- * typical centered subject costs a fraction of a full pass.
- */
-export function scanAlphaBBoxFromPixels(
-  data,
-  width,
-  height,
-  threshold = ALPHA_BBOX_FLOOR
-) {
-  const w = Math.max(1, width | 0);
-  const h = Math.max(1, height | 0);
-  const rowBytes = w * 4;
-
-  const rowHasAlpha = (y) => {
-    for (let i = y * rowBytes + 3, end = (y + 1) * rowBytes; i < end; i += 4) {
-      if (data[i] > threshold) return true;
-    }
-    return false;
-  };
-  const colHasAlpha = (x, y0, y1) => {
-    for (let y = y0; y <= y1; y++) {
-      if (data[(y * w + x) * 4 + 3] > threshold) return true;
-    }
-    return false;
-  };
-
-  let minY = 0;
-  while (minY < h && !rowHasAlpha(minY)) minY++;
-  let maxY = h - 1;
-  while (maxY > minY && !rowHasAlpha(maxY)) maxY--;
-  if (minY > maxY) return { x: 0, y: 0, w, h };
-
-  let minX = 0;
-  while (minX < w && !colHasAlpha(minX, minY, maxY)) minX++;
-  let maxX = w - 1;
-  while (maxX > minX && !colHasAlpha(maxX, minY, maxY)) maxX--;
-
-  return { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 };
-}
-
-/**
- * Returns the tight alpha bounding box `{ x, y, w, h }` of `source` at the
- * given `shadowCutoff` percentage. The full-res pixel buffer is cached by
- * `(source, srcW, srcH)` so a cutoff change only costs a rescan, not another
- * drawImage + getImageData readback.
- */
-export function computeAlphaBBox(source, srcW, srcH, shadowCutoff = 0, blobKey = null) {
-  const w = Math.max(1, srcW | 0);
-  const h = Math.max(1, srcH | 0);
-  const cutoff = Number(shadowCutoff) || 0;
-  const threshold = Math.max(ALPHA_BBOX_FLOOR, Math.round((cutoff / 100) * 255));
-  const tryHit = (e) => {
-    if (!e || e.w !== w || e.h !== h) return null;
-    if (e.cutoff !== cutoff) {
-      e.box = scanAlphaBBoxFromPixels(e.data, w, h, threshold);
-      e.cutoff = cutoff;
-    }
-    return e.box;
-  };
-  if (blobKey && typeof blobKey === "object") {
-    const hit = tryHit(blobBBoxCache.get(blobKey));
-    if (hit) return hit;
-  }
-  const key = source?.currentSrc || source?.src || source;
-  if (bboxCache && bboxCache.key === key) {
-    const hit = tryHit(bboxCache);
-    if (hit) return hit;
-  }
-  const canvas = document.createElement("canvas");
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
-  ctx.drawImage(source, 0, 0, w, h);
-  const { data } = ctx.getImageData(0, 0, w, h);
-  canvas.width = 0;
-  canvas.height = 0;
-  const box = scanAlphaBBoxFromPixels(data, w, h, threshold);
-  const entry = { key, w, h, cutoff, box, data };
-  bboxCache = entry;
-  if (blobKey && typeof blobKey === "object") blobBBoxCache.set(blobKey, entry);
-  return box;
-}
-
-/** Pre-computes and caches the alpha bounding box for a cutout `Blob`. */
-export async function warmBlobAlphaBBox(blob, fallbackW = 0, fallbackH = 0, shadowCutoff = 0) {
-  if (!blob || typeof createImageBitmap !== "function") return null;
-  if (blobBBoxCache.has(blob)) {
-    const e = blobBBoxCache.get(blob);
-    return computeAlphaBBox(null, e.w, e.h, shadowCutoff, blob);
-  }
-  try {
-    const bmp = await createImageBitmap(blob);
-    try {
-      const w = fallbackW || bmp.width || state.naturalWidth || 1;
-      const h = fallbackH || bmp.height || state.naturalHeight || 1;
-      return computeAlphaBBox(bmp, w, h, shadowCutoff, blob);
-    } finally {
-      bmp.close?.();
-    }
-  } catch (_) {
-    return null;
-  }
-}
+import {
+  blobBBoxCache,
+  computeAlphaBBox,
+} from "./alpha-bbox.js";
 
 /** Expands `{ x, y, w, h }` symmetrically by `paddingPct`% of `max(w, h)`. */
 export function expandCropBox(box, paddingPct = 0) {
   const pad = Math.round(Math.max(box.w, box.h) * (Math.max(0, Number(paddingPct) || 0) / 100));
   return { x: box.x - pad, y: box.y - pad, w: Math.max(1, box.w + 2 * pad), h: Math.max(1, box.h + 2 * pad) };
+}
+
+/**
+ * Unions the cached alpha boxes of every processed frame in the trim range.
+ * The animated export keeps this same union (buildAnimatedExportBlob), so
+ * readouts and the crop guide match the real output framing. Frames whose
+ * boxes are not cached yet (mid-refresh) are skipped; the background preview
+ * pass warms them and refreshes the guide when it lands. Returns null when no
+ * frame box is available.
+ */
+export function unionTrimmedFrameBox(srcW, srcH) {
+  const { startIdx, endIdx } = trimmedFrameSlice(state.frames);
+  let union = null;
+  for (let i = startIdx; i <= endIdx; i++) {
+    const blob = state.frames[i]?.resultBlob;
+    if (!blob) continue;
+    const entry = blobBBoxCache.get(blob);
+    if (!entry || entry.w !== srcW || entry.h !== srcH) continue;
+    const box = computeAlphaBBox(null, srcW, srcH, state.shadowCutoff, blob);
+    if (!box) continue;
+    union = union
+      ? {
+          x: Math.min(union.x, box.x),
+          y: Math.min(union.y, box.y),
+          w:
+            Math.max(union.x + union.w, box.x + box.w) -
+            Math.min(union.x, box.x),
+          h:
+            Math.max(union.y + union.h, box.y + box.h) -
+            Math.min(union.y, box.y),
+        }
+      : box;
+  }
+  return union;
 }
 
 /** Returns the active crop rectangle `{ x, y, w, h }` in source pixel coordinates. */
@@ -147,6 +75,12 @@ export function getActiveCropRect(frameBlob = null) {
     }
   }
   if (!state.autoCrop || !targetBlob || srcW < 1 || srcH < 1) return { x: 0, y: 0, w: srcW, h: srcH };
+  // Multi-frame animated tabs export the union of every trimmed frame's box,
+  // so the readout and guide follow the union instead of one frame's crop.
+  if (!frameBlob && state.isAnimated && state.frames.length > 1) {
+    const union = unionTrimmedFrameBox(srcW, srcH);
+    if (union) return expandCropBox(union, state.cropPadding);
+  }
   if (blobBBoxCache.has(targetBlob)) {
     return expandCropBox(computeAlphaBBox(null, srcW, srcH, state.shadowCutoff, targetBlob), state.cropPadding);
   }
@@ -160,7 +94,7 @@ export function getExportBaseDims() {
   return { w, h };
 }
 /** Affine placement of `cropRect` inside `targetW` x `targetH` (fit or stretch). */
-function cropPlacement(cropRect, targetW, targetH, stretch) {
+export function cropPlacement(cropRect, targetW, targetH, stretch) {
   const sameRatio =
     Math.abs(targetW * cropRect.h - targetH * cropRect.w) <=
     Math.max(cropRect.w, cropRect.h);

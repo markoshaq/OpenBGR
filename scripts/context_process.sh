@@ -34,7 +34,12 @@ pick_python() {
 }
 
 server_alive() {
-  curl -sm 2 "$API/api/status" 2>/dev/null | grep -q '"tiers"'
+  # Probe /api/progress, not /api/status: progress answers as soon as the
+  # server binds, while /api/status waits for the torch warmup, so a Quick
+  # Action fired while the GUI is still launching delegates to the warming
+  # server (and its soon-warm model) instead of timing out and cold-starting
+  # a duplicate engine.
+  curl -sm 2 "$API/api/progress" 2>/dev/null | grep -q '"phase"'
 }
 
 # Filter to existing regular files while preserving order.

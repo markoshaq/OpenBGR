@@ -70,6 +70,16 @@ Name: "{autoprograms}\OpenBGR"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "
 Name: "{autodesktop}\OpenBGR"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\OpenBGR.ico"; Tasks: desktopicon
 
 [Registry]
+Root: HKCU; Subkey: "Software\Classes\Applications\OpenBGR.exe"; ValueType: string; ValueName: "FriendlyAppName"; ValueData: "OpenBGR"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\Applications\OpenBGR.exe\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\Applications\OpenBGR.exe\SupportedTypes\.png"; ValueType: string; ValueName: ""; ValueData: ""; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\Applications\OpenBGR.exe\SupportedTypes\.jpg"; ValueType: string; ValueName: ""; ValueData: ""; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\Applications\OpenBGR.exe\SupportedTypes\.jpeg"; ValueType: string; ValueName: ""; ValueData: ""; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\Applications\OpenBGR.exe\SupportedTypes\.webp"; ValueType: string; ValueName: ""; ValueData: ""; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\Applications\OpenBGR.exe\SupportedTypes\.bmp"; ValueType: string; ValueName: ""; ValueData: ""; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\Applications\OpenBGR.exe\SupportedTypes\.gif"; ValueType: string; ValueName: ""; ValueData: ""; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\Applications\OpenBGR.exe\SupportedTypes\.tif"; ValueType: string; ValueName: ""; ValueData: ""; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\Applications\OpenBGR.exe\SupportedTypes\.tiff"; ValueType: string; ValueName: ""; ValueData: ""; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\image\shell\OpenBGR.RemoveBG"; ValueType: string; ValueName: "MUIVerb"; ValueData: "Remove Background with OpenBGR"; Tasks: contextmenu; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\image\shell\OpenBGR.RemoveBG"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\OpenBGR.ico"; Tasks: contextmenu
 Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\image\shell\OpenBGR.RemoveBG\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" --quick-action ""%1"""; Tasks: contextmenu

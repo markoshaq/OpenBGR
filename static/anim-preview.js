@@ -18,12 +18,13 @@ import {
 import { emit, on } from "./bus.js";
 import {
   renderExportBlob,
-  computeAlphaBBox,
   expectedPreviewSignature,
   previewNeedsRender,
   previewTargetSize,
   exportAspectMismatch,
+  unionTrimmedFrameBox,
 } from "./export.js";
+import { warmBlobAlphaBBox } from "./alpha-bbox.js";
 import { updateCropGuide } from "./export-ui.js";
 
 // A generation counter retires in-flight refresh passes when settings change
@@ -57,6 +58,32 @@ export async function refreshAnimatedFramePreviews() {
   const previewFmt = state.exportFormat === "gif" ? "png" : state.exportFormat;
   let touched = false;
 
+  // Warm every processed frame's alpha box up front so the union crop box is
+  // complete before any frame renders: the animated export keeps the union,
+  // so per-frame previews must share its framing, not each frame's own box.
+  if (state.autoCrop) {
+    for (let i = 0; i < framesRef.length; i++) {
+      if (
+        epoch !== animPreviewEpoch ||
+        state.frames !== framesRef ||
+        !state.isAnimated
+      ) {
+        return;
+      }
+      const frame = framesRef[i];
+      if (!frame?.resultBlob) continue;
+      await warmBlobAlphaBBox(
+        frame.resultBlob,
+        srcW,
+        srcH,
+        state.shadowCutoff
+      );
+    }
+  }
+  const unionBox = state.autoCrop
+    ? unionTrimmedFrameBox(srcW, srcH)
+    : null;
+
   for (let i = 0; i < framesRef.length; i++) {
     // Aborted by a newer refresh, a tab switch, or an animation reset.
     if (
@@ -68,23 +95,6 @@ export async function refreshAnimatedFramePreviews() {
     }
     const frame = framesRef[i];
     if (!frame?.resultBlob) continue;
-    if (state.autoCrop && typeof createImageBitmap === "function") {
-      try {
-        const bboxBmp = await createImageBitmap(frame.resultBlob);
-        try {
-          computeAlphaBBox(
-            bboxBmp,
-            srcW,
-            srcH,
-            state.shadowCutoff,
-            frame.resultBlob
-          );
-        } finally {
-          bboxBmp.close?.();
-        }
-      } catch (_) {}
-      if (epoch !== animPreviewEpoch || state.frames !== framesRef) return;
-    }
     if (frame.previewSignature === sig) continue;
 
     let blob = frame.resultBlob;
@@ -92,15 +102,6 @@ export async function refreshAnimatedFramePreviews() {
       const bmp = await createImageBitmap(frame.resultBlob);
       let bgBmp = null;
       try {
-        const tightBox = state.autoCrop
-          ? computeAlphaBBox(
-              bmp,
-              srcW,
-              srcH,
-              state.shadowCutoff,
-              frame.resultBlob
-            )
-          : null;
         const resolvedBackdrop = await resolveFileBackdropSource(
           state.activeBackdrop,
           frame.sourceFile,
@@ -117,7 +118,7 @@ export async function refreshAnimatedFramePreviews() {
           backdropBlur: state.backdropBlur,
           autoCrop: applyCrop,
           cropPadding: applyCrop ? state.cropPadding : 0,
-          cropBox: tightBox,
+          cropBox: unionBox,
           canvasFit: state.canvasFit,
         });
       } finally {

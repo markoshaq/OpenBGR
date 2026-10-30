@@ -16,33 +16,38 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import torch
-from huggingface_hub import HfApi, snapshot_download, try_to_load_from_cache
-from huggingface_hub.constants import HF_HUB_CACHE
-from huggingface_hub.file_download import repo_folder_name
-from torchvision import transforms
+# torch, torchvision, transformers, and huggingface_hub all load lazily (via
+# the module `__getattr__` below or inside the functions that need them) so
+# importing this module stays cheap for the server bind path. Names that the
+# test suite patches (`snapshot_download`, `try_to_load_from_cache`,
+# `HF_HUB_CACHE`) are read as module globals inside functions, so
+# `patch.object(models_mod, name, ...)` keeps working against the lazy value.
 from tqdm.auto import tqdm as _TqdmAuto
-from transformers import AutoModelForImageSegmentation
 
 from .config import (
-    DEVICE,
-    DEVICE_LABEL,
-    DTYPE,
     IMAGENET_MEAN,
     IMAGENET_STD,
     LEGACY_MATTING_REPO,
     MODELS,
-    PRECISION_LABEL,
     logger,
 )
 from .settings import offline_mode_enabled
 
+if TYPE_CHECKING:
+    import torch
+    from huggingface_hub import HfApi, snapshot_download, try_to_load_from_cache
+    from huggingface_hub.constants import HF_HUB_CACHE
+    from huggingface_hub.file_download import repo_folder_name
+    from torchvision.transforms import Compose
+
 
 @functools.lru_cache(maxsize=64)
-def _build_preprocess_transform(size_hw: tuple[int, int]) -> transforms.Compose:
+def _build_preprocess_transform(size_hw: tuple[int, int]) -> Compose:
     """Builds the cached preprocessing pipeline for one (height, width) pair."""
+    from torchvision import transforms
+
     return transforms.Compose(
         [
             transforms.Resize(
@@ -57,7 +62,7 @@ def _build_preprocess_transform(size_hw: tuple[int, int]) -> transforms.Compose:
 
 def get_preprocess_transform(
     resolution: int | tuple[int, int],
-) -> transforms.Compose:
+) -> Compose:
     """
     Returns a cached torchvision preprocessing pipeline that resizes an RGB PIL
     image to `(height, width)` and applies ImageNet normalization. Bounded so
@@ -91,6 +96,7 @@ def compute_dynamic_size(orig_w: int, orig_h: int, max_side: int) -> tuple[int, 
 
 def get_model_cache_dir(repo_id: str) -> Path:
     """Returns the local Hugging Face Hub cache directory for `repo_id`."""
+    _ensure_hf_names()
     return Path(HF_HUB_CACHE) / repo_folder_name(repo_id=repo_id, repo_type="model")
 
 
@@ -194,13 +200,25 @@ def set_job_phase(phase: str, model_key: str | None = None) -> None:
 
 
 # The module object behind `huggingface_hub.utils.tqdm`, NOT the `tqdm`
-# class re-exported under the same attribute name. None when a future
-# huggingface_hub moves the private module: `track_model_download` then
-# degrades to phase-only progress with a warning instead of failing import.
-try:
-    _HF_TQDM_MODULE: Any = importlib.import_module("huggingface_hub.utils.tqdm")
-except ImportError:
-    _HF_TQDM_MODULE = None
+# class re-exported under the same attribute name. Resolved lazily on the
+# first tracked download so importing this package stays huggingface_hub-free.
+# None when a future huggingface_hub moves the private module:
+# `track_model_download` then degrades to phase-only progress with a warning
+# instead of failing import.
+_HF_TQDM_MODULE: Any = None
+_HF_TQDM_UNRESOLVED = True
+
+
+def _resolve_hf_tqdm_module() -> Any:
+    """Imports `huggingface_hub.utils.tqdm` once, on the first tracked download."""
+    global _HF_TQDM_MODULE, _HF_TQDM_UNRESOLVED
+    if _HF_TQDM_UNRESOLVED:
+        _HF_TQDM_UNRESOLVED = False
+        try:
+            _HF_TQDM_MODULE = importlib.import_module("huggingface_hub.utils.tqdm")
+        except ImportError:
+            _HF_TQDM_MODULE = None
+    return _HF_TQDM_MODULE
 
 
 class _JobDownloadTqdm(_TqdmAuto):
@@ -293,19 +311,20 @@ def track_model_download(model_key: str | None = None) -> Iterator[type]:
         # `JOB_PROGRESS`. Restored on exit regardless of outcome. When the
         # private module is gone, degrade to phase-only progress and say so:
         # a stale-looking bar is worse than an honest coarse one.
-        original_tqdm = getattr(_HF_TQDM_MODULE, "tqdm", None)
+        hf_tqdm = _resolve_hf_tqdm_module()
+        original_tqdm = getattr(hf_tqdm, "tqdm", None) if hf_tqdm is not None else None
         if original_tqdm is None:
             logger.warning(
                 "[Model] huggingface_hub tqdm internals unavailable; download "
                 "progress will show phases only, no byte counts."
             )
         else:
-            _HF_TQDM_MODULE.tqdm = _JobDownloadTqdm
+            hf_tqdm.tqdm = _JobDownloadTqdm
         try:
             yield _JobOuterBarTqdm
         finally:
             if original_tqdm is not None:
-                _HF_TQDM_MODULE.tqdm = original_tqdm
+                hf_tqdm.tqdm = original_tqdm
             with JOB_PROGRESS_LOCK:
                 JOB_PROGRESS["_dl_key"] = None
                 JOB_PROGRESS["_dl_epoch"] = None
@@ -319,6 +338,11 @@ _EXPECTED_BYTES_LOCK = threading.Lock()
 _EXPECTED_BYTES_LIVE: dict[str, int] = {}
 _EXPECTED_BYTES_LAST_ATTEMPT: float = 0.0
 _EXPECTED_BYTES_RETRY_S = 60.0
+# Doubles every time a refresh fails to fetch a single repo (captive portal,
+# DNS down), so the per-status retry thread stops hammering a network that
+# cannot answer. Reset on any success.
+_EXPECTED_BYTES_BACKOFF = 1
+_EXPECTED_BYTES_BACKOFF_MAX = 16
 
 
 def expected_model_bytes(repo_id: str, fallback: int = 0) -> int:
@@ -333,12 +357,14 @@ def refresh_expected_sizes() -> None:
     background so `/api/status` can report accurate figures instead of
     relying solely on the bundled `expected_bytes` constants.
     """
-    global _EXPECTED_BYTES_LAST_ATTEMPT
+    global _EXPECTED_BYTES_LAST_ATTEMPT, _EXPECTED_BYTES_BACKOFF
     if offline_mode_enabled():
         return
+    _ensure_hf_names()
     with _EXPECTED_BYTES_LOCK:
         _EXPECTED_BYTES_LAST_ATTEMPT = time.monotonic()
     api = HfApi()
+    fetched = 0
     for repo_id in MODELS.values():
         try:
             info = api.model_info(repo_id, files_metadata=True)
@@ -346,22 +372,27 @@ def refresh_expected_sizes() -> None:
         except Exception:
             continue
         if total > 0:
+            fetched += 1
             with _EXPECTED_BYTES_LOCK:
                 _EXPECTED_BYTES_LIVE[repo_id] = total
+    with _EXPECTED_BYTES_LOCK:
+        _EXPECTED_BYTES_BACKOFF = 1 if fetched else min(_EXPECTED_BYTES_BACKOFF * 2, 16)
 
 
 def maybe_refresh_expected_sizes() -> None:
     """
     Triggers a background `refresh_expected_sizes` if live sizes are still
-    empty and at least `_EXPECTED_BYTES_RETRY_S` has elapsed since the last
-    attempt (e.g. when the machine started offline and came online later).
+    empty and at least the (backoff-scaled) retry interval has elapsed since
+    the last attempt (e.g. when the machine started offline and came online
+    later).
     """
     global _EXPECTED_BYTES_LAST_ATTEMPT
     if offline_mode_enabled():
         return
     now = time.monotonic()
     with _EXPECTED_BYTES_LOCK:
-        if _EXPECTED_BYTES_LIVE or (now - _EXPECTED_BYTES_LAST_ATTEMPT) < _EXPECTED_BYTES_RETRY_S:
+        retry_s = _EXPECTED_BYTES_RETRY_S * _EXPECTED_BYTES_BACKOFF
+        if _EXPECTED_BYTES_LIVE or (now - _EXPECTED_BYTES_LAST_ATTEMPT) < retry_s:
             return
         _EXPECTED_BYTES_LAST_ATTEMPT = now
     threading.Thread(target=refresh_expected_sizes, daemon=True).start()
@@ -374,9 +405,11 @@ def compact_model_cache_fp16(repo_id: str) -> int:
     Returns the number of bytes saved, or 0 if already FP16.
     """
     try:
+        import torch
         from safetensors import safe_open
         from safetensors.torch import save_file
 
+        _ensure_hf_names()
         cached_path = try_to_load_from_cache(repo_id, "model.safetensors")
         if not isinstance(cached_path, str) or not os.path.exists(cached_path):
             return 0
@@ -428,6 +461,7 @@ def is_model_cached_locally(repo_id: str) -> bool:
     Checks whether a Hugging Face model's weight file (`model.safetensors`) is
     already present in the local disk cache without making any network requests.
     """
+    _ensure_hf_names()
     try:
         cached_path = try_to_load_from_cache(repo_id, "model.safetensors")
         return isinstance(cached_path, str) and os.path.exists(cached_path)
@@ -580,6 +614,10 @@ class ModelManager:
 
     def flush_device_memory(self) -> None:
         """Forces Python garbage collection and releases unused GPU/MPS cache blocks."""
+        import torch
+
+        from .config import DEVICE
+
         gc.collect()
         if DEVICE.type == "mps":
             try:
@@ -597,6 +635,10 @@ class ModelManager:
         CPU RAM does not spike by ~1.4 GB holding an intermediate FP32 copy
         before `.to(device=DEVICE, dtype=DTYPE)`.
         """
+        from transformers import AutoModelForImageSegmentation
+
+        from .config import DTYPE
+
         try:
             return AutoModelForImageSegmentation.from_pretrained(
                 repo_id,
@@ -652,6 +694,9 @@ class ModelManager:
         if model_key not in MODELS:
             raise ValueError(f"Unsupported model key: {model_key}")
 
+        from .config import DEVICE, DEVICE_LABEL, DTYPE, PRECISION_LABEL
+
+        _ensure_hf_names()
         load_epoch = self.cancel_epoch
         with self._lock:
             self.check_cancelled(load_epoch)
@@ -742,3 +787,94 @@ class ModelManager:
 
 
 MANAGER = ModelManager()
+
+
+def warm_device_kernels(model: Any, device_types: tuple[str, ...] = ("mps", "cuda")) -> None:
+    """
+    Runs one small throwaway forward pass so the first REAL inference is warm.
+
+    MPS (and CUDA) pay a one-time kernel/graph compilation on a process's first
+    forward pass, ~1.6 s on an M1 at 1024px. Left alone that cost lands on the
+    user's first PROCESS click; run from the startup preload it is absorbed
+    into the background warmup instead. The compilation is shape-agnostic (a
+    512px pass warms 1024px+ inference, measured), so the dummy stays small.
+    Skipped on CPU (nothing to compile, the pass would cost real seconds) and
+    when a real job is already running.
+    """
+    try:
+        import torch
+
+        from .config import DEVICE
+
+        if DEVICE.type not in device_types:
+            return
+        with MANAGER.inference_lock:
+            with JOB_PROGRESS_LOCK:
+                if JOB_PROGRESS["phase"] != "idle":
+                    return
+            param = next(model.parameters(), None)
+            if param is None:
+                return
+            x = torch.zeros(1, 3, 512, 512, device=param.device, dtype=param.dtype)
+            try:
+                with torch.inference_mode():
+                    model(x)
+            finally:
+                del x
+            MANAGER.flush_device_memory()
+    except Exception as exc:
+        logger.debug("[Model] Device kernel warmup skipped: %s", exc)
+
+
+# Names resolved on first use (and cached into module globals) so importing
+# this module pulls in neither transformers nor huggingface_hub. The test
+# suite patches several of these via `patch.object(models_mod, ...)`, so
+# functions read them as plain module globals after `_ensure_hf_names()`,
+# which never overwrites a name that is already present (an active patch).
+_HF_LAZY_ATTRS = (
+    "HfApi",
+    "snapshot_download",
+    "try_to_load_from_cache",
+    "HF_HUB_CACHE",
+    "repo_folder_name",
+)
+_HF_NAMES_LOADED = False
+
+
+def _ensure_hf_names() -> None:
+    """Populates the deferred huggingface_hub names as module globals, once."""
+    global _HF_NAMES_LOADED
+    if _HF_NAMES_LOADED:
+        return
+    from huggingface_hub import HfApi, snapshot_download, try_to_load_from_cache
+    from huggingface_hub.constants import HF_HUB_CACHE
+    from huggingface_hub.file_download import repo_folder_name
+
+    for name, value in (
+        ("HfApi", HfApi),
+        ("snapshot_download", snapshot_download),
+        ("try_to_load_from_cache", try_to_load_from_cache),
+        ("HF_HUB_CACHE", HF_HUB_CACHE),
+        ("repo_folder_name", repo_folder_name),
+    ):
+        if name not in globals():
+            globals()[name] = value
+    _HF_NAMES_LOADED = True
+
+
+def __getattr__(name: str) -> Any:
+    """Resolves the deferred transformers / huggingface_hub names on first use."""
+    if name == "AutoModelForImageSegmentation":
+        from transformers import AutoModelForImageSegmentation as value
+
+        globals()[name] = value
+        return value
+    if name in _HF_LAZY_ATTRS:
+        _ensure_hf_names()
+        try:
+            return globals()[name]
+        except KeyError:
+            # A test patcher deleted the name mid-cycle; module attribute
+            # lookup must surface that as AttributeError, never KeyError.
+            raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from None
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

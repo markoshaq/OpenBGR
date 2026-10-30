@@ -14,7 +14,6 @@ from typing import Any
 from PIL import Image
 
 from .config import (
-    RECOMMENDED_TIER,
     TIERS,
     logger,
     normalize_tier_key,
@@ -187,6 +186,8 @@ def run_quick_action(inputs: list[str]) -> dict[str, Any]:
     cfg = load_quick_action_config()
     tier_key = normalize_tier_key(cfg["tier"])
     if tier_key not in TIERS:
+        from .config import RECOMMENDED_TIER
+
         tier_key = RECOMMENDED_TIER
     use_matting = tier_key == "matting"
     edge_refine = bool(cfg.get("edge_refine", True))
@@ -320,6 +321,13 @@ def run_quick_action(inputs: list[str]) -> dict[str, Any]:
     }
 
 
+def _default_tier() -> str:
+    """Resolves the hardware-recommended default tier (loads the runtime lazily)."""
+    from .config import RECOMMENDED_TIER
+
+    return RECOMMENDED_TIER
+
+
 def run_cli(
     inputs: list[str],
     output: str | None,
@@ -349,7 +357,7 @@ def run_cli(
             pil_img = Image.open(src)
             result_img, encoded_bytes, elapsed_ms, tier_cfg, eff_fmt = _segment_image_or_animation(
                 pil_img,
-                tier or RECOMMENDED_TIER,
+                tier or _default_tier(),
                 defringe,
                 despill,
                 matting,

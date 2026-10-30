@@ -381,9 +381,20 @@ async function finishBatchRun(tab, batch, run) {
  * With `onlyFailed`, re-processes just the rows whose last run ended in
  * status "failed" and which remain selected, leaving done rows untouched.
  */
+// True while the destination picker is open but the run has not started yet:
+// `batch.running` is only set by beginBatchRun, so without this flag two
+// rapid RUN BATCH clicks would both pass the guard and both open a picker.
+let batchStarting = false;
+
 export async function runBatch(tab, { onlyFailed = false } = {}) {
   const batch = state.batch;
-  if (!tab || tab.kind !== "batch" || batch.running || !tab.batchFiles.length) {
+  if (
+    !tab ||
+    tab.kind !== "batch" ||
+    batch.running ||
+    batchStarting ||
+    !tab.batchFiles.length
+  ) {
     return;
   }
   if (onlyFailed) {
@@ -401,10 +412,15 @@ export async function runBatch(tab, { onlyFailed = false } = {}) {
   const snap = snapshotBatchSettings(tab);
   if (batchPreflightBlocked(snap)) return;
 
-  const dest = await resolveBatchOutput(tab, batch);
-  if (!dest) return;
-
-  beginBatchRun(tab, batch, onlyFailed);
+  batchStarting = true;
+  let dest;
+  try {
+    dest = await resolveBatchOutput(tab, batch);
+    if (!dest) return;
+    beginBatchRun(tab, batch, onlyFailed);
+  } finally {
+    batchStarting = false;
+  }
   const controller = new AbortController();
   state.abortController = controller;
   const startedAt = performance.now();

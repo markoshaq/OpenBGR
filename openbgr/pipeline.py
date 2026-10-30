@@ -10,19 +10,16 @@ import itertools
 import threading
 import time
 from collections import OrderedDict
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
-import torch
 from PIL import Image, ImageFilter, ImageOps
-from scipy.ndimage import gaussian_filter1d, maximum_filter1d, minimum_filter1d
-from torchvision import transforms
 
+# torch, scipy.ndimage, and torchvision load lazily inside the functions that
+# need them, so importing this module (and therefore the whole API surface)
+# stays cheap for the server bind path.
 from .config import (
-    DEVICE,
-    DTYPE,
-    RECOMMENDED_TIER,
-    SYSTEM_MEMORY_GB,
+    HOST_RAM_GB,
     TIERS,
     logger,
     normalize_tier_key,
@@ -34,6 +31,9 @@ from .models import (
     set_job_phase,
 )
 
+if TYPE_CHECKING:
+    import torch
+
 
 def _square_min_filter(arr: np.ndarray, size: int) -> np.ndarray:
     """
@@ -42,6 +42,8 @@ def _square_min_filter(arr: np.ndarray, size: int) -> np.ndarray:
     `ImageFilter.MinFilter(size)` on `mode="nearest"` borders, but costs
     O(2*size) per pixel instead of O(size^2).
     """
+    from scipy.ndimage import minimum_filter1d
+
     return minimum_filter1d(
         minimum_filter1d(arr, size, axis=0, mode="nearest"),
         size,
@@ -57,6 +59,8 @@ def _square_max_filter(arr: np.ndarray, size: int) -> np.ndarray:
     `ImageFilter.MaxFilter(size)` on `mode="nearest"` borders, but costs
     O(2*size) per pixel instead of O(size^2).
     """
+    from scipy.ndimage import maximum_filter1d
+
     return maximum_filter1d(
         maximum_filter1d(arr, size, axis=0, mode="nearest"),
         size,
@@ -83,6 +87,8 @@ def adjust_alpha_geometry(
         adjusted = fn(adjusted, size)
     feather = float(feather_px)
     if feather > 0:
+        from scipy.ndimage import gaussian_filter1d
+
         blurred = gaussian_filter1d(
             gaussian_filter1d(adjusted.astype(np.float32), feather, axis=0, mode="nearest"),
             feather,
@@ -224,16 +230,18 @@ def suppress_color_spill(rgb_np: np.ndarray, alpha_norm: np.ndarray) -> np.ndarr
 # `job_id`. Caching per job_id lets multi-tab workspaces tweak edge filters
 # (defringe/despill/shift/feather) across tabs in ~20ms without re-running the
 # neural network, while the total-byte and entry caps bound memory usage.
+# The budgets key off host RAM (not CUDA VRAM): these are CPU-side NumPy
+# buffers, and host RAM is known without importing torch.
 _JOB_ID_SEQ = itertools.count(1)
 _REFINE_JOBS: OrderedDict[int, dict[str, Any]] = OrderedDict()
 _LAST_JOB_LOCK = threading.Lock()
-_LAST_JOB_MAX_BYTES = (64 if SYSTEM_MEMORY_GB < 14.0 else 256) * 1024 * 1024
+_LAST_JOB_MAX_BYTES = (64 if HOST_RAM_GB < 14.0 else 256) * 1024 * 1024
 _REFINE_MAX_ENTRIES = 128
 MAX_ANIMATION_FRAMES = 120
 # Total decoded-RGBA budget for one animation: bounds the temporary frame
 # list (and the base64 PNG payload the API builds on top) so a large-dimension
 # animation cannot spike memory far beyond the upload cap.
-MAX_ANIMATION_PIXEL_BYTES = (128 if SYSTEM_MEMORY_GB < 14.0 else 512) * 1024 * 1024
+MAX_ANIMATION_PIXEL_BYTES = (128 if HOST_RAM_GB < 14.0 else 512) * 1024 * 1024
 
 # Serializes compose_rgba across threads: segment_foreground runs it inside
 # inference_lock while /api/refine calls it standalone. Concurrent passes
@@ -330,6 +338,11 @@ def segment_foreground(
     """
     if job_epoch is None:
         job_epoch = MANAGER.cancel_epoch
+
+    import torch
+    from torchvision import transforms
+
+    from .config import DEVICE, DTYPE, RECOMMENDED_TIER
 
     norm_tier = "matting" if matting else normalize_tier_key(tier)
     if norm_tier not in TIERS:

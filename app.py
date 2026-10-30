@@ -25,6 +25,7 @@ from openbgr.server_probe import (
     delegate_quick_action_to_server,
     forward_open_files_to_server,
     is_openbgr_server,
+    server_listening,
     server_port,
     wait_for_port_free,
     wait_for_server,
@@ -269,14 +270,24 @@ def main(argv: list[str] | None = None) -> None:
     host = "127.0.0.1"
     url = f"http://{host}:{port}"
 
-    if os.environ.pop("OPENBGR_RESTARTING", None) == "1":
-        wait_for_port_free(host, port, timeout_s=5.0)
+    from openbgr.config import LOG_FILE_PATH, logger
+
+    if os.environ.pop("OPENBGR_RESTARTING", None) == "1" and not wait_for_port_free(
+        host, port, timeout_s=5.0
+    ):
+        logger.warning(
+            "[Server] Port %s is still held by the previous instance; "
+            "the new server may fail to bind.",
+            port,
+        )
 
     # If an OpenBGR instance is already running, forward 'Open With' files
     # to it over localhost and exit cleanly before importing the ML stack.
+    # A single-shot probe costs nothing when nothing is listening; the old
+    # full-second poll added ~1 s to every cold 'Open With' launch.
     if (
         args.files
-        and wait_for_server(host, port, timeout_s=1.0)
+        and server_listening(host, port, timeout_s=0.3)
         and is_openbgr_server(url, timeout_s=2.0)
         and forward_open_files_to_server(url, args.files)
     ):
@@ -285,14 +296,6 @@ def main(argv: list[str] | None = None) -> None:
     import uvicorn
 
     from openbgr.api import app as fastapi_app
-    from openbgr.config import (
-        DEVICE_LABEL,
-        LOG_FILE_PATH,
-        PRECISION_LABEL,
-        RECOMMENDED_TIER,
-        TIERS,
-        logger,
-    )
     from openbgr.desktop_bridge import queue_open_files
     from openbgr.desktop_window import open_fallback_app_window
 
@@ -305,68 +308,156 @@ def main(argv: list[str] | None = None) -> None:
         signal.signal(signal.SIGHUP, _graceful_exit)
     _start_signal_watchdog()
 
+    # Light banner only: the compute/default-model line is logged by the
+    # server's background warmup thread once torch is actually imported, so
+    # the window is never delayed by hardware detection.
     logger.info("-" * 68)
     logger.info("  OpenBGR - LOCAL AI SEGMENTATION STUDIO")
-    logger.info("  Compute   : %s (%s)", DEVICE_LABEL, PRECISION_LABEL)
-    logger.info(
-        "  Default   : %s (%s)",
-        TIERS[RECOMMENDED_TIER]["label"],
-        TIERS[RECOMMENDED_TIER]["sublabel"],
-    )
     logger.info("  Interface : %s", url)
     logger.info("  Logs      : %s", LOG_FILE_PATH)
     logger.info("-" * 68)
 
     # Headless / server-only mode when NO_BROWSER=1 or OPENBGR_BROWSER=1 is set
     if os.environ.get("NO_BROWSER") == "1":
-        uvicorn.run(fastapi_app, host=host, port=port, log_level="warning", log_config=None)
+        uvicorn.run(
+            fastapi_app,
+            host=host,
+            port=port,
+            log_level="warning",
+            log_config=None,
+            access_log=False,
+        )
     elif os.environ.get("OPENBGR_BROWSER") == "1":
         threading.Timer(1.0, lambda: open_fallback_app_window(url)).start()
-        uvicorn.run(fastapi_app, host=host, port=port, log_level="warning", log_config=None)
+        uvicorn.run(
+            fastapi_app,
+            host=host,
+            port=port,
+            log_level="warning",
+            log_config=None,
+            access_log=False,
+        )
     else:
-        _run_desktop_window(url, _ensure_server(host, port, url))
+        reused, server_thread = _start_or_reuse_server(host, port, url)
+        _run_desktop_window(url, host, port, reused, server_thread)
 
 
-def _ensure_server(host: str, port: int, url: str) -> threading.Thread | None:
+# Shown in the desktop window while the server binds, so the window is never
+# gated on the ML stack import. Navigated to the studio by `_navigate_when_ready`.
+_STARTING_HTML = """<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; height: 100%; background: #09090b; }
+  body { display: flex; align-items: center; justify-content: center;
+         font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; }
+  .mark { text-align: center; color: #fafafa; letter-spacing: 0.35em;
+          font-size: 15px; font-weight: 600; }
+  .sub { margin-top: 10px; letter-spacing: 0.12em; font-size: 11px;
+         font-weight: 400; color: #52525b; }
+</style>
+</head>
+<body>
+  <div class="mark">OPENBGR<div class="sub">STARTING LOCAL ENGINE</div></div>
+</body>
+</html>"""
+
+_SERVER_ERROR_HTML = """<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; height: 100%; background: #09090b; color: #fafafa;
+               font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; }
+  body { display: flex; align-items: center; justify-content: center; }
+  .box { max-width: 440px; text-align: center; }
+  h1 { font-size: 14px; letter-spacing: 0.25em; }
+  p { color: #a1a1aa; font-size: 13px; line-height: 1.6; }
+  code { color: #fbbf24; }
+</style>
+</head>
+<body>
+  <div class="box">
+    <h1>SERVER DID NOT START</h1>
+    <p>The local engine could not serve on port <code>__PORT__</code>. The port
+    may already be in use by another application: close it or set
+    <code>PORT</code> to a free port and try again. Details are in
+    <code>~/.openbgr/openbgr.log</code>.</p>
+  </div>
+</body>
+</html>"""
+
+
+def _start_or_reuse_server(host: str, port: int, url: str) -> tuple[bool, threading.Thread | None]:
     """
-    Returns a running OpenBGR server for `url`, reusing an existing instance or
-    starting Uvicorn on a daemon thread. Returns None when a live instance is
-    reused; raises SystemExit when the port is held by another application or
-    the server fails to start.
+    Reuses a live OpenBGR instance when one is already listening on the port;
+    otherwise starts Uvicorn on a daemon thread and returns without waiting:
+    the desktop window opens immediately on a placeholder page and navigates
+    to `url` once the socket accepts (see `_navigate_when_ready`). Raises
+    SystemExit when the port is held by a foreign application.
     """
     import uvicorn
 
     from openbgr.api import app as fastapi_app
     from openbgr.config import logger
 
-    if wait_for_server(host, port, timeout_s=0.15):
+    if server_listening(host, port, timeout_s=0.3):
         if not is_openbgr_server(url, timeout_s=3.0):
             logger.error("[Server] Port %s is already in use by another application.", port)
             logger.error("[Server] Close it or set PORT=<free port> and try again.")
             raise SystemExit(1)
         logger.info("[Server] Reusing existing OpenBGR server at %s.", url)
-        return None
+        return True, None
 
     # Start FastAPI server in a background daemon thread and open native desktop window
     server_thread = threading.Thread(
         target=lambda: uvicorn.run(
-            fastapi_app, host=host, port=port, log_level="warning", log_config=None
+            fastapi_app,
+            host=host,
+            port=port,
+            log_level="warning",
+            log_config=None,
+            access_log=False,
         ),
         daemon=True,
     )
     server_thread.start()
-    if wait_for_server(host, port):
-        if not is_openbgr_server(url):
-            logger.error("[Server] Port %s is already in use by another application.", port)
-            logger.error("[Server] Close it or set PORT=<free port> and try again.")
-            raise SystemExit(1)
-    elif not server_thread.is_alive():
-        logger.error("[Server] Uvicorn failed to start; see errors above.")
-        raise SystemExit(1)
-    return server_thread
+    return False, server_thread
 
 
-def _run_desktop_window(url: str, server_thread: threading.Thread | None) -> None:
+def _navigate_when_ready(window: Any, target_url: str, host: str, port: int) -> None:
+    """
+    Loader thread started by `webview.start`: waits for the Uvicorn socket,
+    verifies it is an OpenBGR server (a foreign application may have taken the
+    port and failed our bind), and navigates the placeholder window to the
+    studio. On failure it loads an error page instead of a dead splash.
+    """
+    from openbgr.config import logger
+
+    if wait_for_server(host, port, timeout_s=20.0):
+        if is_openbgr_server(f"http://{host}:{port}", timeout_s=5.0):
+            try:
+                window.load_url(target_url)
+            except Exception:
+                logger.exception("[Desktop] Failed to navigate to %s.", target_url)
+            return
+        logger.error("[Server] Port %s is already in use by another application.", port)
+    else:
+        logger.error("[Server] Uvicorn did not accept connections in time; see the log.")
+    try:
+        window.load_html(_SERVER_ERROR_HTML.replace("__PORT__", str(port)))
+    except Exception:
+        pass
+
+
+def _run_desktop_window(
+    url: str,
+    host: str,
+    port: int,
+    reused: bool,
+    server_thread: threading.Thread | None,
+) -> None:
     """
     Opens the native pywebview window (with menus, icon, and OS 'Open With'
     handlers) and blocks in its run loop until the user closes it. Falls back
@@ -428,7 +519,8 @@ def _run_desktop_window(url: str, server_thread: threading.Thread | None) -> Non
 
         window = webview.create_window(
             title="OpenBGR",
-            url=window_url,
+            url=window_url if reused else None,
+            html=None if reused else _STARTING_HTML,
             min_size=MIN_WINDOW_SIZE,
             background_color="#09090b",
             js_api=api_bridge,
@@ -444,6 +536,12 @@ def _run_desktop_window(url: str, server_thread: threading.Thread | None) -> Non
             start_kwargs["menu"] = native_menus
         if icon_path:
             start_kwargs["icon"] = icon_path
+        if not reused:
+            # Window-first: the placeholder is up; navigate to the studio as
+            # soon as the server socket accepts, so the window is never gated
+            # on the ML stack import happening inside the server thread.
+            start_kwargs["func"] = _navigate_when_ready
+            start_kwargs["args"] = (window, window_url, host, port)
 
         webview.start(**start_kwargs)
         # When the native desktop window is closed by the user, terminate
@@ -456,6 +554,10 @@ def _run_desktop_window(url: str, server_thread: threading.Thread | None) -> Non
         os._exit(0)
     except Exception as exc:
         logger.warning("[Desktop] Native window unavailable (%s); opening app window...", exc)
+        # The fallback browser needs a live URL: wait out the server start
+        # (the loader that normally navigates never ran in this path).
+        if server_thread is not None:
+            wait_for_server(host, port, timeout_s=20.0)
         open_fallback_app_window(url)
         # Keep the daemon server thread alive; without this, main() returns
         # and the browser window opens a dead URL (Ctrl+C exits the join).

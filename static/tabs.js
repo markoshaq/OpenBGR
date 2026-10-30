@@ -18,6 +18,7 @@ import {
   setError,
   setStatElapsed,
   openConfirmModal,
+  closeConfirmModal,
   normalizeTierKey,
   DEFAULT_CROP_PADDING,
   clearResultState,
@@ -306,6 +307,9 @@ export function closeTabImmediate(tabId) {
     dom.busyOverlay.classList.remove("active");
     stopJobProgressPolling();
     stopElapsedTicker();
+    // A "STOP CURRENT IMAGE?" confirm may still be open over the tab being
+    // closed; its stashed callback targets a job that no longer exists.
+    closeConfirmModal();
   }
 
   // Content-bearing tabs join the closed-tab stack intact so File > Reopen
@@ -330,6 +334,7 @@ export function closeTabImmediate(tabId) {
     state.isProcessing = false;
     dom.busyOverlay.classList.remove("active");
     stopJobProgressPolling();
+    closeConfirmModal();
   }
 
   state.tabs.splice(idx, 1);
