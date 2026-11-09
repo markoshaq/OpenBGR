@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- Windows: the desktop app no longer crashes on launch when applying the window icon
+
 ## [0.12.1]
 
 ### Added

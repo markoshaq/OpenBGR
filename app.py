@@ -489,7 +489,9 @@ def _run_desktop_window(
         set_desktop_api(api_bridge)
         install_macos_open_documents_handler()
         install_macos_open_files_delegate()
-        icon_path = ensure_app_icon()
+        # WinForms loads the window icon via System.Drawing.Icon, which only
+        # accepts .ico; macOS, Linux, and the browser fallback take PNG.
+        icon_path = ensure_app_icon("ico" if platform.system() == "Windows" else "png")
 
         window_kwargs: dict[str, Any] = {}
         saved_geometry = load_window_state()

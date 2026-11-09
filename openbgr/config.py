@@ -56,6 +56,7 @@ STATIC_DIR = BASE_DIR / "static"
 # Per-user desktop preferences dir; survives app updates and keeps the repo clean.
 WINDOW_STATE_PATH = APP_CONFIG_DIR / "window.json"
 APP_ICON_PATH = APP_CONFIG_DIR / "icon.png"
+APP_ICON_ICO_PATH = APP_CONFIG_DIR / "icon.ico"
 QUICK_ACTION_CONFIG_PATH = APP_CONFIG_DIR / "quick_action.json"
 NOTIFIER_APP_PATH = APP_CONFIG_DIR / "OpenBGRNotifier.app"
 NOTIFIER_ICNS_PATH = APP_CONFIG_DIR / "OpenBGR.icns"
@@ -165,8 +166,8 @@ def get_host_ram_gb() -> float:
         except Exception:
             pass
     try:
-        page_size = os.sysconf("SC_PAGE_SIZE")
-        page_count = os.sysconf("SC_PHYS_PAGES")
+        page_size = os.sysconf("SC_PAGE_SIZE")  # type: ignore[attr-defined]
+        page_count = os.sysconf("SC_PHYS_PAGES")  # type: ignore[attr-defined]
         if page_size > 0 and page_count > 0:
             return (page_size * page_count) / (1024**3)
     except Exception:
@@ -584,28 +585,43 @@ def reveal_in_file_manager(path: Path) -> bool:
         return False
 
 
-def ensure_app_icon() -> str | None:
+def ensure_app_icon(fmt: str = "png") -> str | None:
     """
-    Generates the macOS-squircle OpenBGR icon in `~/.openbgr/icon.png`
-    so the native window, Dock, and task switcher display the OpenBGR mark.
+    Generates the OpenBGR icon under `~/.openbgr` so the native window, Dock,
+    task switcher, notifications, and favicon display the OpenBGR mark.
+    `fmt="ico"` writes a multi-size `icon.ico` instead: pywebview's WinForms
+    backend loads the window icon via `System.Drawing.Icon`, which only
+    accepts `.ico` files and crashes on PNG.
     Regenerates when the on-disk file predates the squircle design.
     """
     try:
+        path = APP_ICON_ICO_PATH if fmt == "ico" else APP_ICON_PATH
         icon_src = Path(__file__).resolve().parent / "icon_render.py"
-        if (
-            APP_ICON_PATH.exists()
-            and icon_src.exists()
-            and APP_ICON_PATH.stat().st_mtime < icon_src.stat().st_mtime
-        ):
-            APP_ICON_PATH.unlink()  # stale icon from an older design
-        if not APP_ICON_PATH.exists():
+        if path.exists() and icon_src.exists() and path.stat().st_mtime < icon_src.stat().st_mtime:
+            path.unlink()  # stale icon from an older design
+        if not path.exists():
             from . import icon_render
 
             APP_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-            img = icon_render.render_icon(512)
-            img.save(APP_ICON_PATH, format="PNG")
+            img = icon_render.render_icon(256 if fmt == "ico" else 512)
+            if fmt == "ico":
+                img.save(
+                    path,
+                    format="ICO",
+                    sizes=[
+                        (16, 16),
+                        (24, 24),
+                        (32, 32),
+                        (48, 48),
+                        (64, 64),
+                        (128, 128),
+                        (256, 256),
+                    ],
+                )
+            else:
+                img.save(path, format="PNG")
             img.close()
-        return str(APP_ICON_PATH)
+        return str(path)
     except Exception as exc:
         logger.warning("[Config] Failed to generate app icon: %s", exc)
         return None

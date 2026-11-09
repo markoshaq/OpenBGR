@@ -222,14 +222,22 @@ class TestApiContracts(unittest.TestCase):
 
             fake_clip = Image.new("RGBA", (8, 8), (255, 0, 0, 255))
             with patch.object(bridge_mod.platform, "system", return_value="Windows"):
+                # On real Windows the probe caches by GetClipboardSequenceNumber;
+                # a fresh bridge per call keeps each mocked state distinct.
                 with patch.object(ImageGrab, "grabclipboard", return_value=fake_clip):
-                    self.assertEqual(bridge.has_clipboard_image(), {"has_image": True})
+                    self.assertEqual(
+                        bridge_mod.DesktopApi().has_clipboard_image(), {"has_image": True}
+                    )
                 with patch.object(ImageGrab, "grabclipboard", return_value=[str(img_path)]):
-                    self.assertEqual(bridge.has_clipboard_image(), {"has_image": True})
+                    self.assertEqual(
+                        bridge_mod.DesktopApi().has_clipboard_image(), {"has_image": True}
+                    )
                 with patch.object(
                     ImageGrab, "grabclipboard", return_value=[str(Path(tmp) / "a.txt")]
                 ):
-                    self.assertEqual(bridge.has_clipboard_image(), {"has_image": False})
+                    self.assertEqual(
+                        bridge_mod.DesktopApi().has_clipboard_image(), {"has_image": False}
+                    )
             recents_patch.stop()
 
     def test_native_menus_resolve_window_lazily_and_add_window_menu(self) -> None:

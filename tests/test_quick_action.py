@@ -265,27 +265,36 @@ class TestQuickAction(unittest.TestCase):
 
     def test_probes_fail_fast_when_nothing_listens(self) -> None:
         """Connection-refused probes return immediately instead of polling to the deadline."""
-        import socket
-        import time
+        import urllib.error
 
         import openbgr.server_probe as probe_mod
 
-        with socket.socket() as sock:
-            sock.bind(("127.0.0.1", 0))
-            free_port = sock.getsockname()[1]
+        # Refusal must fail on the first attempt: retrying to the deadline is
+        # what used to cost every cold Quick Action ~1.5 s. Asserting on call
+        # count instead of wall time keeps this deterministic across OSes.
+        attempts: list[None] = []
 
-        t0 = time.perf_counter()
-        self.assertFalse(probe_mod.server_listening("127.0.0.1", free_port))
-        self.assertLess(time.perf_counter() - t0, 0.2)
+        def _refuse(*a: object, **k: object) -> None:
+            attempts.append(None)
+            raise ConnectionRefusedError("refused")
 
-        t0 = time.perf_counter()
-        self.assertFalse(
-            probe_mod.is_openbgr_server(f"http://127.0.0.1:{free_port}", timeout_s=1.5)
-        )
-        self.assertLess(time.perf_counter() - t0, 0.5)
+        with patch("socket.create_connection", side_effect=_refuse):
+            self.assertFalse(probe_mod.server_listening("127.0.0.1", 1))
+        self.assertEqual(len(attempts), 1)
+
+        url_attempts: list[None] = []
+
+        def _refuse_url(*a: object, **k: object) -> None:
+            url_attempts.append(None)
+            raise urllib.error.URLError(ConnectionRefusedError("refused"))
+
+        with patch("urllib.request.urlopen", side_effect=_refuse_url):
+            self.assertFalse(probe_mod.is_openbgr_server("http://127.0.0.1:1", timeout_s=1.5))
+        self.assertEqual(len(url_attempts), 1)
 
     def test_desktop_window_opens_placeholder_and_navigates_when_ready(self) -> None:
         """Window-first: a fresh launch shows the placeholder and navigates once the server binds."""
+        import platform
         import sys as sys_mod
         import types
 
@@ -348,6 +357,10 @@ class TestQuickAction(unittest.TestCase):
             patch.object(config_mod, "ensure_app_icon", return_value=None),
         ):
             # Fresh launch: placeholder HTML, no url, loader navigates when ready.
+            # Native menus only exist on macOS/Linux, so Windows gets the bare URL.
+            expected_url = "http://127.0.0.1:7860"
+            if platform.system() != "Windows":
+                expected_url += "/?native_menus=1"
             app_mod._run_desktop_window(
                 "http://127.0.0.1:7860", "127.0.0.1", 7860, reused=False, server_thread=None
             )
@@ -355,7 +368,7 @@ class TestQuickAction(unittest.TestCase):
             self.assertIsNone(created[0].kwargs.get("url"))
             self.assertEqual(created[0].kwargs.get("html"), app_mod._STARTING_HTML)
             self.assertIn("func", started[0])
-            self.assertEqual(created[0].loaded_urls, ["http://127.0.0.1:7860/?native_menus=1"])
+            self.assertEqual(created[0].loaded_urls, [expected_url])
             self.assertEqual(exits, [0])
 
             # Reused server: the studio URL loads directly, no loader needed.
@@ -365,7 +378,7 @@ class TestQuickAction(unittest.TestCase):
             app_mod._run_desktop_window(
                 "http://127.0.0.1:7860", "127.0.0.1", 7860, reused=True, server_thread=None
             )
-            self.assertEqual(created[0].kwargs.get("url"), "http://127.0.0.1:7860/?native_menus=1")
+            self.assertEqual(created[0].kwargs.get("url"), expected_url)
             self.assertIsNone(created[0].kwargs.get("html"))
             self.assertNotIn("func", started[0])
             self.assertEqual(exits, [0])
